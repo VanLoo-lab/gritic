@@ -168,6 +168,8 @@ class Sample:
             return None
         
         subclone_table = subclone_table.copy()
+        subclone_table = dataloader.get_valid_subclones(subclone_table)
+        subclone_table = dataloader.filter_excess_subclones(subclone_table)
         if not 'N_SNVs' in list(subclone_table.columns):
             n_snvs = np.round(len(self.mutation_table.index)*subclone_table['Subclone_Fraction']).astype(int)
             subclone_table['N_SNVs'] = n_snvs

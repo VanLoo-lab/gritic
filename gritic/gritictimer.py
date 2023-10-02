@@ -583,7 +583,7 @@ def add_wgd_info_to_table(timing_table,wgd_info,wgd_status):
 def write_timing_tables(timing_table,timing_table_path):
     timing_table = timing_table[['Sample_ID','Segment_ID', 'Chromosome', 'Segment_Start', 'Segment_End', 'Major_CN',
        'Minor_CN', 'Total_CN', 'N_Mutations','Mutation_Rate','Route','Probability','Average_N_Events','Average_Pre_WGD_Losses','Average_Post_WGD_Losses','Time','Node', 'Timing', 'Timing_CI_Low', 'Timing_CI_High','WGD_Status','WGD_Timing','WGD_Timing_CI_Low',
-       'WGD_Timing_CI_High','Density','Density_High']]
+       'WGD_Timing_CI_High','Density']]
 
     if os.path.exists(timing_table_path):
         timing_table_prev = pd.read_csv(timing_table_path,sep='\t')
@@ -874,7 +874,7 @@ def process_segments(segments,wgd_timing_distribution,output_dir,mult_store_dir,
                 write_timing_tables(timing_table,timing_table_path)
 
                 if plot_trees:
-                    plot_output_dir = f"{output_dir}/tree_plots/{segment.segment_id}".replace(":","-")
+                    plot_output_dir = f"{output_dir}/{sample_id}_tree_plots/{segment.segment_id}".replace(":","-")
                     classifier.plot_trees(plot_output_dir,str(segment),wgd_info)
         shutil.rmtree(cn_dir)
         
@@ -884,7 +884,7 @@ def apply_non_parsimony_penalty(likelihood_store,n_events,l=2.7):
     likelihood_store = likelihood_store/np.sum(likelihood_store)
     return likelihood_store
     
-def process_sample(sample,output_dir,plot_trees=False,min_wgd_overlap=0.6,wgd_override=None,non_parsimony_penalty=False):
+def process_sample(sample,output_dir,plot_trees=True,min_wgd_overlap=0.6,wgd_override=None,non_parsimony_penalty=False):
     
     output_dir = pathlib.Path(output_dir)
     os.makedirs(output_dir,exist_ok=True)
@@ -895,7 +895,7 @@ def process_sample(sample,output_dir,plot_trees=False,min_wgd_overlap=0.6,wgd_ov
     os.makedirs(output_dir,exist_ok=True)
 
     sample_mutation_table = sample.get_mutation_table()
-    sample_mutation_table_path = output_dir/f"{sample.sample_id}_mutations_table.tsv"
+    sample_mutation_table_path = output_dir/f"{sample.sample_id}_mutation_table.tsv"
     sample_mutation_table.to_csv(sample_mutation_table_path,sep="\t",index=False)
     
     mult_store_dir = output_dir/f"{sample.sample_id}_mult_stores_temp"
@@ -930,6 +930,11 @@ def process_sample(sample,output_dir,plot_trees=False,min_wgd_overlap=0.6,wgd_ov
             wgd_timing_distribution = None
             non_overlapping_segments = []
             wgd_status = False
+            if major_cn_mode ==2:
+                print('The major CN mode is 2, but the overlap proportion is less than 0.6.')
+                print('There are a lot of copy number 2 segments, but they are not overlapping enough to be confident in a WGD call.')
+                print('The sample will be treated as a non-WGD sample')
+                print('Proceed with caution in downstream analysis for this sample')
         else:
             wgd_status = True
         write_wgd_calling_info(wgd_timing_distribution,overlap_proportion,best_overlap_timing,major_cn_mode,wgd_status,output_dir,sample.sample_id)

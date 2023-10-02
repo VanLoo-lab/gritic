@@ -1,7 +1,7 @@
 import sys
 import argparse
 import pandas as pd
-from gritic import dataloader,gritictimer,sampletools
+from gritic import dataloader,gritictimer,sampletools,gritictimer
 
 #https://stackoverflow.com/questions/15008758/parsing-boolean-values-with-argparse
 def str2bool(v):
@@ -23,6 +23,10 @@ def load_mutation_table(mutation_table_path):
     mutation_table = pd.read_csv(mutation_table_path,sep='\t',dtype={'Chromosome':str,'Position':int,'Tumor_Ref_Count':int,'Tumor_Alt_Count':int})
     return mutation_table
 
+def load_subclone_table(subclone_table_path):
+    subclone_table = pd.read_csv(subclone_table_path,sep='\t',dtype={'Cluster':str,'Subclone_CCF':float,'Subclone_Fraction':float})
+    return subclone_table
+
 if __name__ == '__main__':
     my_parser = argparse.ArgumentParser(allow_abbrev=False)
     
@@ -37,6 +41,7 @@ if __name__ == '__main__':
 
     my_parser.add_argument('--wgd_status', action='store', type=str2bool, required=False,default=None)
     my_parser.add_argument('--non_parsimony_penalty', action='store', type=str2bool, required=False,default=False)
+    my_parser.add_argument('--plot_trees', action='store', type=str, required=False,default=True)
     my_parser.add_argument('--subclone_table', action='store', type=str, required=False,default=None)
     
     args = my_parser.parse_args()
@@ -45,6 +50,7 @@ if __name__ == '__main__':
     sample_purity = args.purity
     sample_wgd_status = args.wgd_status
     non_parsimony_penalty = args.non_parsimony_penalty
+    plot_trees = args.plot_trees
     
     
     copy_number_table = load_copy_number_table(args.copy_number_table)
@@ -54,9 +60,8 @@ if __name__ == '__main__':
     if args.subclone_table is None:
         subclone_table = None
     else:
-        subclone_table = pd.read_csv(args.subclone_table,sep='\t',dtype={'Subclone_CCF':float,'Subclone_Fraction':float})
-        subclone_table = dataloader.filter_excess_subclones(subclone_table)
-    mutation_table = dataloader.assign_cn_to_snv(mutation_table,copy_number_table)
-    mutation_table = dataloader.filter_sex_chromosomes(mutation_table)
-    sample = Sample(mutation_table,copy_number_table,subclone_table,sample_id,sample_purity)
-    gritic.process_sample(sample,output_dir,wgd_override=sample_wgd_status,non_parsimony_penalty=non_parsimony_penalty)
+        subclone_table = load_subclone_table(args.subclone_table)
+        
+ 
+    sample = sampletools.Sample(mutation_table,copy_number_table,subclone_table,sample_id,sample_purity)
+    gritictimer.process_sample(sample,output_dir,plot_trees=plot_trees,wgd_override=sample_wgd_status,non_parsimony_penalty=non_parsimony_penalty)

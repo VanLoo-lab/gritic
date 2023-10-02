@@ -84,27 +84,47 @@ def get_sample_posterior_table(sample_table_path,input_dir,sample_id):
         segment_frames.append(segment_frame)
     segment_frame = pd.concat(segment_frames)
     segment_frame = pd.merge(full_segment_table,segment_frame,on=['Segment_ID'])
+    segment_frame['Gain_Index'] = segment_frame.groupby(['Segment_ID','Posterior_Sample_Index']).cumcount()
+    segment_frame = segment_frame.drop(columns=['Node'])
+    segment_frame = segment_frame.sort_values(by=['Segment_ID','Posterior_Sample_Index','Gain_Index'])
     return segment_frame
 
 def get_segment_posterior_table_summary(segment_posterior_table):
     segment_posterior_table['Gain_Index'] = segment_posterior_table.groupby(['Segment_ID','Posterior_Sample_Index']).cumcount()
     n_samples = segment_posterior_table['Posterior_Sample_Index'].max()+1
 
-    segment_posterior_summary = {'Gain_Index':[],'Proportion':[],'Timing_Median':[],'Timing_Low_CI':[],'Timing_High_CI':[]}
+    segment_posterior_summary = {'Gain_Index':[],'Proportion':[],'Timing_Median':[],'Timing_Low_CI':[],'Timing_High_CI':[],'Pre_WGD_Probability':[],'Post_WGD_Probability':[],'WGD_Timing_Median':[],'WGD_Timing_Low_CI':[],'WGD_Timing_High_CI':[]}
     for gain_index,gain_index_table  in segment_posterior_table.groupby('Gain_Index'):
         gain_index_proportion = len(gain_index_table)/n_samples
         gain_index_low_ci = np.percentile(gain_index_table['Gain_Timing'],2.5)
         gain_index_high_ci = np.percentile(gain_index_table['Gain_Timing'],97.5)
         gain_index_median = np.median(gain_index_table['Gain_Timing'])
-
+        if np.isnan(segment_posterior_table['WGD_Timing']).any():
+            wgd_timing_median = np.nan
+            wgd_timing_low_ci = np.nan
+            wgd_timing_high_ci = np.nan
+            pre_wgd_probability = np.nan
+        else:
+            wgd_timing_median = np.median(gain_index_table['WGD_Timing'])
+            wgd_timing_low_ci = np.percentile(gain_index_table['WGD_Timing'],2.5)
+            wgd_timing_high_ci = np.percentile(gain_index_table['WGD_Timing'],97.5)
+            pre_wgd_probability = np.sum(gain_index_table['WGD_Timing']<gain_index_table['Gain_Timing'])/len(gain_index_table)
+        
         segment_posterior_summary['Gain_Index'].append(gain_index+1)
         segment_posterior_summary['Proportion'].append(gain_index_proportion)
         segment_posterior_summary['Timing_Median'].append(gain_index_median)
         segment_posterior_summary['Timing_Low_CI'].append(gain_index_low_ci)
         segment_posterior_summary['Timing_High_CI'].append(gain_index_high_ci)
+
+        segment_posterior_summary['Pre_WGD_Probability'].append(pre_wgd_probability)
+        segment_posterior_summary['Post_WGD_Probability'].append(1-pre_wgd_probability)
+
+        segment_posterior_summary['WGD_Timing_Median'].append(wgd_timing_median)
+        segment_posterior_summary['WGD_Timing_Low_CI'].append(wgd_timing_low_ci)
+        segment_posterior_summary['WGD_Timing_High_CI'].append(wgd_timing_high_ci)
     segment_posterior_summary = pd.DataFrame(segment_posterior_summary)
     return segment_posterior_summary
-def get_sample_posterior_table_summary(sample_posterior_table,min_proportion_threshold=0.5):
+def get_sample_posterior_table_summary(sample_posterior_table,min_proportion_threshold=0.8):
     segment_summary_data = sample_posterior_table[['Segment_ID','Chromosome','Segment_Start','Segment_End','Major_CN','Minor_CN']].drop_duplicates()
     sample_posterior_summary_store = []
     for segment_id,sample_segment_table in sample_posterior_table.groupby('Segment_ID'):
