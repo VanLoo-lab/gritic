@@ -3,6 +3,7 @@ import sys
 import bz2
 import pickle
 from collections import Counter
+import warnings
 
 import pandas as pd
 import numpy as np
@@ -652,7 +653,7 @@ def time_wgd_major_cn_2(sample,output_dir,mult_store_dir):
     wgd_timing_tables = []
     for segment in potential_wgd_segments:
         print('Timing WGD Segment -',segment)
-        #horrendous hack that will just about do
+        #treat minor cn of 2 as 0 as they are equivalent
         pseudo_minor_cn = 0 if segment.minor_cn == 2 else segment.minor_cn
 
         classifier =  RouteClassifier(segment.major_cn,pseudo_minor_cn,False,'No_WGD',mult_store_dir)
@@ -776,7 +777,7 @@ def get_combined_segment_timing_cn_2(overlapping_segments,subclone_table,sample_
     assert len(combined_mutation_table['Major_CN'].unique()) ==1
     segment_timing_store = []
     
-    for minor_cn,minor_cn_mutation_table in combined_mutation_table.groupby(['Minor_CN']):
+    for minor_cn,minor_cn_mutation_table in combined_mutation_table.groupby('Minor_CN'):
         minor_cn_mutation_table = minor_cn_mutation_table.copy()
         
         #set irrelevant parameters to merged value
@@ -803,7 +804,7 @@ def get_combined_segment_timing_cn_high(overlapping_segments,subclone_table,samp
     combined_mutation_table = pd.concat(mutation_tables)
     segment_timing_store = []
     
-    for segment_id,segment_table in combined_mutation_table.groupby(['Segment_ID']):
+    for segment_id,segment_table in combined_mutation_table.groupby('Segment_ID'):
       
         seg = Segment(segment_table,subclone_table,sample_purity)
         classifier =  RouteClassifier(seg.major_cn,seg.minor_cn,False,'No_WGD',mult_store_dir)
@@ -931,10 +932,9 @@ def process_sample(sample,output_dir,plot_trees=True,min_wgd_overlap=0.6,wgd_ove
             non_overlapping_segments = []
             wgd_status = False
             if major_cn_mode ==2:
-                print('The major CN mode is 2, but the overlap proportion is less than 0.6.')
-                print('There are a lot of copy number 2 segments, but they are not overlapping enough to be confident in a WGD call.')
-                print('The sample will be treated as a non-WGD sample')
-                print('Proceed with caution in downstream analysis for this sample')
+
+                warnings.warn('The major CN mode is 2, but the overlap proportion is less than 0.6. There are a lot of copy number 2 segments, but they are not overlapping enough to be confident in a WGD call. The sample will be treated as a non-WGD sample. Proceed with caution in downstream analysis for this sample')
+
         else:
             wgd_status = True
         write_wgd_calling_info(wgd_timing_distribution,overlap_proportion,best_overlap_timing,major_cn_mode,wgd_status,output_dir,sample.sample_id)
@@ -948,7 +948,7 @@ def process_sample(sample,output_dir,plot_trees=True,min_wgd_overlap=0.6,wgd_ove
             
 
         if non_parsimony_penalty and not wgd_status:
-            print('Warning: The non-parsimony penalty is only relevant to WGD samples, but no WGD has been identified. Penalty will not be applied')
+            warnings.warn('Warning: The non-parsimony penalty is only relevant to WGD samples, but no WGD has been identified. Penalty will not be applied')
             non_parsimony_penalty = False
         process_segments(timeable_complex_segments,wgd_timing_distribution,output_dir,mult_store_dir,sample.sample_id,wgd_status,plot_trees=plot_trees,non_parsimony_penalty=non_parsimony_penalty)
     

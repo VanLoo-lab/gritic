@@ -1,4 +1,4 @@
-import time
+import warnings
 import numpy as np
 import pandas as pd
 from scipy.stats import binom
@@ -184,6 +184,8 @@ class Sample:
         return mutation_table
     
     def filter_mutation_table(self,mutation_table,min_alt_count=3,min_coverage=10):
+        if mutation_table['Tumor_Alt_Count'].min() > 10:
+            warnings.warn("There are no mutations with less than 10 alt reads. This may indicate a higher threshold for mutation calling than the default of 3 alt reads assumed by GRITIC")
         mutation_table = mutation_table[mutation_table['Tumor_Alt_Count']>=min_alt_count]
         mutation_table = mutation_table[(mutation_table['Tumor_Ref_Count']+mutation_table['Tumor_Alt_Count'])>=min_coverage]
         return mutation_table
