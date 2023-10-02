@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='gritic',
-    version='0.0.1',
+    version='0.0.2',
     packages=['gritic'],
     author='Toby Baker',
     author_email='toby.baker@crick.ac.uk',
@@ -10,7 +10,7 @@ setup(
     maintainer_email='toby.baker@crick.ac.uk',
     license='GNU AFFERO GENERAL PUBLIC LICENSE Version 3',
     url='https://github.com/VanLoo-lab/gritic',
-    download_url='https://github.com/VanLoo-lab/gritic/archive/refs/tags/v0.0.1.tar.gz',
+    download_url='https://github.com/VanLoo-lab/gritic/archive/refs/tags/v.0.02.tar.gz',
     description='A module to time complex copy number gains in cancer genomes',
     classifiers=[
         'Programming Language :: Python :: 3',
