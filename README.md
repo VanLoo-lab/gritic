@@ -4,17 +4,9 @@ A tool for timing complex copy number gains in cancer. Provides gain timing esti
 Each gain timing is measured in mutation time, a scale that ranges from 0 to 1. A timing of 0 indicidates that the gain occured close to conception and 1 that the gain occurred very close to the emergence of the tumour's most recent common ancestor.
 
 ## Installation
-First clone this repository and load anaconda onto your system. Then create a new conda environment
+GRITIC can be installed using pip
 ```
-conda create -n gritic_env python=3 numba scipy pandas numpy networkx matplotlib
-```
-Then activate the environment
-```
-conda activate gritic_env
-```
-Note that this environment can be deactivated in the future using
-```
-conda activate
+pip install gritic
 ```
 
 ## Running
