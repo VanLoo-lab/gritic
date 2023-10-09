@@ -1,14 +1,15 @@
 # GRITIC
-A tool for timing complex copy number gains in cancer. Provides gain timing estimates for segments with a total copy number of up to 9. Only copy number segments with 10 or more SNVs will be timed. 
+A tool for timing complex copy number gains in human cancers. Provides gain timing estimates for segments with a total copy number of up to 9. Only copy number segments with 10 or more SNVs will be timed. 
 
-Each gain timing is measured in mutation time, a scale that ranges from 0 to 1. A timing of 0 indicidates that the gain occured close to conception and 1 that the gain occurred very close to the emergence of the tumour's most recent common ancestor.
+Each gain timing is measured in mutation time, a scale that ranges from 0 to 1. A timing of 0 indicates that the gain occured close to conception and 1 that the gain occurred very close to the emergence of the tumour's most recent common ancestor.
 
+GRITIC is agnostic to reference genome and works with both human and mouse data.
 ## Installation
 GRITIC can be installed using pip
 ```
 pip install gritic
 ```
-
+Python 3.X is required.
 ## Running
 The easiest way to run GRITIC on a single sample is to use the ```rungritic_cmd.py``` script. 
 ```
@@ -38,7 +39,7 @@ python rungritic_cmd.py --mutation_table examples/snv_table_example.tsv --subclo
 Alternatively, the similar script ```rungritic.py``` provides a very simple framework to run gritic as part of a larger script.
 
 ## Input Table Formats
-The three input tables that GRITIC requires should be tab separated. Examples using simulated data are available in the example directory. We currently filter any non-autosomal chromosomes.
+The three input tables that GRITIC requires should be tab separated. Examples using simulated data are available in the example directory. We currently filter any non-autosomal chromosomes. Data from any allele specific copy number caller, SNV caller and subclone caller can be used as long as the tables are formatted correctly.
 ### Mutation Table 
 All SNVs for the sample. Requires the column names ```Chromosome```, ```Position```, ```Tumor_Ref_Count``` & ```Tumor_Alt_Count```. 
 ### Copy Number Table 
