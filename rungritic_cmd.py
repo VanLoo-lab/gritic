@@ -30,19 +30,19 @@ def load_subclone_table(subclone_table_path):
 if __name__ == '__main__':
     my_parser = argparse.ArgumentParser(allow_abbrev=False)
     
-    my_parser.add_argument('--mutation_table', action='store', type=str, required=True)
+    my_parser.add_argument('--mutation_table', action='store', type=str, required=True, help='A tab separated file containing the following columns: Chromosome,Position,Tumor_Ref_Count,Tumor_Alt_Count')
     
-    my_parser.add_argument('--copy_number_table', action='store', type=str, required=True)
-    my_parser.add_argument('--purity', action='store', type=float, required=True)
+    my_parser.add_argument('--copy_number_table', action='store', type=str, required=True, help='A tab separated file containing the following columns: Chromosome,Segment_Start,Segment_End,Major_CN,Minor_CN. Copy number should be integer values.')
+    my_parser.add_argument('--purity', action='store', type=float, required=True, help='The purity of the sample as determined by the copy number caller.')
 
     my_parser.add_argument('--sample_id', action='store', type=str, required=True)
-    my_parser.add_argument('--output', action='store', type=str, required=True)
+    my_parser.add_argument('--output', action='store', type=str, required=True, help='The output directory')
 
 
-    my_parser.add_argument('--wgd_status', action='store', type=str2bool, required=False,default=None)
-    my_parser.add_argument('--non_parsimony_penalty', action='store', type=str2bool, required=False,default=False)
-    my_parser.add_argument('--plot_trees', action='store', type=str, required=False,default=True)
-    my_parser.add_argument('--subclone_table', action='store', type=str, required=False,default=None)
+    my_parser.add_argument('--wgd_status', action='store', type=str2bool, required=False,default=None,help='If the sample is known to have undergone whole genome duplication, set this to True. If the sample is known to not have undergone whole genome duplication, set this to False. If the sample is of unknown WGD status, leave this blank.')
+    my_parser.add_argument('--non_parsimony_penalty', action='store', type=str2bool, required=False,default=False,help='Apply additional penalty to non-parsimonious copy number route histories. Default is False.')
+    my_parser.add_argument('--plot_trees', action='store', type=str, required=False,default=True,help='Plot the copy number trees. Default is True.')
+    my_parser.add_argument('--subclone_table', action='store', type=str, required=False,default=None,help='A tab separated file containing the following columns: Cluster,Subclone_CCF,Subclone_Fraction (optional).' )
     
     args = my_parser.parse_args()
     sample_id = args.sample_id
