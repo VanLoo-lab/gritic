@@ -902,6 +902,16 @@ def process_sample(sample,output_dir,plot_trees=True,min_wgd_overlap=0.6,wgd_ove
     mult_store_dir = output_dir/f"{sample.sample_id}_mult_stores_temp"
  
     os.makedirs(mult_store_dir,exist_ok=True)
+    major_cn_mode = get_major_cn_mode(sample)
+    
+    if major_cn_mode >2:
+        raise ValueError(f"Major CN mode is {major_cn_mode} for sample {sample.sample_id}, this is currently not supported")
+
+    if wgd_override is not None:
+        if major_cn_mode ==1 and wgd_override:
+            warnings.warn('Sample was specified as WGD but major CN mode is 1. Please check WGD status of sample')
+        if major_cn_mode ==2 and not wgd_override:
+            warnings.warn('Sample was specified as non-WGD but major CN mode is 2. Please check WGD status of sample')
     
     if wgd_override is not None and wgd_override == False:
  
@@ -911,7 +921,7 @@ def process_sample(sample,output_dir,plot_trees=True,min_wgd_overlap=0.6,wgd_ove
         major_cn_mode = 1
     else:
         major_cn_mode = get_major_cn_mode(sample)
-        if major_cn_mode ==1 or wgd_override == False:
+        if (major_cn_mode ==1 and not wgd_override) or wgd_override == False:
             wgd_timing_distribution = None
             non_overlapping_simple_segments = []
             overlap_proportion = 0

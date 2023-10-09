@@ -153,6 +153,8 @@ class Sample:
         self.segments = self.get_segments()
     
     def process_raw_mutation_table(self,mutation_table,cn_table):
+        mutation_table = mutation_table.copy()
+        mutation_table['Chromosome'] = mutation_table['Chromosome'].str.replace('chr','')
         mutation_table = dataloader.assign_cn_to_snv(mutation_table,cn_table)
         mutation_table = dataloader.filter_sex_chromosomes(mutation_table)
         mutation_table = self.filter_mutation_table(mutation_table)
@@ -160,6 +162,7 @@ class Sample:
         return mutation_table
     def process_raw_copy_number_table(self,cn_table):
         cn_table = cn_table.copy()
+        cn_table['Chromosome'] = cn_table['Chromosome'].str.replace('chr','')
         cn_table = dataloader.merge_segments(cn_table)
         cn_table['Total_CN'] = cn_table['Major_CN']+cn_table['Minor_CN']
         return cn_table
@@ -186,6 +189,8 @@ class Sample:
     def filter_mutation_table(self,mutation_table,min_alt_count=3,min_coverage=10):
         if mutation_table['Tumor_Alt_Count'].min() > 10:
             warnings.warn("There are no mutations with less than 10 alt reads. This may indicate a higher threshold for mutation calling than the default of 3 alt reads assumed by GRITIC")
+        if len(mutation_table.index) ==0:
+            raise ValueError("There are no mutations in the mutation table. Please check the mutation table is formatted correctly")
         mutation_table = mutation_table[mutation_table['Tumor_Alt_Count']>=min_alt_count]
         mutation_table = mutation_table[(mutation_table['Tumor_Ref_Count']+mutation_table['Tumor_Alt_Count'])>=min_coverage]
         return mutation_table
