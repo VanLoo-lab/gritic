@@ -912,41 +912,34 @@ def process_sample(sample,output_dir,plot_trees=True,min_wgd_overlap=0.6,wgd_ove
             warnings.warn('Sample was specified as WGD but major CN mode is 1. Please check WGD status of sample')
         if major_cn_mode ==2 and not wgd_override:
             warnings.warn('Sample was specified as non-WGD but major CN mode is 2. Please check WGD status of sample')
-    
-    if wgd_override is not None and wgd_override == False:
- 
-        wgd_status = False
-        wgd_timing_distribution = None
-        non_overlapping_segments = []
-        major_cn_mode = 1
-    else:
-        major_cn_mode = get_major_cn_mode(sample)
-        if (major_cn_mode ==1 and not wgd_override) or wgd_override == False:
-            wgd_timing_distribution = None
-            non_overlapping_simple_segments = []
-            overlap_proportion = 0
-            best_overlap_timing = np.nan
-        elif major_cn_mode == 2 or wgd_override == True:
+
+        
+        if wgd_override:
             wgd_timing_distribution,non_overlapping_segments,overlap_proportion,best_overlap_timing= time_wgd_major_cn_2(sample,output_dir,mult_store_dir)
+            wgd_status = True
         else:
-            raise ValueError(f"Major CN mode is {major_cn_mode} for sample {sample.sample_id}, this is currently not supported")
-        
-
-        
-        if major_cn_mode >2:
-            wgd_timing_distribution = None
-            non_overlapping_segments = []
-            wgd_status = np.nan
-        if overlap_proportion < min_wgd_overlap and (wgd_override is None or wgd_override == False):
-            wgd_timing_distribution = None
-            non_overlapping_segments = []
             wgd_status = False
-            if major_cn_mode ==2:
-
+            wgd_timing_distribution = None
+            non_overlapping_segments = []
+            best_overlap_timing = np.nan
+            overlap_proportion = np.nan
+    else:
+        if major_cn_mode ==1:
+            wgd_status = False
+            wgd_timing_distribution = None
+            non_overlapping_segments = []
+            best_overlap_timing = np.nan
+            overlap_proportion = np.nan
+        elif major_cn_mode ==2:
+            wgd_timing_distribution,non_overlapping_segments,overlap_proportion,best_overlap_timing= time_wgd_major_cn_2(sample,output_dir,mult_store_dir)
+            if overlap_proportion < min_wgd_overlap:
                 warnings.warn('The major CN mode is 2, but the overlap proportion is less than 0.6. There are a lot of copy number 2 segments, but they are not overlapping enough to be confident in a WGD call. The sample will be treated as a non-WGD sample. Proceed with caution in downstream analysis for this sample')
 
-        else:
-            wgd_status = True
+                wgd_timing_distribution = None
+                non_overlapping_segments = []
+                wgd_status = False
+            else:
+                wgd_status = True
         write_wgd_calling_info(wgd_timing_distribution,overlap_proportion,best_overlap_timing,major_cn_mode,wgd_status,output_dir,sample.sample_id)
 
     if major_cn_mode <=2:
