@@ -56,8 +56,8 @@ def get_major_cn_mode(sample):
     return major_cn_mode
 def get_valid_subclones(subclone_table,max_ccf=0.9,min_fraction=0.1):
     subclone_table = subclone_table[subclone_table['Subclone_CCF'] <= max_ccf].copy()
-    subclone_table['Subclone_Fraction'] = subclone_table['Subclone_Fraction']/subclone_table['Subclone_Fraction'].sum()
-    subclone_table = subclone_table[subclone_table['Subclone_Fraction'] > min_fraction]
+    subclone_fraction_norm = subclone_table['Subclone_Fraction']/subclone_table['Subclone_Fraction'].sum()
+    subclone_table = subclone_table[subclone_fraction_norm > min_fraction]
     return subclone_table.reset_index(drop=True).copy()
 def filter_excess_subclones(subclone_table):
     if subclone_table is None or len(subclone_table.index)==1:
