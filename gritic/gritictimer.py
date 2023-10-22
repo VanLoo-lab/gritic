@@ -33,7 +33,6 @@ import gritic.distributiontools as distributiontools
 import gritic.treetools as treetools
 import gritic.hitandrun as hitandrun
 
-
 import gritic.posteriortablegen as posteriortablegen
 
 import pathlib
@@ -502,10 +501,9 @@ class RouteClassifier:
 
         return pd.DataFrame(timing_table_data)
     
-    def get_timing_dict(self,n_samples = 250):
+    def get_timing_dict(self,n_samples = 5000):
         if len(self.route_probabilities) ==0:
             raise ValueError("routes hasn't been fit yet")
-        
         timing_dict = {}
         
         for route_id,probability in self.route_probabilities.items():
@@ -523,6 +521,7 @@ class RouteClassifier:
                 node_timing = route.get_node_timing(node)
                 route_samples['Timing'][node] = node_timing[random_indexes]
             route_samples['Mult'] = route.mult_store[random_indexes]
+            route_samples['LL'] = route.ll_store[random_indexes]
             timing_dict[route_id] = route_samples
         return timing_dict
 
@@ -954,16 +953,17 @@ def process_sample(sample,output_dir,plot_trees=True,min_wgd_overlap=0.6,wgd_ove
             warnings.warn('Warning: The non-parsimony penalty is only relevant to WGD samples, but no WGD has been identified. Penalty will not be applied')
             non_parsimony_penalty = False
         process_segments(timeable_complex_segments,wgd_timing_distribution,output_dir,mult_store_dir,sample.sample_id,wgd_status,plot_trees=plot_trees,non_parsimony_penalty=non_parsimony_penalty)
-    
-        sample_posterior_table = posteriortablegen.get_sample_posterior_table(timing_table_path,output_dir,sample.sample_id)
-        sample_posterior_table_summary = posteriortablegen.get_sample_posterior_table_summary(sample_posterior_table)
-    
-    
-        posterior_table_path = output_dir/f"{sample.sample_id}_posterior_timing_table.tsv"
-        posterior_table_summary_path = output_dir/f"{sample.sample_id}_posterior_timing_table_summary.tsv"
 
-        sample_posterior_table.to_csv(posterior_table_path,sep="\t",index=False)
-        sample_posterior_table_summary.to_csv(posterior_table_summary_path,sep="\t",index=False)
+        if os.path.exists(timing_table_path):
+            sample_posterior_table = posteriortablegen.get_sample_posterior_table(timing_table_path,output_dir,sample.sample_id)
+            sample_posterior_table_summary = posteriortablegen.get_sample_posterior_table_summary(sample_posterior_table)
+        
+        
+            posterior_table_path = output_dir/f"{sample.sample_id}_posterior_timing_table.tsv"
+            posterior_table_summary_path = output_dir/f"{sample.sample_id}_posterior_timing_table_summary.tsv"
+
+            sample_posterior_table.to_csv(posterior_table_path,sep="\t",index=False)
+            sample_posterior_table_summary.to_csv(posterior_table_summary_path,sep="\t",index=False)
 
     shutil.rmtree(mult_store_dir)
     

@@ -165,6 +165,7 @@ class Sample:
         cn_table['Chromosome'] = cn_table['Chromosome'].str.replace('chr','')
         cn_table = dataloader.merge_segments(cn_table)
         cn_table['Total_CN'] = cn_table['Major_CN']+cn_table['Minor_CN']
+        cn_table = cn_table[cn_table['Major_CN']>0]
         return cn_table
     def format_subclone_table(self,subclone_table):
         if subclone_table is None:
@@ -348,9 +349,12 @@ class Segment:
 
         mult_names = ["Three_Reads_Correction_Mult_{}".format(mult) for mult in self.possible_clonal_multiplicities]
         mult_names.extend(["Three_Reads_Correction_Subclone_{}".format(subclone) for subclone in range(self.n_subclones)])
+ 
         reads_correction = self.mutation_table[mult_names].to_numpy()
-      
+ 
+        
         reads_correction = np.average(reads_correction,axis=0)
+
         return reads_correction
     
     def get_multiplicity_probabilities_array(self,allele=None):
