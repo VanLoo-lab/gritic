@@ -51,7 +51,7 @@ The identified subclonal peaks and their relative sizes for the sample. All peak
 
 This table requires the column names ```Subclone_CCF``` (the cancer cell fraction of the subclone) & ```Subclone_Fraction``` (the fraction of total SNVs present in the subclone). An ```Cluster``` column is also required as an index for the subclones.
 
-Only subclones with more than 10% of the subclonal SNVs are included. If there are more than two subclones, GRITIC will reformat the sample to have two subclone. The subclone with the largest CCF is unmodified and the remaining clones grouped together. This speeds convergence while maintaining an accurate estimation of clonal vs subclonal SNV composition.
+Only subclones with more than 10% of the subclonal SNVs are included. If there are more than two subclones, GRITIC will reformat the sample to have two subclones. The subclone with the largest CCF is unmodified and the remaining clones grouped together. This speeds convergence while maintaining an accurate estimation of clonal vs subclonal SNV composition.
 
 This table is optional, if it is not included GRITIC will assume every SNV is clonal. This will likely bias the gains to be measured earlier.
 
