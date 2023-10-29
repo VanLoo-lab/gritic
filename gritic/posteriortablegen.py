@@ -61,7 +61,7 @@ def get_sample_posterior_table(sample_table_path,input_dir,sample_id):
 
     sample_table = pd.read_csv(sample_table_path,sep='\t',dtype={'Chromosome':str})
     full_segment_table = sample_table[['Segment_ID','Chromosome','Segment_Start','Segment_End','Major_CN','Minor_CN']].drop_duplicates()
-
+    node_table = sample_table[['Route','Node','Node_Phasing','Major_CN','Minor_CN','WGD_Status']].drop_duplicates()
 
     dict_dir = f'{input_dir}/{sample_id}_timing_dicts'
     segment_frames = []
@@ -83,9 +83,9 @@ def get_sample_posterior_table(sample_table_path,input_dir,sample_id):
         segment_frame = produce_timing_segment_table(segment_table,timing_dict,segment_id,n_samples=250)
         segment_frames.append(segment_frame)
     segment_frame = pd.concat(segment_frames)
-    segment_frame = pd.merge(full_segment_table,segment_frame,on=['Segment_ID'])
+    segment_frame = pd.merge(full_segment_table,segment_frame,on=['Segment_ID'],how='inner')
+    segment_frame = pd.merge(segment_frame,node_table,how='inner')
     segment_frame['Gain_Index'] = segment_frame.groupby(['Segment_ID','Posterior_Sample_Index']).cumcount()
-    segment_frame = segment_frame.drop(columns=['Node'])
     segment_frame = segment_frame.sort_values(by=['Segment_ID','Posterior_Sample_Index','Gain_Index'])
     return segment_frame
 

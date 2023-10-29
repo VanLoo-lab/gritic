@@ -1,6 +1,7 @@
 import networkx as nx
 import itertools
 import hashlib
+import numpy as np
 #problem posed  https://leetcode.com/problems/all-possible-full-binary-trees/
 #code from https://www.youtube.com/watch?v=nZtrZPTTCAo
 # Definition for a binary tree node.
@@ -248,9 +249,23 @@ def get_wgd_paths(tree):
         all_possible_paths.extend(get_wgd_paths_recursive(tree,root_node,[root_node]))
     return all_possible_paths
 
+def get_node_phasing_tree(tree):
+    node_phasing = {}
+    connected_components = sorted(list(nx.connected_components(tree.to_undirected())),key=lambda x:len(x))[::-1]
+    assert len(connected_components) <=2
+    if len(connected_components) == 1:
+        phasing = (np.nan,)
+    elif len(connected_components[0]) == len(connected_components[1]):
+        phasing = ('A','B')
+    else:
+        phasing = ('Major','Minor')
+    for i,connected_component in enumerate(connected_components):
+        for node in connected_component:
+            node_phasing[node] = phasing[i]
+    return node_phasing
 def get_node_attributes(tree,wgd_status):
     node_attributes = {}
-    
+    node_phasing = get_node_phasing_tree(tree)
     for node in tree.nodes:
         node_attribute = {}
         
@@ -263,7 +278,7 @@ def get_node_attributes(tree,wgd_status):
         node_attribute['Successors'] = list(tree.successors(node))
         node_attribute['Ancestors'] = list(nx.ancestors(tree,node))
         node_attribute['WGD'] = tree.nodes[node]['WGD_Symbol']
-
+        node_attribute['Phasing'] = node_phasing[node]
         descendants = set(nx.descendants(tree,node))
         n_final_ancestors = len([node for node in descendants if len(tree.adj[node]) ==0])
         final_mult = n_final_ancestors if n_final_ancestors > 0 else 1

@@ -40,7 +40,6 @@ def run_chain(current_position,null_dimension,A_null,timing_state,burn_in=25,ski
     
     for i in range(n_samples_actual):
         new_position = get_new_position(current_position,null_dimension,A_null)
-
         
         hit_and_run_store[i,:] = new_position
         current_position = new_position
@@ -78,7 +77,6 @@ def hit_and_run(A_null,timing_state,n_samples=500,burn_in=25,skips=5):
     while np.sum(np.abs(current_position-first_position))<1e-2:
         current_position = get_new_position(current_position,null_dimension,A_null)
         process_count+=1
-        
         if process_count>50000:
             
             print("Warning: process count exceeded 50000")

@@ -67,6 +67,7 @@ def filter_excess_subclones(subclone_table):
     top_clone = subclone_table.iloc[0:1]
     
     other_clones = subclone_table.iloc[1:]
+    
     combined_clone_ccf = np.average(other_clones['Subclone_CCF'],weights=other_clones['Subclone_Fraction'])
     combined_clone_fraction = np.sum(other_clones['Subclone_Fraction'])
     

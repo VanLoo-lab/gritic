@@ -60,6 +60,7 @@ class RouteTree:
         self.timing_matrix = self.get_timing_matrix()
         self.unphased_timing_matrix= self.get_unphased_timing_matrix()
     
+
     def get_timeable_nodes(self):
         timeable_nodes = []
         for node in self.node_order:
@@ -383,6 +384,19 @@ class Route:
             self.save_gz_numpy(density_store_path,density)
         
         return mult_store,timing_store,wgd_timing_store,density
+
+    def get_raw_samples_store(self,mult_store,timing_store,wgd_timing_store,ll_store,n_samples=10000):
+        
+        random_indexes = np.random.randint(0,mult_store.shape[0],size=n_samples)
+        
+        raw_samples_store = {'Timing':{},'Mult':[],'WGD_Timing':[],'LL':[]}
+        for node in self.route_tree.timeable_nodes:
+            node_timing = timing_store[self.route_tree.node_order.index(node),random_indexes].copy()
+            raw_samples_store['Timing'][node] = node_timing
+        raw_samples_store['Mult'] = mult_store[random_indexes,:].copy()
+        raw_samples_store['WGD_Timing'] = wgd_timing_store[random_indexes].copy()
+        raw_samples_store['LL'] = ll_store[random_indexes].copy()
+        return raw_samples_store
     def run_sampling(self,mult_probabilities,subclone_table,n_snvs,wgd_timing_distribution,phased):
         run_time = time.perf_counter()
 
@@ -400,11 +414,12 @@ class Route:
         mult_store,timing_store,wgd_timing_store,density = self.get_mult_store(n_snvs,alpha,n_subclones,wgd_timing_distribution)
         
         ll_store = mult_probabilities.evaluate_likelihood_array(mult_store)
-
+        self.raw_samples = self.get_raw_samples_store(mult_store,timing_store,wgd_timing_store,ll_store)
+        
         weights = np.exp(ll_store-np.max(ll_store))
         
         node_timing,wgd_timing_store,mult_store= self.get_weighted_arrays(timing_store,wgd_timing_store,mult_store,weights)
-
+        
         self.n_events_store = self.get_n_events_estimate(node_timing,wgd_timing_store)
         self.ll_store = ll_store
         self.node_timing = node_timing
@@ -472,7 +487,7 @@ class RouteClassifier:
     def get_timing_table(self):
         if len(self.route_probabilities) ==0:
             raise ValueError("routes hasn't been fit yet")
-        timing_table_data = {"Route":[],'Probability':[],'Node':[],'Timing':[],'Timing_CI_Low':[],'Timing_CI_High':[],'Average_N_Events':[],'Average_Pre_WGD_Losses':[],'Average_Post_WGD_Losses':[],'Time':[],'Density':[],'Density_High':[]}
+        timing_table_data = {"Route":[],'Probability':[],'Node':[],'Node_Phasing':[],'Timing':[],'Timing_CI_Low':[],'Timing_CI_High':[],'Average_N_Events':[],'Average_Pre_WGD_Losses':[],'Average_Post_WGD_Losses':[],'Time':[],'Density':[],'Density_High':[]}
         for route_id,probability in self.route_probabilities.items():
             route = self.routes[route_id]
             timeable_nodes = route.route_tree.timeable_nodes
@@ -489,6 +504,7 @@ class RouteClassifier:
                 timing_table_data['Route'].append(route.short_id)
                 timing_table_data['Probability'].append(probability)
                 timing_table_data['Node'].append(node)
+                timing_table_data['Node_Phasing'].append(route.route_tree.node_attributes[node]['Phasing'])
                 timing_table_data['Timing'].append(np.abs(np.round(np.percentile(node_timing,50),3)))
                 timing_table_data['Timing_CI_Low'].append(np.abs(np.round(np.percentile(node_timing,2.5),3)))
                 timing_table_data['Timing_CI_High'].append(np.abs(np.round(np.percentile(node_timing,97.5),3)))
@@ -522,6 +538,7 @@ class RouteClassifier:
                 route_samples['Timing'][node] = node_timing[random_indexes]
             route_samples['Mult'] = route.mult_store[random_indexes]
             route_samples['LL'] = route.ll_store[random_indexes]
+            route_samples['Raw_Samples'] = route.raw_samples
             timing_dict[route_id] = route_samples
         return timing_dict
 
@@ -582,7 +599,7 @@ def add_wgd_info_to_table(timing_table,wgd_info,wgd_status):
 
 def write_timing_tables(timing_table,timing_table_path):
     timing_table = timing_table[['Sample_ID','Segment_ID', 'Chromosome', 'Segment_Start', 'Segment_End', 'Major_CN',
-       'Minor_CN', 'Total_CN', 'N_Mutations','Mutation_Rate','Route','Probability','Average_N_Events','Average_Pre_WGD_Losses','Average_Post_WGD_Losses','Time','Node', 'Timing', 'Timing_CI_Low', 'Timing_CI_High','WGD_Status','WGD_Timing','WGD_Timing_CI_Low',
+       'Minor_CN', 'Total_CN', 'N_Mutations','Mutation_Rate','Route','Probability','Average_N_Events','Average_Pre_WGD_Losses','Average_Post_WGD_Losses','Time','Node','Node_Phasing','Timing', 'Timing_CI_Low', 'Timing_CI_High','WGD_Status','WGD_Timing','WGD_Timing_CI_Low',
        'WGD_Timing_CI_High','Density']]
 
     if os.path.exists(timing_table_path):
