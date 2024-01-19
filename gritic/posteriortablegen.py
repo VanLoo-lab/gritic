@@ -10,7 +10,6 @@ import pandas as pd
 def load_route_table(path):
     read_cols = ['Sample_ID','Segment_ID','Route','Average_N_Events','Average_Pre_WGD_Losses','Average_Post_WGD_Losses','Probability','Chromosome','Segment_Start','Segment_End','Major_CN','Minor_CN','WGD_Status','N_Mutations']
     route_table = pd.read_csv(path,sep="\t",usecols=read_cols,dtype={'Chromosome':str})
-    print(route_table)
     baseline_cn = np.where(route_table['WGD_Status'],2.1,1.1)
     route_table = route_table[route_table['Major_CN']>baseline_cn]
     route_table = route_table[route_table['N_Mutations']>=20]
@@ -60,7 +59,7 @@ def load_timing_from_dict(segment_path):
 def get_sample_posterior_table(sample_table_path,input_dir,sample_id):
 
     sample_table = pd.read_csv(sample_table_path,sep='\t',dtype={'Chromosome':str})
-    full_segment_table = sample_table[['Segment_ID','Chromosome','Segment_Start','Segment_End','Major_CN','Minor_CN']].drop_duplicates()
+    full_segment_table = sample_table[['Segment_ID','Chromosome','Segment_Start','Segment_End','Major_CN','Minor_CN','N_Mutations']].drop_duplicates()
     node_table = sample_table[['Route','Node','Node_Phasing','Major_CN','Minor_CN','WGD_Status']].drop_duplicates()
 
     dict_dir = f'{input_dir}/{sample_id}_timing_dicts'
@@ -80,7 +79,7 @@ def get_sample_posterior_table(sample_table_path,input_dir,sample_id):
 
         if len(segment_table)==0:
             continue
-        segment_frame = produce_timing_segment_table(segment_table,timing_dict,segment_id,n_samples=250)
+        segment_frame = produce_timing_segment_table(segment_table,timing_dict,segment_id,n_samples=100)
         segment_frames.append(segment_frame)
     segment_frame = pd.concat(segment_frames)
     segment_frame = pd.merge(full_segment_table,segment_frame,on=['Segment_ID'],how='inner')
@@ -108,7 +107,7 @@ def get_segment_posterior_table_summary(segment_posterior_table):
             wgd_timing_median = np.median(gain_index_table['WGD_Timing'])
             wgd_timing_low_ci = np.percentile(gain_index_table['WGD_Timing'],2.5)
             wgd_timing_high_ci = np.percentile(gain_index_table['WGD_Timing'],97.5)
-            pre_wgd_probability = np.sum(gain_index_table['WGD_Timing']<gain_index_table['Gain_Timing'])/len(gain_index_table)
+            pre_wgd_probability = np.sum(gain_index_table['WGD_Timing']>gain_index_table['Gain_Timing'])/len(gain_index_table)
         
         segment_posterior_summary['Gain_Index'].append(gain_index+1)
         segment_posterior_summary['Proportion'].append(gain_index_proportion)
@@ -125,7 +124,7 @@ def get_segment_posterior_table_summary(segment_posterior_table):
     segment_posterior_summary = pd.DataFrame(segment_posterior_summary)
     return segment_posterior_summary
 def get_sample_posterior_table_summary(sample_posterior_table,min_proportion_threshold=0.8):
-    segment_summary_data = sample_posterior_table[['Segment_ID','Chromosome','Segment_Start','Segment_End','Major_CN','Minor_CN']].drop_duplicates()
+    segment_summary_data = sample_posterior_table[['Segment_ID','Chromosome','Segment_Start','Segment_End','Major_CN','Minor_CN','N_Mutations']].drop_duplicates()
     sample_posterior_summary_store = []
     for segment_id,sample_segment_table in sample_posterior_table.groupby('Segment_ID'):
         segment_posterior_summary = get_segment_posterior_table_summary(sample_segment_table)
