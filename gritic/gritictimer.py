@@ -51,7 +51,8 @@ class RouteTree:
         self.wgd_status = wgd_status
         self.node_attributes = treetools.get_node_attributes(self.main_tree,self.wgd_status)
 
-        self.node_order = self.get_node_order()
+        self.non_phased_node_order = self.get_node_order()
+        
         self.timeable_nodes = self.get_timeable_nodes()
         self.wgd_nodes = self.get_wgd_nodes()
         self.sum_constraint_matrix = self.get_sum_constraint_matrix()
@@ -63,31 +64,38 @@ class RouteTree:
 
     def get_timeable_nodes(self):
         timeable_nodes = []
-        for node in self.node_order:
+        for node in self.non_phased_node_order:
             if len(self.main_tree.out_edges(node))==2 and not self.main_tree.nodes[node]['WGD_Symbol']:
                 timeable_nodes.append(node)
         return timeable_nodes
     def get_non_terminal_nodes(self):
         non_terminal_nodes = []
-        for node in self.node_order:
+        for node in self.non_phased_node_order:
             if len(self.main_tree.out_edges(node))>0:
                 non_terminal_nodes.append(node)
         return non_terminal_nodes
     def get_terminal_nodes(self):
         terminal_nodes = []
-        for node in self.node_order:
+        for node in self.non_phased_node_order:
             if len(self.main_tree.out_edges(node))==0:
                 terminal_nodes.append(node)
         return terminal_nodes
     def get_wgd_nodes(self):
         wgd_nodes = []
-        for node in self.node_order:
+        for node in self.non_phased_node_order:
             if self.main_tree.nodes[node]['WGD_Symbol']:
                 wgd_nodes.append(node)
         return wgd_nodes
     #all nodes
-    def get_node_order(self):
-        return list(nx.dfs_preorder_nodes(self.main_tree))
+    def get_node_order(self,allele=None):
+        if allele is None:
+            return list(nx.dfs_preorder_nodes(self.main_tree))
+        if allele == 'Major':
+            return list(nx.dfs_preorder_nodes(self.major_tree))
+        if allele == 'Minor':
+            return list(nx.dfs_preorder_nodes(self.minor_tree))
+        raise ValueError(f'allele must be None, Major or Minor, not {allele}')
+        
        
     #an mxn matrix
     #m = number of timing nodes
@@ -95,11 +103,12 @@ class RouteTree:
     def get_timing_matrix(self):
 
         n_mults = self.major_cn*2+self.minor_cn
+
         mult_offset = 1
         
-        timing_matrix = np.zeros((len(self.node_order),n_mults))
+        timing_matrix = np.zeros((len(self.non_phased_node_order),n_mults))
         
-        for i,node in enumerate(self.node_order):
+        for i,node in enumerate(self.non_phased_node_order):
             final_mult = self.node_attributes[node]['Multiplicity']
             timing_matrix[i,final_mult-mult_offset]=1
 
@@ -107,16 +116,15 @@ class RouteTree:
                 timing_matrix[i,final_mult-mult_offset+self.major_cn] = 1
             if node in self.minor_tree.nodes():
                 timing_matrix[i,final_mult-mult_offset+2*self.major_cn] = 1
-        
         return timing_matrix
     
     def get_unphased_timing_matrix(self):
         n_mults = self.major_cn
         mult_offset = 1
         
-        timing_matrix = np.zeros((len(self.node_order),n_mults))
+        timing_matrix = np.zeros((len(self.non_phased_node_order),n_mults))
         
-        for i,node in enumerate(self.node_order):
+        for i,node in enumerate(self.non_phased_node_order):
             final_mult = self.node_attributes[node]['Multiplicity']
             timing_matrix[i,final_mult-mult_offset]=1
         
@@ -126,11 +134,11 @@ class RouteTree:
     #n number of timing nodes
     def get_sum_constraint_matrix(self):
         possible_paths = treetools.get_possible_paths(self.main_tree)
-        sum_constraint_matrix = np.zeros((len(possible_paths),len(self.node_order)))
+        sum_constraint_matrix = np.zeros((len(possible_paths),len(self.non_phased_node_order)))
         
         for row,path in enumerate(possible_paths):
             for node in path:
-                sum_constraint_matrix[row,self.node_order.index(node)] = 1
+                sum_constraint_matrix[row,self.non_phased_node_order.index(node)] = 1
         
         return sum_constraint_matrix
     
@@ -140,11 +148,11 @@ class RouteTree:
         if len(wgd_paths)==0:
             return None
         
-        constraint_matrix = np.zeros((len(wgd_paths),len(self.node_order)))
+        constraint_matrix = np.zeros((len(wgd_paths),len(self.non_phased_node_order)))
         
         for row,path in enumerate(wgd_paths):
             for node in path:
-                constraint_matrix[row,self.node_order.index(node)] = 1
+                constraint_matrix[row,self.non_phased_node_order.index(node)] = 1
         return constraint_matrix
     
     def get_combined_constraints(self,wgd_timing):
@@ -166,7 +174,7 @@ class RouteTree:
             return n_events,np.nan,np.nan
         
         pre_wgd_losses =0
-        plotting_tree = treetools.convert_to_plotting_tree(self.main_tree,wgd_timing,node_timing,self.node_order)
+        plotting_tree = treetools.convert_to_plotting_tree(self.main_tree,wgd_timing,node_timing,self.non_phased_node_order)
         post_wgd_losses = sum([int(plotting_tree.nodes[node]['Loss_Symbol']) for node in plotting_tree.nodes])
 
         n_wgds = sum([int(self.main_tree.nodes[node]['WGD_Symbol']) for node in self.main_tree.nodes])
@@ -212,17 +220,17 @@ class Route:
     def get_node_timing(self,node):
         if self.node_timing is None:
             return np.nan
-        return self.node_timing[self.route_tree.node_order.index(node),:]
+        return self.node_timing[self.route_tree.non_phased_node_order.index(node),:]
     
     def get_cumulative_timing(self,timing_periods):
         cumulative_timing = []
-        for i,node in enumerate(self.route_tree.node_order):
+        for i,node in enumerate(self.route_tree.non_phased_node_order):
 
             predecessor = self.route_tree.node_attributes[node]['Predecessor']
             if predecessor is None:
                 cumulative_timing.append(timing_periods[:,i])
             else:
-                cumulative_timing.append(cumulative_timing[self.route_tree.node_order.index(predecessor)]+timing_periods[:,i])
+                cumulative_timing.append(cumulative_timing[self.route_tree.non_phased_node_order.index(predecessor)]+timing_periods[:,i])
         return np.array(cumulative_timing)
         
     
@@ -242,20 +250,30 @@ class Route:
     
     def sample_mults(self,wgd_timing,n_samples):
         constraints_matrix,constraints_sum = self.route_tree.get_combined_constraints(wgd_timing)
-        
+        nnls_time = time.perf_counter()
         start_sol = nnls(constraints_matrix, constraints_sum)[0]
-        
         constraints_null = null_space(constraints_matrix)
+        null_space_time = time.perf_counter()
         solutions = hitandrun.hit_and_run(constraints_null,start_sol,n_samples=n_samples)
-        
+
         timing = self.get_cumulative_timing(solutions)
-        mult = np.matmul(solutions,self.route_tree.unphased_timing_matrix)
-        mult = mult/np.sum(mult,axis=1)[:,None]
+        
+        mult = np.matmul(solutions,self.route_tree.timing_matrix)
+        
+        unphased_mult_sum = np.tile(np.sum(mult[:,:self.major_cn],axis=1),(self.major_cn,1)).T
+        major_cn_mult_sum = np.tile(np.sum(mult[:,self.major_cn:2*self.major_cn],axis=1),(self.major_cn,1)).T
+        minor_cn_mult_sum = np.tile(np.sum(mult[:,2*self.major_cn:],axis=1),(self.minor_cn,1)).T
+        combined_mult_sum = np.concatenate([unphased_mult_sum,major_cn_mult_sum,minor_cn_mult_sum],axis=1)
+        mult = mult/combined_mult_sum
+    
+        
+       
+    
 
         return mult,timing
 
     
-    def get_n_events_estimate(self,node_timing,wgd_timing,n_samples = 100):
+    def get_n_events_estimate(self,node_timing,wgd_timing,n_samples = 300):
         n_events_estimate = {'N_Events':[],'Pre_WGD_Losses':[],'Post_WGD_Losses':[]}
         for i in range(n_samples):
             random_index = np.random.choice(node_timing.shape[1])
@@ -264,10 +282,30 @@ class Route:
             n_events_estimate['Pre_WGD_Losses'].append(pre_wgd_losses)
             n_events_estimate['Post_WGD_Losses'].append(post_wgd_losses)
 
-        return n_events_estimate  
+        return n_events_estimate 
+    
+    '''def get_n_events_estimate_full(self,node_timing,wgd_timing,max_samples = 1000):
+        n_events_estimate = {'N_Events':[],'Pre_WGD_Losses':[],'Post_WGD_Losses':[]}
+        indicies = np.random.choice(node_timing.shape[1],size=min(max_samples,node_timing.shape[1]),replace=False)
+        for i in indicies:
+            n_events,pre_wgd_losses,post_wgd_losses = self.route_tree.get_n_events(node_timing[:,i],wgd_timing[i])
+            n_events_estimate['N_Events'].append(n_events)
+            n_events_estimate['Pre_WGD_Losses'].append(pre_wgd_losses)
+            n_events_estimate['Post_WGD_Losses'].append(post_wgd_losses)
+
+        n_events_estimate = pd.DataFrame(n_events_estimate)
+        n_events_estimate['Route'] = self.short_id
+        n_events_estimate['Major_CN'] = self.major_cn
+        n_events_estimate['Minor_CN'] = self.minor_cn
+        letters = list('ge')
+        random_id = ''.join(np.random.choice(letters,size=20,replace=True))
+        out_dir = f'/camp/home/bakert/secure-working/GRITIC/Analysis/output/route_n_events_store_new/{self.major_cn}_{self.minor_cn}_{self.short_id}'
+        os.makedirs(out_dir,exist_ok=True)
+        route_n_events_path = f'{out_dir}/{random_id}_route_n_events.tsv'
+        n_events_estimate.to_csv(route_n_events_path,sep='\t',index=False)'''
 
     @staticmethod
-    def simulate_clone_share(alpha,n_snvs,n_samples):
+    def simulate_clone_share(alpha,n_samples):
         alpha = alpha/np.sum(alpha)
         alpha = global_test_vars['prior_weight']*alpha +1
 
@@ -290,6 +328,7 @@ class Route:
         n_samples = 0
         next_eval_time = None
         eval_count =0
+        start_time = time.perf_counter()
         while True:
             if self.wgd_status:
                 wgd_timing = np.random.choice(wgd_timing_distribution)
@@ -302,7 +341,7 @@ class Route:
             timing_store.append(timing)
 
             if n_subclones >0 :
-                clone_share = self.simulate_clone_share(alpha,n_snvs,timing.shape[1])
+                clone_share = self.simulate_clone_share(alpha,timing.shape[1])
                 clonal_share = clone_share[:,0].reshape(-1,1)
                 subclone_mults = clone_share[:,1:]
                 
@@ -327,7 +366,6 @@ class Route:
                 start_density_time = time.perf_counter()
                 density,density_high = self.get_density_estimate(timing_test)
                 density_time = time.perf_counter()-start_density_time
-                
                 if eval_count >50:
                     next_eval_time = time.perf_counter()+min(max(density_time*5,sampling_time),30.0)
                 else:
@@ -345,6 +383,7 @@ class Route:
         mult_store = np.concatenate(mult_store,axis=0)
         
         wgd_timing_store = np.array(wgd_timing_store)
+
         return mult_store,timing_store,wgd_timing_store,np.array([density,density_high])
 
     def save_gz_numpy(self,path,array):
@@ -391,36 +430,46 @@ class Route:
         
         raw_samples_store = {'Timing':{},'Mult':[],'WGD_Timing':[],'LL':[]}
         for node in self.route_tree.timeable_nodes:
-            node_timing = timing_store[self.route_tree.node_order.index(node),random_indexes].copy()
+            node_timing = timing_store[self.route_tree.non_phased_node_order.index(node),random_indexes].copy()
             raw_samples_store['Timing'][node] = node_timing
         raw_samples_store['Mult'] = mult_store[random_indexes,:].copy()
         raw_samples_store['WGD_Timing'] = wgd_timing_store[random_indexes].copy()
         raw_samples_store['LL'] = ll_store[random_indexes].copy()
         return raw_samples_store
     def run_sampling(self,mult_probabilities,subclone_table,n_snvs,wgd_timing_distribution,phased):
+        print('starting sampling')
         run_time = time.perf_counter()
 
         alpha = None
         if subclone_table is not None:
             n_clonal_snvs_sample = np.round(subclone_table['N_SNVs'].sum()/subclone_table['Subclone_Fraction'].sum()*(1-subclone_table['Subclone_Fraction'].sum())).astype(int)
             alpha = np.concatenate([[n_clonal_snvs_sample],subclone_table['N_SNVs']])+1
-            subclonal_correction_array = np.concatenate([[mult_probabilities.reads_correction_array[0]],mult_probabilities.reads_correction_array[-(len(subclone_table.index)):]])
+            subclonal_correction_array = mult_probabilities.get_subclonal_correction_array(subclone_table)
+            
         
             alpha = alpha/subclonal_correction_array
             
         
         n_subclones = 0 if subclone_table is None else len(subclone_table.index)
 
+        mult_get_time = time.perf_counter()
         mult_store,timing_store,wgd_timing_store,density = self.get_mult_store(n_snvs,alpha,n_subclones,wgd_timing_distribution)
-        
+        print(f"Mult Get Time: {time.perf_counter()-mult_get_time}")
         ll_store = mult_probabilities.evaluate_likelihood_array(mult_store)
         self.raw_samples = self.get_raw_samples_store(mult_store,timing_store,wgd_timing_store,ll_store)
         
+        
         weights = np.exp(ll_store-np.max(ll_store))
-        
+        weighted_arrays_time = time.perf_counter()
         node_timing,wgd_timing_store,mult_store= self.get_weighted_arrays(timing_store,wgd_timing_store,mult_store,weights)
+        print(f"Weighted Arrays Time: {time.perf_counter()-weighted_arrays_time}")
         
+        n_events_time = time.perf_counter()
         self.n_events_store = self.get_n_events_estimate(node_timing,wgd_timing_store)
+        print(f"N Events Time: {time.perf_counter()-n_events_time}")
+        print('Total Time:',time.perf_counter()-run_time)
+        print('----------------------------')
+        #self.get_n_events_estimate_full(node_timing,wgd_timing_store)
         self.ll_store = ll_store
         self.node_timing = node_timing
         self.wgd_timing_store = np.array(wgd_timing_store)
@@ -544,7 +593,7 @@ class RouteClassifier:
 
     def get_timing_tree_labels(self,route,wgd_info):
         node_labels = {}
-        for node in route.route_tree.node_order:
+        for node in route.route_tree.non_phased_node_order:
             if node in route.route_tree.timeable_nodes:
                 timing_dist = route.get_node_timing(node)
                 timing = np.abs(np.round(np.percentile(timing_dist,50),3))
@@ -580,10 +629,6 @@ class RouteClassifier:
             treetools.plot_tree(plotting_tree,plot_title,output_path=route_output_path)
 def check_record_segment_timing(segment,wgd_status,wgd_trees_status):
     return True
-    if segment.major_cn <8 and segment.minor_cn <5 and segment.n_mutations >= 10:
-        if (segment.major_cn > 2) or (not wgd_status and segment.major_cn ==2):
-            return True
-    return False
 
 
 def get_wgd_trees_status(segment,wgd_status):
@@ -634,7 +679,7 @@ def get_potential_wgd_segments(sample,cn_high):
     
     potential_wgd_segments = []
     for segment in sample.segments:
-        if segment.major_cn in major_cns and segment.n_mutations >= 10:
+        if segment.major_cn in major_cns and segment.n_mutations >= 10 and segment.chromosome in set(map(str,range(1,23))):
             if (segment.major_cn>= segment.minor_cn and not cn_high) or (segment.major_cn>segment.minor_cn and cn_high):
                 potential_wgd_segments.append(segment)
     return potential_wgd_segments
@@ -675,9 +720,12 @@ def time_wgd_major_cn_2(sample,output_dir,mult_store_dir):
         classifier =  RouteClassifier(segment.major_cn,pseudo_minor_cn,False,'No_WGD',mult_store_dir)
  
         mult_probabilities =segment.multiplicity_probabilities
-
+        #changing minor_cn here here as well
+        #change this in a future version
+        mult_probabilities.minor_cn = pseudo_minor_cn
         classifier.fit_routes(mult_probabilities,segment.subclone_table,segment.n_snvs,None,segment.phased)
-        
+        mult_probabilities.minor_cn = segment.minor_cn
+
         wgd_timing_table = classifier.get_timing_table()
         segment_dict = segment.get_info_dict()
 
@@ -690,8 +738,8 @@ def time_wgd_major_cn_2(sample,output_dir,mult_store_dir):
         segment_timing = classifier_route.get_node_timing(0)
         if np.isnan(segment_timing).any():
             continue
-        segment_timing_ci_low = np.percentile(segment_timing,11/2)
-        segment_timing_ci_high = np.percentile(segment_timing,100-11/2)
+        segment_timing_ci_low = np.percentile(segment_timing,10/2)
+        segment_timing_ci_high = np.percentile(segment_timing,100-10/2)
         
         segment_ci_store[segment.segment_id] = (segment_timing_ci_low,segment_timing_ci_high)
         segment_width_store[segment.segment_id] = segment.width
@@ -719,7 +767,7 @@ def time_wgd_major_cn_2(sample,output_dir,mult_store_dir):
     
     return wgd_timing_distribution,non_overlapping_segment_ids,overlap_proportion,best_overlap_timing
 
-def time_wgd_major_cn_high(sample,output_dir,mult_store_dir):
+'''def time_wgd_major_cn_high(sample,output_dir,mult_store_dir):
 
     #pathlib version
     wgd_timing_table_path = output_dir/f"{sample.sample_id}_gain_timing_table_wgd_segments.tsv"
@@ -782,7 +830,7 @@ def time_wgd_major_cn_high(sample,output_dir,mult_store_dir):
 
     cn_distributions = get_combined_segment_timing_cn_high(overlapping_segments,sample.subclone_table,sample.purity,mult_store_dir)
     wgd_timing_distribution = get_combined_distribution(cn_distributions)
-    return wgd_timing_distribution,non_overlapping_segment_ids,overlap_proportion,best_overlap_timing
+    return wgd_timing_distribution,non_overlapping_segment_ids,overlap_proportion,best_overlap_timing'''
 
 def get_combined_segment_timing_cn_2(overlapping_segments,subclone_table,sample_purity,mult_store_dir):
 
@@ -803,11 +851,13 @@ def get_combined_segment_timing_cn_2(overlapping_segments,subclone_table,sample_
         minor_cn_mutation_table['Segment_End'] = np.nan
 
         pseudo_minor_cn = 0 if minor_cn == 2 else minor_cn
-        new_seg = Segment(minor_cn_mutation_table,subclone_table,sample_purity)
+        #sex is None as it is autosomal segments only
+        new_seg = Segment(minor_cn_mutation_table,subclone_table,sample_purity,sex=None)
         classifier =  RouteClassifier(new_seg.major_cn,pseudo_minor_cn,False,'No_WGD',mult_store_dir)
         mult_probabilities =new_seg.multiplicity_probabilities
+        mult_probabilities.minor_cn = pseudo_minor_cn
         classifier.fit_routes(mult_probabilities,new_seg.subclone_table,segment.n_snvs,None,new_seg.phased)
-       
+        mult_probabilities.minor_cn = minor_cn
         segment_timing = classifier.get_best_timing()[0]
         segment_timing_store.append(segment_timing)
     
@@ -832,11 +882,35 @@ def get_combined_segment_timing_cn_high(overlapping_segments,subclone_table,samp
         segment_timing_store.append(segment_timing)
     
     return segment_timing_store
-def get_timeable_segments(sample,non_overlapping_simple_segments,wgd_status,min_mutations=10):
-    major_cn_threshold = 3 if wgd_status else 2
+
+def check_permitted_cn_state(major_cn,minor_cn,wgd_status):
+    #enforcing no more than 500 routes per cn state
+    if minor_cn> major_cn:
+        return False
+    if minor_cn <0:
+        return False
+    if major_cn <2:
+        return False
+    if major_cn ==2:
+        if wgd_status:
+            return False
+        return True
+    if major_cn >=3 and major_cn <=5:
+        return True
+    if major_cn==6 and minor_cn<=4:
+        return True
+    if  major_cn ==7 and minor_cn<=3:
+        return True
+    if major_cn ==8 and minor_cn<=1:
+        return True
+    return False
+
+def get_timeable_segments(sample,non_overlapping_simple_segments,wgd_status,min_mutations=0):
+
     complex_segments = {}
     for segment in sample.segments:
-        if segment.major_cn +segment.minor_cn < 10 and segment.major_cn >= major_cn_threshold and segment.n_mutations >= min_mutations:
+        #if segment.major_cn +segment.minor_cn < 10 and segment.major_cn >= major_cn_threshold and segment.n_mutations >= min_mutations:
+        if check_permitted_cn_state(segment.major_cn,segment.minor_cn,wgd_status) and segment.n_mutations >= min_mutations:
             segment_cn_state = (segment.major_cn,segment.minor_cn)
             if segment_cn_state not in complex_segments:
                 complex_segments[segment_cn_state] = []
@@ -959,9 +1033,9 @@ def process_sample(sample,output_dir,plot_trees=True,min_wgd_overlap=0.6,wgd_ove
         write_wgd_calling_info(wgd_timing_distribution,overlap_proportion,best_overlap_timing,major_cn_mode,wgd_status,output_dir,sample.sample_id)
 
     if major_cn_mode <=2:
-       
+
         timeable_complex_segments = get_timeable_segments(sample,non_overlapping_segments,wgd_status)
-        
+
     
         timing_table_path = f"{output_dir}/{sample.sample_id}_gain_timing_table.tsv"
             
@@ -972,15 +1046,17 @@ def process_sample(sample,output_dir,plot_trees=True,min_wgd_overlap=0.6,wgd_ove
         process_segments(timeable_complex_segments,wgd_timing_distribution,output_dir,mult_store_dir,sample.sample_id,wgd_status,plot_trees=plot_trees,non_parsimony_penalty=non_parsimony_penalty)
 
         if os.path.exists(timing_table_path):
-            sample_posterior_table = posteriortablegen.get_sample_posterior_table(timing_table_path,output_dir,sample.sample_id)
-            sample_posterior_table_summary = posteriortablegen.get_sample_posterior_table_summary(sample_posterior_table)
+            for apply_penalty in [True,False]:
+              sample_posterior_table = posteriortablegen.get_sample_posterior_table(timing_table_path,output_dir,sample.sample_id,apply_penalty=apply_penalty)
+              sample_posterior_table_summary = posteriortablegen.get_sample_posterior_table_summary(sample_posterior_table)
+     
         
-        
-            posterior_table_path = output_dir/f"{sample.sample_id}_posterior_timing_table.tsv"
-            posterior_table_summary_path = output_dir/f"{sample.sample_id}_posterior_timing_table_summary.tsv"
-
-            sample_posterior_table.to_csv(posterior_table_path,sep="\t",index=False)
-            sample_posterior_table_summary.to_csv(posterior_table_summary_path,sep="\t",index=False)
+          
+              posterior_table_path = output_dir/f"{sample.sample_id}_posterior_timing_table_penalty_{apply_penalty}.tsv"
+              posterior_table_summary_path = output_dir/f"{sample.sample_id}_posterior_timing_table_summary_{apply_penalty}.tsv"
+  
+              sample_posterior_table.to_csv(posterior_table_path,sep="\t",index=False)
+              sample_posterior_table_summary.to_csv(posterior_table_summary_path,sep="\t",index=False)
 
     shutil.rmtree(mult_store_dir)
     
