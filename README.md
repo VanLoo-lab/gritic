@@ -64,12 +64,16 @@ Gives a summary of the gain timing infotmation for each gained segment. For each
 
 In WGD tumours, the number of gains that arise independently of the WGD will vary depending on the route. Only gains that arise independently of the WGD in at least 80% of posterior samples are reported, this is recorded in the ```Proportion``` column. The timing of the WGD and the probability that each gain arose before the WGD is also recorded.
 
+Two tables are produced, with and without a penalty on non-parsimony. Without a penalty is recommended by default, see our preprint for more details.
+
 ### _posterior_timing_table.tsv
 This table gives 250 direct samples from the timing posterior for each gained segment. Both the gain and the WGD timing are given in the case of a WGD tumour.
 
 Each individual sample from the posterior for a given segment is labelled with ```Posterior_Sample_Index```. The route for each posterior sample is given by the route column.
 
 Again, as the number of gains that arise independently of the WGD will vary depending on the route, the number of gains per ```Posterior_Sample_Index``` can vary in WGD tumours.
+
+Two tables are produced, with and without a penalty on non-parsimony. Without a penalty is recommended by default, see our preprint for more details.
 
 ### _gain_timing_table.tsv
 This table gives more details about each possible route for each gained segment. As well as giving the timing for each gains in the route, it also records the route probability that is used when sampling the posterior. The total number of events implied for each route is also given, as well as the density of the timing samples. 
