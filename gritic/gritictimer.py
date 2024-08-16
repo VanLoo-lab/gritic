@@ -703,7 +703,7 @@ def get_combined_distribution(distributions,n_samples=500):
     combined_distribution_samples = np.random.choice(bin_mid_points,p=combined_distribution,size=n_samples,replace=True)
     return combined_distribution_samples
 
-def time_wgd_major_cn_2(sample,output_dir,mult_store_dir):
+def time_wgd_major_cn_2(sample,output_dir,mult_store_dir,timing_dict_dir):
 
     wgd_timing_table_path = output_dir/f"{sample.sample_id}_gain_timing_table_wgd_segments.tsv"
     potential_wgd_segments = get_potential_wgd_segments(sample,cn_high=False)
@@ -762,77 +762,14 @@ def time_wgd_major_cn_2(sample,output_dir,mult_store_dir):
     overlapping_segments = [segment for segment in potential_wgd_segments if segment.segment_id in segments_with_max_overlap]
     non_overlapping_segment_ids = [segment.segment_id for segment in potential_wgd_segments if segment.segment_id not in segments_with_max_overlap]
     
-    cn_distributions = get_combined_segment_timing_cn_2(overlapping_segments,sample.subclone_table,sample.purity,mult_store_dir)
+    cn_distributions = get_combined_segment_timing_cn_2(overlapping_segments,sample.subclone_table,sample.purity,mult_store_dir,timing_dict_dir)
     wgd_timing_distribution = get_combined_distribution(cn_distributions)
     
     return wgd_timing_distribution,non_overlapping_segment_ids,overlap_proportion,best_overlap_timing
 
-'''def time_wgd_major_cn_high(sample,output_dir,mult_store_dir):
 
-    #pathlib version
-    wgd_timing_table_path = output_dir/f"{sample.sample_id}_gain_timing_table_wgd_segments.tsv"
-    potential_wgd_segments = get_potential_wgd_segments(sample,True)
- 
-    segment_ci_store = {}
-    segment_width_store = {}
-    
-    wgd_timing_tables = []
-    for segment in potential_wgd_segments:
-        print('Timing WGD Segment -',segment)
 
-        classifier =  RouteClassifier(segment.major_cn,segment.minor_cn,False,'No_WGD',mult_store_dir)
- 
-        mult_probabilities =segment.multiplicity_probabilities
-
-        classifier.fit_routes(mult_probabilities,segment.subclone_table,segment.n_snvs,None,segment.phased)
-        
-        wgd_timing_table = classifier.get_timing_table()
-        segment_dict = segment.get_info_dict()
-
-        for key,val in segment_dict.items():
-            wgd_timing_table[key] = val
-        
-        
-        route_with_max_prob = wgd_timing_table[['Route','Probability']].groupby('Route').max().reset_index()['Route'].values[0]
-        wgd_timing_tables.append(wgd_timing_table[(wgd_timing_table['Route'] == route_with_max_prob) & (wgd_timing_table['Node'] == 0)])
-        route_keys = list(classifier.routes.keys())
-        key_match = [key for key in route_keys if key[:9] == route_with_max_prob]
-        assert len(key_match) == 1
-        classifier_route = classifier.routes[key_match[0]]
-
-        segment_timing = classifier_route.get_node_timing(0)
-        if np.isnan(segment_timing).any():
-            continue
-        segment_timing_ci_low = np.percentile(segment_timing,2.5)
-        segment_timing_ci_high = np.percentile(segment_timing,97.5)
-        
-        segment_ci_store[segment.segment_id] = (segment_timing_ci_low,segment_timing_ci_high)
-        segment_width_store[segment.segment_id] = segment.width
-    
-    
-    wgd_timing_table = pd.concat(wgd_timing_tables)
-    wgd_timing_table = wgd_timing_table.drop(columns=['Node','Average_Pre_WGD_Losses','Average_Post_WGD_Losses','Probability'])
-    
-    max_segment_width = sum(segment_width_store.values())
-    segments_with_max_overlap,overlap_width,best_overlap_timing = distributiontools.get_ids_with_maximum_overlap(segment_ci_store,segment_width_store)
-    overlap_proportion = overlap_width/max_segment_width
-    
-    wgd_timing_table['Best_Overlap_Timing'] = best_overlap_timing
-    wgd_timing_table['Overlap_Proportion'] = overlap_proportion
-    wgd_timing_table['Intersecting'] = wgd_timing_table['Segment_ID'].isin(segments_with_max_overlap)
-    
-    wgd_timing_table.to_csv(wgd_timing_table_path,sep="\t",index=False)
-    
-    
-    
-    overlapping_segments = [segment for segment in potential_wgd_segments if segment.segment_id in segments_with_max_overlap]
-    non_overlapping_segment_ids = [segment.segment_id for segment in potential_wgd_segments if segment.segment_id not in segments_with_max_overlap]
-
-    cn_distributions = get_combined_segment_timing_cn_high(overlapping_segments,sample.subclone_table,sample.purity,mult_store_dir)
-    wgd_timing_distribution = get_combined_distribution(cn_distributions)
-    return wgd_timing_distribution,non_overlapping_segment_ids,overlap_proportion,best_overlap_timing'''
-
-def get_combined_segment_timing_cn_2(overlapping_segments,subclone_table,sample_purity,mult_store_dir):
+def get_combined_segment_timing_cn_2(overlapping_segments,subclone_table,sample_purity,mult_store_dir,timing_dict_dir):
 
     mutation_tables = []
     for segment in overlapping_segments:
@@ -857,6 +794,8 @@ def get_combined_segment_timing_cn_2(overlapping_segments,subclone_table,sample_
         mult_probabilities =new_seg.multiplicity_probabilities
         mult_probabilities.minor_cn = pseudo_minor_cn
         classifier.fit_routes(mult_probabilities,new_seg.subclone_table,segment.n_snvs,None,new_seg.phased)
+        timing_dict= classifier.get_timing_dict()
+        write_timing_dict(timing_dict,timing_dict_dir,f'WGD_minor_cn_{minor_cn}')
         mult_probabilities.minor_cn = minor_cn
         segment_timing = classifier.get_best_timing()[0]
         segment_timing_store.append(segment_timing)
@@ -905,7 +844,7 @@ def check_permitted_cn_state(major_cn,minor_cn,wgd_status):
         return True
     return False
 
-def get_timeable_segments(sample,non_overlapping_simple_segments,wgd_status,min_mutations=0):
+def get_timeable_segments(sample,wgd_status,min_mutations=0):
 
     complex_segments = {}
     for segment in sample.segments:
@@ -929,14 +868,13 @@ def write_wgd_calling_info(wgd_timing_distribution,overlap_proportion,best_overl
 
     wgd_info.to_csv(output_dir/f"{sample_id}_wgd_calling_info.tsv",index=False,sep="\t")
 
-def process_segments(segments,wgd_timing_distribution,output_dir,mult_store_dir,sample_id,wgd_status,plot_trees,non_parsimony_penalty=False):
+def process_segments(segments,wgd_timing_distribution,output_dir,mult_store_dir,timing_dict_dir,sample_id,wgd_status,plot_trees,non_parsimony_penalty=False):
 
     wgd_info = get_wgd_info(wgd_timing_distribution)
 
     timing_table_path = output_dir/f"{sample_id}_gain_timing_table.tsv"
 
-    timing_dict_dir= output_dir/f"{sample_id}_timing_dicts/"
-    os.makedirs(timing_dict_dir,exist_ok=True)
+    
     
 
     for cn_state in segments:
@@ -970,8 +908,8 @@ def process_segments(segments,wgd_timing_distribution,output_dir,mult_store_dir,
         shutil.rmtree(cn_dir)
         
 def apply_non_parsimony_penalty(likelihood_store,n_events,l=2.7):
-    penality = np.exp(-l*n_events)
-    likelihood_store = likelihood_store*penality
+    penalty = np.exp(-l*n_events)
+    likelihood_store = likelihood_store*penalty
     likelihood_store = likelihood_store/np.sum(likelihood_store)
     return likelihood_store
     
@@ -985,9 +923,17 @@ def process_sample(sample,output_dir,plot_trees=True,min_wgd_overlap=0.6,wgd_ove
     
     os.makedirs(output_dir,exist_ok=True)
 
+    timing_dict_dir= output_dir/f"{sample.sample_id}_timing_dicts/"
+    os.makedirs(timing_dict_dir,exist_ok=True)
+
     sample_mutation_table = sample.get_mutation_table()
     sample_mutation_table_path = output_dir/f"{sample.sample_id}_mutation_table.tsv"
     sample_mutation_table.to_csv(sample_mutation_table_path,sep="\t",index=False)
+    
+    sample_subclone_table = sample.get_subclone_table()
+    sample_subclone_table_path = output_dir/f"{sample.sample_id}_subclone_table.tsv"
+    if sample_subclone_table is not None:
+        sample_subclone_table.to_csv(sample_subclone_table_path,sep="\t",index=False)
     
     mult_store_dir = output_dir/f"{sample.sample_id}_mult_stores_temp"
  
@@ -1005,7 +951,7 @@ def process_sample(sample,output_dir,plot_trees=True,min_wgd_overlap=0.6,wgd_ove
 
         
         if wgd_override:
-            wgd_timing_distribution,non_overlapping_segments,overlap_proportion,best_overlap_timing= time_wgd_major_cn_2(sample,output_dir,mult_store_dir)
+            wgd_timing_distribution,non_overlapping_segments,overlap_proportion,best_overlap_timing= time_wgd_major_cn_2(sample,output_dir,mult_store_dir,timing_dict_dir)
             wgd_status = True
         else:
             wgd_status = False
@@ -1021,7 +967,7 @@ def process_sample(sample,output_dir,plot_trees=True,min_wgd_overlap=0.6,wgd_ove
             best_overlap_timing = np.nan
             overlap_proportion = np.nan
         elif major_cn_mode ==2:
-            wgd_timing_distribution,non_overlapping_segments,overlap_proportion,best_overlap_timing= time_wgd_major_cn_2(sample,output_dir,mult_store_dir)
+            wgd_timing_distribution,non_overlapping_segments,overlap_proportion,best_overlap_timing= time_wgd_major_cn_2(sample,output_dir,mult_store_dir,timing_dict_dir)
             if overlap_proportion < min_wgd_overlap:
                 warnings.warn('The major CN mode is 2, but the overlap proportion is less than 0.6. There are a lot of copy number 2 segments, but they are not overlapping enough to be confident in a WGD call. The sample will be treated as a non-WGD sample. Proceed with caution in downstream analysis for this sample')
 
@@ -1030,8 +976,8 @@ def process_sample(sample,output_dir,plot_trees=True,min_wgd_overlap=0.6,wgd_ove
                 wgd_status = False
             else:
                 wgd_status = True
+        print('writing')
         write_wgd_calling_info(wgd_timing_distribution,overlap_proportion,best_overlap_timing,major_cn_mode,wgd_status,output_dir,sample.sample_id)
-
     if major_cn_mode <=2:
 
         timeable_complex_segments = get_timeable_segments(sample,non_overlapping_segments,wgd_status)
@@ -1043,7 +989,7 @@ def process_sample(sample,output_dir,plot_trees=True,min_wgd_overlap=0.6,wgd_ove
         if non_parsimony_penalty and not wgd_status:
             warnings.warn('Warning: The non-parsimony penalty is only relevant to WGD samples, but no WGD has been identified. Penalty will not be applied')
             non_parsimony_penalty = False
-        process_segments(timeable_complex_segments,wgd_timing_distribution,output_dir,mult_store_dir,sample.sample_id,wgd_status,plot_trees=plot_trees,non_parsimony_penalty=non_parsimony_penalty)
+        process_segments(timeable_complex_segments,wgd_timing_distribution,output_dir,mult_store_dir,timing_dict_dir,sample.sample_id,wgd_status,plot_trees=plot_trees,non_parsimony_penalty=non_parsimony_penalty)
 
         if os.path.exists(timing_table_path):
             for apply_penalty in [True,False]:
