@@ -1,17 +1,14 @@
 import os
-import sys
 import bz2
 import pickle
-from collections import Counter
+
 import warnings
 
 import pandas as pd
 import numpy as np
-import sys
 import networkx as nx
-import matplotlib
+
 import matplotlib.pyplot as plt
-from numba import njit
 
 from scipy.special import logsumexp
 
@@ -20,14 +17,12 @@ from scipy.optimize import nnls
 from scipy.linalg import null_space
 
 from gritic.sampletools import Segment, get_major_cn_mode
-import itertools
+
 
 from sklearn.neighbors import NearestNeighbors
 
 import time
 import shutil
-import multiprocessing as mp
-import gzip
 
 import gritic.distributiontools as distributiontools
 import gritic.treetools as treetools
@@ -284,25 +279,6 @@ class Route:
 
         return n_events_estimate 
     
-    '''def get_n_events_estimate_full(self,node_timing,wgd_timing,max_samples = 1000):
-        n_events_estimate = {'N_Events':[],'Pre_WGD_Losses':[],'Post_WGD_Losses':[]}
-        indicies = np.random.choice(node_timing.shape[1],size=min(max_samples,node_timing.shape[1]),replace=False)
-        for i in indicies:
-            n_events,pre_wgd_losses,post_wgd_losses = self.route_tree.get_n_events(node_timing[:,i],wgd_timing[i])
-            n_events_estimate['N_Events'].append(n_events)
-            n_events_estimate['Pre_WGD_Losses'].append(pre_wgd_losses)
-            n_events_estimate['Post_WGD_Losses'].append(post_wgd_losses)
-
-        n_events_estimate = pd.DataFrame(n_events_estimate)
-        n_events_estimate['Route'] = self.short_id
-        n_events_estimate['Major_CN'] = self.major_cn
-        n_events_estimate['Minor_CN'] = self.minor_cn
-        letters = list('ge')
-        random_id = ''.join(np.random.choice(letters,size=20,replace=True))
-        out_dir = f'/camp/home/bakert/secure-working/GRITIC/Analysis/output/route_n_events_store_new/{self.major_cn}_{self.minor_cn}_{self.short_id}'
-        os.makedirs(out_dir,exist_ok=True)
-        route_n_events_path = f'{out_dir}/{random_id}_route_n_events.tsv'
-        n_events_estimate.to_csv(route_n_events_path,sep='\t',index=False)'''
 
     @staticmethod
     def simulate_clone_share(alpha,n_samples):
@@ -392,6 +368,7 @@ class Route:
     def load_gz_numpy(self,path):
         with open(path,'rb') as f:
             return np.load(f)
+    
     def get_mult_store(self,n_snvs,alpha,n_subclones,wgd_timing_distribution):
         if self.mult_store_dir is not None:
             cn_dir = self.mult_store_dir/f'{self.major_cn}_{self.minor_cn}'
@@ -436,10 +413,12 @@ class Route:
         raw_samples_store['WGD_Timing'] = wgd_timing_store[random_indexes].copy()
         raw_samples_store['LL'] = ll_store[random_indexes].copy()
         return raw_samples_store
+    
     def run_sampling(self,mult_probabilities,subclone_table,n_snvs,wgd_timing_distribution,phased):
-        print('starting sampling')
+
         run_time = time.perf_counter()
 
+        #alpha os subclonal clonal proportions
         alpha = None
         if subclone_table is not None:
             n_clonal_snvs_sample = np.round(subclone_table['N_SNVs'].sum()/subclone_table['Subclone_Fraction'].sum()*(1-subclone_table['Subclone_Fraction'].sum())).astype(int)
@@ -452,23 +431,17 @@ class Route:
         
         n_subclones = 0 if subclone_table is None else len(subclone_table.index)
 
-        mult_get_time = time.perf_counter()
         mult_store,timing_store,wgd_timing_store,density = self.get_mult_store(n_snvs,alpha,n_subclones,wgd_timing_distribution)
-        print(f"Mult Get Time: {time.perf_counter()-mult_get_time}")
+
         ll_store = mult_probabilities.evaluate_likelihood_array(mult_store)
         self.raw_samples = self.get_raw_samples_store(mult_store,timing_store,wgd_timing_store,ll_store)
         
         
         weights = np.exp(ll_store-np.max(ll_store))
-        weighted_arrays_time = time.perf_counter()
         node_timing,wgd_timing_store,mult_store= self.get_weighted_arrays(timing_store,wgd_timing_store,mult_store,weights)
-        print(f"Weighted Arrays Time: {time.perf_counter()-weighted_arrays_time}")
         
-        n_events_time = time.perf_counter()
         self.n_events_store = self.get_n_events_estimate(node_timing,wgd_timing_store)
-        print(f"N Events Time: {time.perf_counter()-n_events_time}")
-        print('Total Time:',time.perf_counter()-run_time)
-        print('----------------------------')
+
         #self.get_n_events_estimate_full(node_timing,wgd_timing_store)
         self.ll_store = ll_store
         self.node_timing = node_timing
@@ -477,6 +450,8 @@ class Route:
         self.run_time = time.perf_counter()-run_time
         self.density = density[0]
         self.density_high = density[1]
+
+
 class RouteClassifier:
     def __init__(self,major_cn,minor_cn,wgd_status,wgd_trees_status,mult_store_dir):
         self.major_cn = major_cn
@@ -489,8 +464,6 @@ class RouteClassifier:
 
         self.route_probabilities = {}
 
-        
-    
     def get_best_timing(self):
         best_route_id = max(self.route_probabilities, key=self.route_probabilities.get)
         best_route = self.routes[best_route_id]
@@ -610,7 +583,7 @@ class RouteClassifier:
         os.makedirs(plot_output_dir,exist_ok=True)
 
         if len(self.route_probabilities.keys())==0:
-            raise ValueError("routes hasn't been fit yet")  
+            raise ValueError("The routes haven't been fit yet")  
         best_route_id = max(self.route_probabilities, key=self.route_probabilities.get)   
         for route_id,route in self.routes.items():
             
@@ -628,6 +601,8 @@ class RouteClassifier:
             
             treetools.plot_tree(plotting_tree,plot_title,output_path=route_output_path)
 def check_record_segment_timing(segment,wgd_status,wgd_trees_status):
+    if segment.major_cn <=1:
+        return False
     return True
 
 
@@ -668,7 +643,6 @@ def get_wgd_info(wgd_timing_distribution):
         wgd_timing_ci_high = np.round(np.percentile(wgd_timing_distribution,95),3)
         wgd_timing_ci_low= np.round(np.percentile(wgd_timing_distribution,5),3)
     return {'Timing':wgd_timing,'CI_High':wgd_timing_ci_high,'CI_Low':wgd_timing_ci_low}
-
 
 
 def get_potential_wgd_segments(sample,cn_high):
@@ -828,9 +802,12 @@ def check_permitted_cn_state(major_cn,minor_cn,wgd_status):
         return False
     if minor_cn <0:
         return False
-    if major_cn <2:
+    if major_cn <=0:
         return False
+    if major_cn ==1:
+        return True
     if major_cn ==2:
+        #don't produce timing distributions for WGD segments
         if wgd_status:
             return False
         return True
@@ -848,7 +825,6 @@ def get_timeable_segments(sample,wgd_status,min_mutations=0):
 
     complex_segments = {}
     for segment in sample.segments:
-        #if segment.major_cn +segment.minor_cn < 10 and segment.major_cn >= major_cn_threshold and segment.n_mutations >= min_mutations:
         if check_permitted_cn_state(segment.major_cn,segment.minor_cn,wgd_status) and segment.n_mutations >= min_mutations:
             segment_cn_state = (segment.major_cn,segment.minor_cn)
             if segment_cn_state not in complex_segments:
@@ -874,8 +850,6 @@ def process_segments(segments,wgd_timing_distribution,output_dir,mult_store_dir,
 
     timing_table_path = output_dir/f"{sample_id}_gain_timing_table.tsv"
 
-    
-    
 
     for cn_state in segments:
         cn_dir = f'{mult_store_dir}/{cn_state[0]}_{cn_state[1]}'
@@ -976,7 +950,7 @@ def process_sample(sample,output_dir,plot_trees=True,min_wgd_overlap=0.6,wgd_ove
                 wgd_status = False
             else:
                 wgd_status = True
-        print('writing')
+
         write_wgd_calling_info(wgd_timing_distribution,overlap_proportion,best_overlap_timing,major_cn_mode,wgd_status,output_dir,sample.sample_id)
     if major_cn_mode <=2:
 
