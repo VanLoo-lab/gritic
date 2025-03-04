@@ -285,7 +285,9 @@ class Sample:
     def format_mutation_table(self,mutation_table):
         if 'Phasing' not in mutation_table.columns:
             mutation_table['Phasing'] = np.nan
-        mutation_table = mutation_table[['Segment_ID', 'Chromosome','Segment_Start', 'Segment_End', 'Major_CN','Minor_CN', 'Total_CN','Tumor_Ref_Count', 'Tumor_Alt_Count', 'Position','Phasing']].copy()
+        if 'Context' not in mutation_table.columns:
+            mutation_table['Context'] = np.nan
+        mutation_table = mutation_table[['Segment_ID', 'Chromosome','Segment_Start', 'Segment_End', 'Major_CN','Minor_CN', 'Total_CN','Tumor_Ref_Count', 'Tumor_Alt_Count', 'Position','Phasing','Context']].copy()
         mutation_table['Chromosome'] = mutation_table['Chromosome'].astype(str)
         mutation_table["Gain_Type"] = mutation_table["Major_CN"].astype(str)+ "_"+ mutation_table["Minor_CN"].astype(str)
         return mutation_table
@@ -324,6 +326,9 @@ class Sample:
     def get_mutation_table(self):
         mutation_table = pd.concat([segment.mutation_table for segment in self.segments])
         return self.sort_table_by_chromosome(mutation_table)
+    
+    def get_subclone_table(self):
+        return self.subclone_table
     
     
     def sort_table_by_chromosome(self,table):
