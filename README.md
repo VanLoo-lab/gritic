@@ -1,5 +1,5 @@
 # GRITIC
-A tool for timing complex copy number gains in human cancers. Provides gain timing estimates for segments with a total copy number of up to 9. Only copy number segments with 10 or more SNVs will be timed. 
+A tool for timing complex copy number gains in human cancers. Provides gain timing estimates for segments with a total copy number of up to 8+1. 
 
 Each gain timing is measured in mutation time, a scale that ranges from 0 to 1. A timing of 0 indicates that the gain occured close to conception and 1 that the gain occurred very close to the emergence of the tumour's most recent common ancestor.
 
@@ -57,7 +57,7 @@ This table is optional, if it is not included GRITIC will assume every SNV is cl
 
 
 ## Output
-GRITIC produces a number of outputs to describe the timing of copy number gains in a given tumour:
+GRITIC produces a number of outputs to describe the timing of copy number gains in a given tumour. We recommend only considering gained segments with 10 or more SNVs. 
 
 ### _posterior_timing_table_summary.tsv (Main Output)
 Gives a summary of the gain timing infotmation for each gained segment. For each gained segment, the sequential gains are labelled with ```Gain_Index```. The median and the 95% percentiles for the gain timing for each sequential gain are reported.
