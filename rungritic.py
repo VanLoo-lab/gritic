@@ -22,6 +22,7 @@ if __name__ == '__main__':
     output_dir = 'examples/output'
     sample_purity = 0.5
     sample_wgd_status = True
+    sample_sex = 'XX'
 
     plot_trees = True
 
@@ -30,5 +31,5 @@ if __name__ == '__main__':
     #if no subclone table set to None
     subclone_table = load_subclone_table('examples/subclone_table_example.tsv')
     
-    sample = sampletools.Sample(mutation_table,copy_number_table,subclone_table,sample_id,sample_purity)
+    sample = sampletools.Sample(mutation_table,copy_number_table,subclone_table,sample_id,sample_purity,sex=sample_sex)
     gritictimer.process_sample(sample,output_dir,plot_trees=plot_trees,wgd_override=sample_wgd_status)

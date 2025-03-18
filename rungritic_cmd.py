@@ -43,6 +43,7 @@ if __name__ == '__main__':
     my_parser.add_argument('--non_parsimony_penalty', action='store', type=str2bool, required=False,default=False,help='Apply additional penalty to non-parsimonious copy number route histories. Default is False.')
     my_parser.add_argument('--plot_trees', action='store', type=str, required=False,default=True,help='Plot the copy number trees. Default is True.')
     my_parser.add_argument('--subclone_table', action='store', type=str, required=False,default=None,help='A tab separated file containing the following columns: Cluster,Subclone_CCF,Subclone_Fraction (optional).' )
+    my_parser.add_argument('--sample_sex', action='store', type=str, required=False,default=None,help='Sex of the sample, required to time gains on the X chromosome. Value should be one of XX or XY'  )
     
     args = my_parser.parse_args()
     sample_id = args.sample_id
@@ -50,6 +51,7 @@ if __name__ == '__main__':
     sample_purity = args.purity
     sample_wgd_status = args.wgd_status
     non_parsimony_penalty = args.non_parsimony_penalty
+    sample_sex = args.sample_sex
     plot_trees = args.plot_trees
     
     
@@ -63,5 +65,5 @@ if __name__ == '__main__':
         subclone_table = load_subclone_table(args.subclone_table)
         
  
-    sample = sampletools.Sample(mutation_table,copy_number_table,subclone_table,sample_id,sample_purity)
+    sample = sampletools.Sample(mutation_table,copy_number_table,subclone_table,sample_id,sample_purity,sex=sample_sex)
     gritictimer.process_sample(sample,output_dir,plot_trees=plot_trees,wgd_override=sample_wgd_status,non_parsimony_penalty=non_parsimony_penalty)
