@@ -26,7 +26,7 @@ This script has five required arguments.
 There are also a number of optional arguments.
 - ```--subclone_table``` A path to the subclone table for the sample. If not provided it is assumed every SNV is clonal.
 - ```--wgd_status``` GRITIC will identify the WGD status of the sample. This can be overidden through this argument.
-- ```--non_parsimony_penalty``` Apply a penalty on non-parsimonious routes in WGD tumours. Defalt is False. See preprint for more details.
+- ```--non_parsimony_penalty``` Apply a penalty on non-parsimonious routes in WGD tumours. Defalt is False. See [publication](https://aacrjournals.org/cancerdiscovery/article/14/10/1810/748591/The-History-of-Chromosomal-Instability-in-Genome) for more details.
 - ```--plot_trees``` Plot the route trees for each segment. Default is True.
 
 
