@@ -22,8 +22,7 @@ def get_major_cn_mode(sample):
 
 @njit(parallel=True)                           
 def log_likelihood_numba_parallel(mult_array,mult_states):
-    log_likelihood_store = np.zeros(mult_states.shape[0])     
-    print(mult_states.shape)                             
+    log_likelihood_store = np.zeros(mult_states.shape[0])                                
     for i in prange(mult_states.shape[0]):
         mult_state = mult_states[i]
         mult_state = np.clip(mult_state,0.0,1.0)
@@ -218,7 +217,6 @@ class MultProbabilityStore:
             
             ll_minor = evaluate_likelihood_array_numba(full_states_minor,self.minor_array,self.reads_correction_minor_array)
             ll += ll_minor
-        print('LL Time taken',time.time()-start_time)
         return ll
     
 
