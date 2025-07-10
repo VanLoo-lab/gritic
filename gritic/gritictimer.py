@@ -8,10 +8,8 @@ import pandas as pd
 import numpy as np
 import networkx as nx
 
-import matplotlib.pyplot as plt
 
 from scipy.special import logsumexp
-
 
 from scipy.optimize import nnls
 from scipy.linalg import null_space
@@ -31,7 +29,8 @@ import gritic.hitandrun as hitandrun
 import gritic.posteriortablegen as posteriortablegen
 
 import pathlib
-global_test_vars = {'density_cut_off':0.9,'prior_weight':1}
+
+
 class RouteTree:
     def __init__(self,tree,major_cn,minor_cn,wgd_status):
         self.main_tree = tree
@@ -261,10 +260,6 @@ class Route:
         combined_mult_sum = np.concatenate([unphased_mult_sum,major_cn_mult_sum,minor_cn_mult_sum],axis=1)
         mult = mult/combined_mult_sum
     
-        
-       
-    
-
         return mult,timing
 
     
@@ -281,9 +276,9 @@ class Route:
     
 
     @staticmethod
-    def simulate_clone_share(alpha,n_samples):
+    def simulate_clone_share(alpha,n_samples,prior_weight=1.0):
         alpha = alpha/np.sum(alpha)
-        alpha = global_test_vars['prior_weight']*alpha +1
+        alpha = prior_weight*alpha +1
 
         dirichlet_sample = np.random.dirichlet(alpha,size=n_samples)
         return dirichlet_sample
@@ -295,7 +290,7 @@ class Route:
         nn_size = np.array([x.size-1 for x in nearest_neighbors])
         return np.mean(nn_size>0.1),np.mean(nn_size>2.1)
     
-    def run_mult_sampling(self,n_snvs,alpha,n_subclones,wgd_timing_distribution,samples_per_run=500,max_samples=5e5):
+    def run_mult_sampling(self,n_snvs,alpha,n_subclones,wgd_timing_distribution,samples_per_run=500,max_samples=5e5,density_cut_off=0.9):
         timing_store = []
         wgd_timing_store= []
         mult_store =[]
@@ -323,10 +318,7 @@ class Route:
                 
                 mults = np.concatenate([mults*clonal_share,subclone_mults],axis=1)
             mult_store.append(mults)
-            
-            
-            
-           
+
 
             wgd_timing_store.extend([wgd_timing]*timing.shape[1])
             if eval_count==100 or (next_eval_time is not None and time.perf_counter()>next_eval_time):
@@ -348,7 +340,7 @@ class Route:
                     next_eval_time = time.perf_counter()+1.0
                 
                 start_sampling_time = time.perf_counter()
-                if density >= global_test_vars['density_cut_off']:
+                if density >= density_cut_off:
                     break
             eval_count+=1
             if eval_count*samples_per_run > max_samples:
@@ -373,8 +365,6 @@ class Route:
         if self.mult_store_dir is not None:
             cn_dir = self.mult_store_dir/f'{self.major_cn}_{self.minor_cn}'
             os.makedirs(cn_dir,exist_ok=True)
-            
-
 
             #pathlib version
             mult_store_path = cn_dir/f'mult_store_{self.short_id}_wgd_{self.wgd_status}.npy.gz'
@@ -526,7 +516,12 @@ class RouteClassifier:
                 timing_table_data['Route'].append(route.short_id)
                 timing_table_data['Probability'].append(probability)
                 timing_table_data['Node'].append(node)
-                timing_table_data['Node_Phasing'].append(route.route_tree.node_attributes[node]['Phasing'])
+
+                if node in route.route_tree.node_attributes:
+                    timing_table_data['Node_Phasing'].append(route.route_tree.node_attributes[node]['Phasing'])
+                else:
+                    timing_table_data['Node_Phasing'].append(np.nan)
+                
                 timing_table_data['Timing'].append(np.abs(np.round(np.percentile(node_timing,50),3)))
                 timing_table_data['Timing_CI_Low'].append(np.abs(np.round(np.percentile(node_timing,2.5),3)))
                 timing_table_data['Timing_CI_High'].append(np.abs(np.round(np.percentile(node_timing,97.5),3)))
@@ -951,7 +946,7 @@ def process_sample(sample,output_dir,plot_trees=True,min_wgd_overlap=0.6,wgd_ove
             else:
                 wgd_status = True
 
-        write_wgd_calling_info(wgd_timing_distribution,overlap_proportion,best_overlap_timing,major_cn_mode,wgd_status,output_dir,sample.sample_id)
+    write_wgd_calling_info(wgd_timing_distribution,overlap_proportion,best_overlap_timing,major_cn_mode,wgd_status,output_dir,sample.sample_id)
     if major_cn_mode <=2:
 
         timeable_complex_segments = get_timeable_segments(sample,non_overlapping_segments,wgd_status)
@@ -968,15 +963,17 @@ def process_sample(sample,output_dir,plot_trees=True,min_wgd_overlap=0.6,wgd_ove
         if os.path.exists(timing_table_path):
             for apply_penalty in [True,False]:
               sample_posterior_table = posteriortablegen.get_sample_posterior_table(timing_table_path,output_dir,sample.sample_id,apply_penalty=apply_penalty)
-              sample_posterior_table_summary = posteriortablegen.get_sample_posterior_table_summary(sample_posterior_table)
-     
+              
+              if len(sample_posterior_table)>0:
+                    sample_posterior_table_summary = posteriortablegen.get_sample_posterior_table_summary(sample_posterior_table)
+            
+                
+                
+                    posterior_table_path = output_dir/f"{sample.sample_id}_posterior_timing_table_penalty_{apply_penalty}.tsv"
+                    posterior_table_summary_path = output_dir/f"{sample.sample_id}_posterior_timing_table_summary_{apply_penalty}.tsv"
         
-          
-              posterior_table_path = output_dir/f"{sample.sample_id}_posterior_timing_table_penalty_{apply_penalty}.tsv"
-              posterior_table_summary_path = output_dir/f"{sample.sample_id}_posterior_timing_table_summary_{apply_penalty}.tsv"
-  
-              sample_posterior_table.to_csv(posterior_table_path,sep="\t",index=False)
-              sample_posterior_table_summary.to_csv(posterior_table_summary_path,sep="\t",index=False)
+                    sample_posterior_table.to_csv(posterior_table_path,sep="\t",index=False)
+                    sample_posterior_table_summary.to_csv(posterior_table_summary_path,sep="\t",index=False)
 
     shutil.rmtree(mult_store_dir)
     
