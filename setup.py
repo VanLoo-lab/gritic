@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='gritic',
-    version='0.0.5',
+    version='0.0.7',
     packages=['gritic'],
     author='Toby Baker',
     author_email='tobybaker@mednet.ucla.edu',
