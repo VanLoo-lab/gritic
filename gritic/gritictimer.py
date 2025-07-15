@@ -884,13 +884,9 @@ def apply_non_parsimony_penalty(likelihood_store,n_events,l=2.7):
     
 def process_sample(sample,output_dir,plot_trees=True,min_wgd_overlap=0.6,wgd_override=None,non_parsimony_penalty=False):
     
-    output_dir = pathlib.Path(output_dir)
+    output_dir = pathlib.Path(output_dir,pathlib.Path(sample.sample_id))
     os.makedirs(output_dir,exist_ok=True)
    
-    shutil.rmtree(output_dir)
-
-    
-    os.makedirs(output_dir,exist_ok=True)
 
     timing_dict_dir= output_dir/f"{sample.sample_id}_timing_dicts/"
     os.makedirs(timing_dict_dir,exist_ok=True)

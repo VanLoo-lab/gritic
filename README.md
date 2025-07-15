@@ -20,7 +20,7 @@ This script has five required arguments.
 - ```--copy_number_table``` A path to the copy number table for the sample.
 - ```--purity``` The estimated cellular purity for the sample.
 - ```--sample_id``` Sample ID, for output purposes only.
-- ```--output``` The directory for the output, if it doesn't exist it will be created.
+- ```--output``` The directory for the output, GRITIC will then store all of the output at --output/SAMPLE_ID
 
 
 There are also a number of optional arguments.
