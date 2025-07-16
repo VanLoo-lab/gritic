@@ -4,7 +4,7 @@ import pickle
 
 import numpy as np
 import pandas as pd
-
+import warnings
 def apply_penalty_to_table(sample_table,prior_penalty):
  
     prior_table = sample_table[['Sample_ID','Segment_ID','Route','Average_N_Events','Probability']].copy().drop_duplicates()
@@ -45,6 +45,8 @@ def get_random_timing(route_dict):
     return gain_timing,wgd_timing,nodes
 def produce_timing_segment_table(segment_table,timing_dict,segment_id,n_samples=100):
     segment_data= {'Segment_ID':segment_id,'Node':[],'Gain_Timing':[],'WGD_Timing':[],'Posterior_Sample_Index':[],'Route':[]}
+    if segment_table['Probability'].isnull().any():
+        return None
     for i in range(n_samples):
         #occasionally we get some routes with probability very close to zero, so we just skip them
         while True:
@@ -92,6 +94,9 @@ def get_sample_posterior_table(sample_table_path,input_dir,sample_id,apply_penal
         if len(segment_table)==0:
             continue
         segment_frame = produce_timing_segment_table(segment_table,timing_dict,segment_id,n_samples=100)
+        if segment_frame is None:
+            warnings.warn(f'WARNING {segment_id} has NAs in probability, skipping in posterior.')
+            continue
         segment_frames.append(segment_frame)
     segment_frame = pd.concat(segment_frames)
     segment_frame = pd.merge(full_segment_table,segment_frame,on=['Segment_ID'],how='inner')
