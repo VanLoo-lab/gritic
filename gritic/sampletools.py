@@ -378,7 +378,7 @@ class Segment:
         
     
     def __str__(self):
-        return "{}- {}+{} - {} Mutations".format(self.segment_id,self.major_cn,self.minor_cn,self.n_mutations)
+        return f"{self.segment_id}- {self.major_cn}+{self.minor_cn} - {self.n_mutations} Mutations"
     
     def get_all_possible_subclonal_multiplicities(self):
         if self.n_subclones ==0:
@@ -401,14 +401,14 @@ class Segment:
     
     def get_unique_attribute_from_table(self,attribute):
         if len(self.mutation_table[attribute].unique()) >1:
-            raise ValueError("Attribute {} is not unique for segment".format(attribute))
+            raise ValueError(f"Attribute {attribute} is not unique for segment")
         return self.mutation_table[attribute].iloc[0]
 
     
     def get_multiplicity_names(self):
-        sample_peak_names = ['Mult_{}'.format(mult) for mult in self.all_possible_clonal_multiplicities]
+        sample_peak_names = [f'Mult_{mult}' for mult in self.all_possible_clonal_multiplicities]
         for i in range(self.n_subclones):
-            sample_peak_names.append("Subclone_{}".format(i))
+            sample_peak_names.append(f"Subclone_{i}")
         return sample_peak_names
     
     def get_mutation_rate(self):
@@ -477,8 +477,8 @@ class Segment:
             clonal_multiplicities = np.arange(1,self.minor_cn+1)
         else:
             clonal_multiplicities = np.arange(1,self.major_cn+1)
-        mult_names = ["Three_Reads_Correction_Mult_{}".format(mult) for mult in clonal_multiplicities]
-        mult_names.extend(["Three_Reads_Correction_Subclone_{}".format(subclone) for subclone in range(self.n_subclones)])
+        mult_names = [f"Three_Reads_Correction_Mult_{mult}" for mult in clonal_multiplicities]
+        mult_names.extend([f"Three_Reads_Correction_Subclone_{subclone}" for subclone in range(self.n_subclones)])
  
         reads_correction = self.mutation_table[mult_names].to_numpy()
 
@@ -511,7 +511,7 @@ class Segment:
         
         mult_names = [f"Prob_Mult_{mult}" for mult in clonal_multiplicities]
         
-        mult_names.extend(["Prob_Subclone_{}".format(subclone) for subclone in range(self.n_subclones)])
+        mult_names.extend([f"Prob_Subclone_{subclone}" for subclone in range(self.n_subclones)])
 
         multiplicity_probabilities = self.mutation_table[mult_names].to_numpy()
 
