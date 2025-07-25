@@ -524,7 +524,7 @@ def get_combined_distribution(distributions,n_samples=500):
 def time_wgd_major_cn_2(sample,output_dir,mult_store_dir,timing_dict_dir):
 
     wgd_timing_table_path = output_dir/f"{sample.sample_id}_gain_timing_table_wgd_segments.tsv"
-    potential_wgd_segments = get_potential_wgd_segments(sample,cn_high=False)
+    potential_wgd_segments = get_potential_wgd_segments(sample)
  
     segment_ci_store = {}
     segment_width_store = {}
