@@ -624,9 +624,9 @@ def write_timing_tables(timing_table,timing_table_path):
 
 def write_timing_dict(timing_dict,dict_dir,segment_id):
     output_path = f'{dict_dir}/{segment_id.replace(":","")}_timing_dict.bz2'
-    ofile = bz2.BZ2File(output_path,'wb')
-    pickle.dump(timing_dict,ofile)
-    ofile.close()
+    with bz2.BZ2File(output_path,'wb') as out_file:
+        pickle.dump(timing_dict,out_file)
+    
 
 def get_wgd_info(wgd_timing_distribution):
     if wgd_timing_distribution is None:
