@@ -16,7 +16,7 @@ from scipy.linalg import null_space
 
 from gritic.sampletools import Segment, get_major_cn_mode
 
-
+from dataclasses import dataclass
 from sklearn.neighbors import NearestNeighbors
 
 import time
@@ -24,162 +24,13 @@ import shutil
 
 import gritic.distributiontools as distributiontools
 import gritic.treetools as treetools
+from gritic.route_tree import RouteTree
 import gritic.hitandrun as hitandrun
 
 import gritic.posteriortablegen as posteriortablegen
 
 import pathlib
 
-
-class RouteTree:
-    def __init__(self,tree,major_cn,minor_cn,wgd_status):
-        self.main_tree = tree
-        
-        self.major_cn = major_cn
-        self.minor_cn = minor_cn
-
-        major_tree,minor_tree = treetools.split_tree(tree)
-        self.major_tree = major_tree
-        self.minor_tree = minor_tree
-
-        self.wgd_status = wgd_status
-        self.node_attributes = treetools.get_node_attributes(self.main_tree,self.wgd_status)
-
-        self.non_phased_node_order = self.get_node_order()
-        
-        self.timeable_nodes = self.get_timeable_nodes()
-        self.wgd_nodes = self.get_wgd_nodes()
-        self.sum_constraint_matrix = self.get_sum_constraint_matrix()
-        self.wgd_constraint_matrix = self.get_wgd_constraint_matrix()
-
-        self.timing_matrix = self.get_timing_matrix()
-        self.unphased_timing_matrix= self.get_unphased_timing_matrix()
-    
-
-    def get_timeable_nodes(self):
-        timeable_nodes = []
-        for node in self.non_phased_node_order:
-            if len(self.main_tree.out_edges(node))==2 and not self.main_tree.nodes[node]['WGD_Symbol']:
-                timeable_nodes.append(node)
-        return timeable_nodes
-    def get_non_terminal_nodes(self):
-        non_terminal_nodes = []
-        for node in self.non_phased_node_order:
-            if len(self.main_tree.out_edges(node))>0:
-                non_terminal_nodes.append(node)
-        return non_terminal_nodes
-    def get_terminal_nodes(self):
-        terminal_nodes = []
-        for node in self.non_phased_node_order:
-            if len(self.main_tree.out_edges(node))==0:
-                terminal_nodes.append(node)
-        return terminal_nodes
-    def get_wgd_nodes(self):
-        wgd_nodes = []
-        for node in self.non_phased_node_order:
-            if self.main_tree.nodes[node]['WGD_Symbol']:
-                wgd_nodes.append(node)
-        return wgd_nodes
-    #all nodes
-    def get_node_order(self,allele=None):
-        if allele is None:
-            return list(nx.dfs_preorder_nodes(self.main_tree))
-        if allele == 'Major':
-            return list(nx.dfs_preorder_nodes(self.major_tree))
-        if allele == 'Minor':
-            return list(nx.dfs_preorder_nodes(self.minor_tree))
-        raise ValueError(f'allele must be None, Major or Minor, not {allele}')
-        
-       
-    #an mxn matrix
-    #m = number of timing nodes
-    #n is the number of multiplicity states
-    def get_timing_matrix(self):
-
-        n_mults = self.major_cn*2+self.minor_cn
-
-        mult_offset = 1
-        
-        timing_matrix = np.zeros((len(self.non_phased_node_order),n_mults))
-        
-        for i,node in enumerate(self.non_phased_node_order):
-            final_mult = self.node_attributes[node]['Multiplicity']
-            timing_matrix[i,final_mult-mult_offset]=1
-
-            if node in self.major_tree.nodes():
-                timing_matrix[i,final_mult-mult_offset+self.major_cn] = 1
-            if node in self.minor_tree.nodes():
-                timing_matrix[i,final_mult-mult_offset+2*self.major_cn] = 1
-        return timing_matrix
-    
-    def get_unphased_timing_matrix(self):
-        n_mults = self.major_cn
-        mult_offset = 1
-        
-        timing_matrix = np.zeros((len(self.non_phased_node_order),n_mults))
-        
-        for i,node in enumerate(self.non_phased_node_order):
-            final_mult = self.node_attributes[node]['Multiplicity']
-            timing_matrix[i,final_mult-mult_offset]=1
-        
-        return timing_matrix
-    #an mxn matrix
-    #m = number of paths through the tree
-    #n number of timing nodes
-    def get_sum_constraint_matrix(self):
-        possible_paths = treetools.get_possible_paths(self.main_tree)
-        sum_constraint_matrix = np.zeros((len(possible_paths),len(self.non_phased_node_order)))
-        
-        for row,path in enumerate(possible_paths):
-            for node in path:
-                sum_constraint_matrix[row,self.non_phased_node_order.index(node)] = 1
-        
-        return sum_constraint_matrix
-    
-    def get_wgd_constraint_matrix(self):
-        
-        wgd_paths = treetools.get_wgd_paths(self.main_tree)
-        if len(wgd_paths)==0:
-            return None
-        
-        constraint_matrix = np.zeros((len(wgd_paths),len(self.non_phased_node_order)))
-        
-        for row,path in enumerate(wgd_paths):
-            for node in path:
-                constraint_matrix[row,self.non_phased_node_order.index(node)] = 1
-        return constraint_matrix
-    
-    def get_combined_constraints(self,wgd_timing):
-        combined_constraint_matrix = self.sum_constraint_matrix
-        combined_constraints_sum = np.ones(combined_constraint_matrix.shape[0])
-
-        if self.wgd_constraint_matrix is not None:
-            combined_constraint_matrix = np.vstack([combined_constraint_matrix,self.wgd_constraint_matrix])
-            wgd_constraints_sum = np.ones(self.wgd_constraint_matrix.shape[0])*wgd_timing
-            combined_constraints_sum = np.concatenate([combined_constraints_sum,wgd_constraints_sum])
-
-        return combined_constraint_matrix,combined_constraints_sum
-
-    def get_n_events(self,node_timing,wgd_timing):
-        n_events_store = []
-        if wgd_timing is None:
-            #if no wgd the number of events is the number of gains
-            n_events = len([node for node in self.main_tree.nodes if len(list(self.main_tree.successors(node)))==2])
-            return n_events,np.nan,np.nan
-        
-        pre_wgd_losses =0
-        plotting_tree = treetools.convert_to_plotting_tree(self.main_tree,wgd_timing,node_timing,self.non_phased_node_order)
-        post_wgd_losses = sum([int(plotting_tree.nodes[node]['Loss_Symbol']) for node in plotting_tree.nodes])
-
-        n_wgds = sum([int(self.main_tree.nodes[node]['WGD_Symbol']) for node in self.main_tree.nodes])
-        n_gains = len([node for node in self.main_tree.nodes if len(list(self.main_tree.successors(node)))==2])
-        #each wgd is only one event
-        n_events = n_gains-(n_wgds-1)+post_wgd_losses
-        #add extra loss not accounted for
-        if self.minor_cn ==0:
-            n_events +=1
-            pre_wgd_losses = 1
-        return n_events,pre_wgd_losses,post_wgd_losses
 
 class Route:
     def __init__(self,route_id,tree,major_cn,minor_cn,wgd_status,mult_store_dir):
@@ -244,10 +95,10 @@ class Route:
     
     def sample_mults(self,wgd_timing,n_samples):
         constraints_matrix,constraints_sum = self.route_tree.get_combined_constraints(wgd_timing)
-        nnls_time = time.perf_counter()
+        
         start_sol = nnls(constraints_matrix, constraints_sum)[0]
         constraints_null = null_space(constraints_matrix)
-        null_space_time = time.perf_counter()
+        
         solutions = hitandrun.hit_and_run(constraints_null,start_sol,n_samples=n_samples)
 
         timing = self.get_cumulative_timing(solutions)
@@ -265,7 +116,7 @@ class Route:
     
     def get_n_events_estimate(self,node_timing,wgd_timing,n_samples = 300):
         n_events_estimate = {'N_Events':[],'Pre_WGD_Losses':[],'Post_WGD_Losses':[]}
-        for i in range(n_samples):
+        for _ in range(n_samples):
             random_index = np.random.choice(node_timing.shape[1])
             n_events,pre_wgd_losses,post_wgd_losses = self.route_tree.get_n_events(node_timing[:,random_index],wgd_timing[random_index])
             n_events_estimate['N_Events'].append(n_events)
@@ -559,14 +410,17 @@ class RouteClassifier:
             timing_dict[route_id] = route_samples
         return timing_dict
 
-    def get_timing_tree_labels(self,route,wgd_info):
+    def get_timing_tree_labels(self,route,wgd_info,ci:float=90.0,rounding_digits:int=3):
         node_labels = {}
         for node in route.route_tree.non_phased_node_order:
             if node in route.route_tree.timeable_nodes:
                 timing_dist = route.get_node_timing(node)
-                timing = np.abs(np.round(np.percentile(timing_dist,50),3))
-                timing_ci_low = np.abs(np.round(np.percentile(timing_dist,5),3))
-                timing_ci_high = np.abs(np.round(np.percentile(timing_dist,95),3))
+                timing = np.abs(np.round(np.median(timing_dist),rounding_digits))
+
+                ci_low_percentile = (100-ci)/2
+                ci_high_percentile = 100- ci_low_percentile
+                timing_ci_low = np.abs(np.round(np.percentile(timing_dist,ci_low_percentile),rounding_digits))
+                timing_ci_high = np.abs(np.round(np.percentile(timing_dist,ci_high_percentile),rounding_digits))
                 node_labels[node] = f"{timing} - [{timing_ci_low},{timing_ci_high}]"
             elif node in route.route_tree.wgd_nodes:
                 node_labels[node]= f"{wgd_info['Timing']} - [{wgd_info['CI_Low']},{wgd_info['CI_High']}]"
@@ -595,14 +449,10 @@ class RouteClassifier:
             nx.set_node_attributes(plotting_tree,node_labels,'Label')
             
             treetools.plot_tree(plotting_tree,plot_title,output_path=route_output_path)
-def check_record_segment_timing(segment,wgd_status,wgd_trees_status):
+def check_record_segment_timing(segment):
     if segment.major_cn <=1:
         return False
     return True
-
-
-def get_wgd_trees_status(segment,wgd_status):
-    return 'Default'
 
 def add_wgd_info_to_table(timing_table,wgd_info,wgd_status):
     timing_table = timing_table.copy()
@@ -628,29 +478,28 @@ def write_timing_dict(timing_dict,dict_dir,segment_id):
         pickle.dump(timing_dict,out_file)
     
 
-def get_wgd_info(wgd_timing_distribution):
+def get_wgd_info(wgd_timing_distribution,ci:float=90.0,rounding_digits:int=3):
     if wgd_timing_distribution is None:
         wgd_timing = np.nan
         wgd_timing_ci_high = np.nan
         wgd_timing_ci_low = np.nan
     else:
-        wgd_timing = np.round(np.percentile(wgd_timing_distribution,50),3)
-        wgd_timing_ci_high = np.round(np.percentile(wgd_timing_distribution,95),3)
-        wgd_timing_ci_low= np.round(np.percentile(wgd_timing_distribution,5),3)
+        wgd_timing = np.round(np.median(wgd_timing_distribution),rounding_digits)
+
+        ci_low_percentile = (100-ci)/2
+        ci_high_percentile = 100- ci_low_percentile
+
+        wgd_timing_ci_high = np.round(np.percentile(wgd_timing_distribution,ci_high_percentile),rounding_digits)
+        wgd_timing_ci_low= np.round(np.percentile(wgd_timing_distribution,ci_low_percentile),rounding_digits)
     return {'Timing':wgd_timing,'CI_High':wgd_timing_ci_high,'CI_Low':wgd_timing_ci_low}
 
 
-def get_potential_wgd_segments(sample,cn_high):
-    if cn_high:
-        major_cns = [3,4]
-    else:
-        major_cns = [2]
-    
+def get_potential_wgd_segments(sample,min_wgd_mutations=10):
+    valid_autosomes = set(map(str,range(1,23)))
     potential_wgd_segments = []
     for segment in sample.segments:
-        if segment.major_cn in major_cns and segment.n_mutations >= 10 and segment.chromosome in set(map(str,range(1,23))):
-            if (segment.major_cn>= segment.minor_cn and not cn_high) or (segment.major_cn>segment.minor_cn and cn_high):
-                potential_wgd_segments.append(segment)
+        if segment.major_cn ==2 and segment.n_mutations >= min_wgd_mutations and segment.chromosome in valid_autosomes:
+            potential_wgd_segments.append(segment)
     return potential_wgd_segments
 
 def get_combined_distribution(distributions,n_samples=500):
@@ -770,26 +619,7 @@ def get_combined_segment_timing_cn_2(overlapping_segments,subclone_table,sample_
         segment_timing_store.append(segment_timing)
     
     return segment_timing_store
-def get_combined_segment_timing_cn_high(overlapping_segments,subclone_table,sample_purity,mult_store_dir):
 
-    mutation_tables = []
-    for segment in overlapping_segments:
-        mutation_tables.append(segment.mutation_table)
-    combined_mutation_table = pd.concat(mutation_tables)
-    segment_timing_store = []
-    
-    for segment_id,segment_table in combined_mutation_table.groupby('Segment_ID'):
-      
-        seg = Segment(segment_table,subclone_table,sample_purity)
-        classifier =  RouteClassifier(seg.major_cn,seg.minor_cn,False,'No_WGD',mult_store_dir)
-        mult_probabilities =seg.multiplicity_probabilities
-        classifier.fit_routes(mult_probabilities,seg.subclone_table,segment.n_snvs,None,seg.phased)
-       
-        segment_timing = classifier.get_best_timing()[0]
-        
-        segment_timing_store.append(segment_timing)
-    
-    return segment_timing_store
 
 def check_permitted_cn_state(major_cn,minor_cn,wgd_status):
     #enforcing no more than 500 routes per cn state
@@ -852,7 +682,7 @@ def process_segments(segments,wgd_timing_distribution,output_dir,mult_store_dir,
             print('Timing gained segment -',segment)
             mult_probabilities =segment.multiplicity_probabilities
 
-            wgd_trees_status = get_wgd_trees_status(segment,wgd_status)
+            wgd_trees_status = 'Default'
             classifier = RouteClassifier(segment.major_cn,segment.minor_cn,wgd_status,wgd_trees_status,mult_store_dir)
             
             classifier.fit_routes(mult_probabilities,segment.subclone_table,segment.n_snvs,wgd_timing_distribution,segment.phased,non_parsimony_penalty)
@@ -861,19 +691,19 @@ def process_segments(segments,wgd_timing_distribution,output_dir,mult_store_dir,
             timing_dict= classifier.get_timing_dict()
             write_timing_dict(timing_dict,timing_dict_dir,segment.segment_id)
             
-            if check_record_segment_timing(segment,wgd_status,wgd_trees_status):
-                timing_table = classifier.get_timing_table()
-                segment_dict = segment.get_info_dict()
-                for key,val in segment_dict.items():
-                    timing_table[key] = val
-                timing_table = add_wgd_info_to_table(timing_table,wgd_info,wgd_status)
-                timing_table['Sample_ID'] = sample_id
-                
-                write_timing_tables(timing_table,timing_table_path)
+            
+            timing_table = classifier.get_timing_table()
+            segment_dict = segment.get_info_dict()
+            for key,val in segment_dict.items():
+                timing_table[key] = val
+            timing_table = add_wgd_info_to_table(timing_table,wgd_info,wgd_status)
+            timing_table['Sample_ID'] = sample_id
+            
+            write_timing_tables(timing_table,timing_table_path)
 
-                if plot_trees:
-                    plot_output_dir = f"{output_dir}/{sample_id}_tree_plots/{segment.segment_id}".replace(":","-")
-                    classifier.plot_trees(plot_output_dir,str(segment),wgd_info)
+            if plot_trees:
+                plot_output_dir = f"{output_dir}/{sample_id}_tree_plots/{segment.segment_id}".replace(":","-")
+                classifier.plot_trees(plot_output_dir,str(segment),wgd_info)
         shutil.rmtree(cn_dir)
         
 def apply_non_parsimony_penalty(likelihood_store,n_events,l=2.7):

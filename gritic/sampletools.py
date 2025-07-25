@@ -422,6 +422,7 @@ class Segment:
         
         mutation_rate = self.n_mutations*mult_correction_factor
         return mutation_rate/self.width
+    
     def assign_multiplicity_probabilities(self):
         #remove mult cols if they already exist
         mult_cols = [col for col in self.mutation_table.columns if 'Prob_' in col or 'Three_Reads_Correction_' in col]
@@ -518,9 +519,6 @@ class Segment:
         normalising_sums = np.sum(multiplicity_probabilities, axis=1)[:,None]
         normalising_sums = np.where(np.isclose(normalising_sums,0),1,normalising_sums)
         multiplicity_probabilities = multiplicity_probabilities / normalising_sums
-
-   
-  
 
         if allele is None:     
             multiplicity_probabilities= multiplicity_probabilities[self.mutation_table['Phasing'].isna(),:]

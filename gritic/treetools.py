@@ -136,7 +136,7 @@ def valid_wgd_node_combination(tree,wgd_nodes,wgd_trees_status):
         if len(descendants.intersection(wgd_nodes))>0:
             return False
     return True
-#this method is gross and highly inefficient and should be changed
+#this method inefficient and should be changed
 def get_wgd_trees(tree,wgd_trees_status):
     internal_nodes  = [node for node in tree.nodes if not tree.nodes[node]['Terminal_Node'] ]
 
@@ -149,7 +149,7 @@ def get_wgd_trees(tree,wgd_trees_status):
                 continue
             
             wgd_tree = convert_to_wgd_tree(tree,wgd_nodes)
-            #crass way of removing the isomoprhic wgd trees
+            #inelegant way of removing the isomoprhic wgd trees
             wgd_hash = get_tree_hash(wgd_tree)
 
             if not wgd_hash in wgd_tree_hashes:
