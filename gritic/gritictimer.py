@@ -793,8 +793,6 @@ def process_sample(sample,output_dir,plot_trees=True,min_wgd_overlap=0.6,wgd_ove
               if len(sample_posterior_table)>0:
                     sample_posterior_table_summary = posteriortablegen.get_sample_posterior_table_summary(sample_posterior_table)
             
-                
-                
                     posterior_table_path = output_dir/f"{sample.sample_id}_posterior_timing_table_penalty_{apply_penalty}.tsv"
                     posterior_table_summary_path = output_dir/f"{sample.sample_id}_posterior_timing_table_summary_{apply_penalty}.tsv"
         

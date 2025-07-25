@@ -68,7 +68,7 @@ def load_timing_from_dict(segment_path):
     timing_dict = pickle.load(input_file)
     input_file.close()
     return timing_dict
-def get_sample_posterior_table(sample_table_path,input_dir,sample_id,apply_penalty,prior_penalty=2.7):
+def get_sample_posterior_table(sample_table_path,input_dir,sample_id:str,apply_penalty:bool,prior_penalty:float=2.7,n_posterior_samples:int=100):
 
     sample_table = pd.read_csv(sample_table_path,sep='\t',dtype={'Chromosome':str})
     if apply_penalty:
@@ -93,7 +93,7 @@ def get_sample_posterior_table(sample_table_path,input_dir,sample_id,apply_penal
 
         if len(segment_table)==0:
             continue
-        segment_frame = produce_timing_segment_table(segment_table,timing_dict,segment_id,n_samples=100)
+        segment_frame = produce_timing_segment_table(segment_table,timing_dict,segment_id,n_samples=n_posterior_samples)
         if segment_frame is None:
             warnings.warn(f'WARNING {segment_id} has NAs in probability, skipping in posterior.')
             continue
@@ -153,7 +153,4 @@ def get_sample_posterior_table_summary(sample_posterior_table,min_proportion_thr
     return sample_posterior_summary
 
 
-'''if apply_prior:
-    prior_corrected_probabilities = apply_prior_quick(route_table,2.7)
-    route_table['Probability'] = prior_corrected_probabilities'''
 
