@@ -456,7 +456,7 @@ class Segment:
             mult_vaf = np.minimum(1, mult_one_vaf * multiplicity)
 
             total_counts = self.mutation_table["Tumor_Alt_Count"] + self.mutation_table["Tumor_Ref_Count"]
-            mult_probability = binom.pmf(self.mutation_table["Tumor_Alt_Count"],total_counts,mult_vaf)
+            mult_probability = binom.logpmf(self.mutation_table["Tumor_Alt_Count"],total_counts,mult_vaf)
             multiplicity_probabilities.append(mult_probability)
 
             three_reads_correction_factor = 1- binom.cdf(2,np.random.poisson(highest_vaf_average_coverage,size=mult_vaf.size),mult_vaf)
@@ -466,7 +466,8 @@ class Segment:
         multiplicity_probabilities = np.array(multiplicity_probabilities)
         three_reads_correction_factors = np.array(three_reads_correction_factors)
         
-      
+        multiplicity_probabilities = np.exp(multiplicity_probabilities-np.max(multiplicity_probabilities,axis=0))
+        
         normalising_sums = np.sum(multiplicity_probabilities, axis=0)
 
         
@@ -478,6 +479,7 @@ class Segment:
             new_cols[f'Three_Reads_Correction_{peak_name}'] = three_reads_correction_factors[index,:]
         new_cols_table = pd.DataFrame(new_cols,index=self.mutation_table.index)
         self.mutation_table = pd.concat((self.mutation_table,new_cols_table),axis=1)
+        
         
     def get_reads_correction_array(self,allele=None):
         if allele == 'Minor':
