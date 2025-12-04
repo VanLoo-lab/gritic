@@ -16,7 +16,6 @@ from scipy.linalg import null_space
 
 from gritic.sampletools import Segment, get_major_cn_mode
 
-from dataclasses import dataclass
 from sklearn.neighbors import NearestNeighbors
 
 import time
@@ -150,16 +149,14 @@ class Route:
         n_samples = 0
         next_eval_time = None
         eval_count =0
-        start_time = time.perf_counter()
+        
         while True:
             if self.wgd_status:
                 wgd_timing = np.random.choice(wgd_timing_distribution)
             else:
                 wgd_timing =np.nan
             mults,timing = self.sample_mults(wgd_timing,samples_per_run)
-            #integrate in the (likely case) that there's only one subclone
-            '''if n_subclones ==-1:
-                ll_store.append(mult_probabilities.evaluate_likelihood_array_one_subclone(mults))'''
+           
             timing_store.append(timing)
 
             if n_subclones >0 :
@@ -454,7 +451,7 @@ def check_record_segment_timing(segment):
         return False
     return True
 
-def add_wgd_info_to_table(timing_table,wgd_info,wgd_status):
+def add_wgd_info_to_table(timing_table,wgd_info,wgd_status:bool):
     timing_table = timing_table.copy()
     timing_table['WGD_Timing'] = wgd_info['Timing']
     timing_table['WGD_Timing_CI_Low'] = wgd_info['CI_Low']
@@ -486,15 +483,15 @@ def get_wgd_info(wgd_timing_distribution,ci:float=90.0,rounding_digits:int=3):
     else:
         wgd_timing = np.round(np.median(wgd_timing_distribution),rounding_digits)
 
-        ci_low_percentile = (100-ci)/2
-        ci_high_percentile = 100- ci_low_percentile
+        ci_low_percentile = (100.0-ci)/2
+        ci_high_percentile = 100.0- ci_low_percentile
 
         wgd_timing_ci_high = np.round(np.percentile(wgd_timing_distribution,ci_high_percentile),rounding_digits)
         wgd_timing_ci_low= np.round(np.percentile(wgd_timing_distribution,ci_low_percentile),rounding_digits)
     return {'Timing':wgd_timing,'CI_High':wgd_timing_ci_high,'CI_Low':wgd_timing_ci_low}
 
 
-def get_potential_wgd_segments(sample,min_wgd_mutations=10):
+def get_potential_wgd_segments(sample,min_wgd_mutations:int=10):
     valid_autosomes = set(map(str,range(1,23)))
     potential_wgd_segments = []
     for segment in sample.segments:
@@ -502,17 +499,17 @@ def get_potential_wgd_segments(sample,min_wgd_mutations=10):
             potential_wgd_segments.append(segment)
     return potential_wgd_segments
 
-def get_combined_distribution(distributions,n_samples=500):
+def get_combined_distribution(distributions,n_samples=500,eps=1e-300):
     bins = np.linspace(0,1,201)
     bin_mid_points = (bins[1:]+bins[:(bins.size-1)])/2
     binned_distributions = []
     for distribution in distributions:
-        distribution = np.clip(distribution,1e-8,1-1e-8)
+        distribution = np.clip(distribution,eps,1.0-eps)
         binned_distribution = np.histogram(distribution,bins=bins)[0]
         binned_distribution = binned_distribution/np.sum(binned_distribution)
         binned_distributions.append(binned_distribution)
     binned_distributions = np.array(binned_distributions)
-    binned_distributions = np.log(binned_distributions+1e-300)
+    binned_distributions = np.log(binned_distributions+eps)
     
     combined_distribution = np.sum(binned_distributions,axis=0)
 
@@ -538,8 +535,7 @@ def time_wgd_major_cn_2(sample,output_dir,mult_store_dir,timing_dict_dir):
         classifier =  RouteClassifier(segment.major_cn,pseudo_minor_cn,False,'No_WGD',mult_store_dir)
  
         mult_probabilities =segment.multiplicity_probabilities
-        #changing minor_cn here here as well
-        #change this in a future version
+        
         mult_probabilities.minor_cn = pseudo_minor_cn
         classifier.fit_routes(mult_probabilities,segment.subclone_table,segment.n_snvs,None,segment.phased)
         mult_probabilities.minor_cn = segment.minor_cn
@@ -632,7 +628,7 @@ def check_permitted_cn_state(major_cn,minor_cn,wgd_status):
     if major_cn ==1:
         return True
     if major_cn ==2:
-        #don't produce timing distributions for WGD segments
+        #we don't produce timing distributions for WGD segments
         if wgd_status:
             return False
         return True
@@ -776,10 +772,8 @@ def process_sample(sample,output_dir,plot_trees=True,min_wgd_overlap=0.6,wgd_ove
     if major_cn_mode <=2:
 
         timeable_complex_segments = get_timeable_segments(sample,non_overlapping_segments,wgd_status)
-
     
         timing_table_path = f"{output_dir}/{sample.sample_id}_gain_timing_table.tsv"
-            
 
         if non_parsimony_penalty and not wgd_status:
             warnings.warn('Warning: The non-parsimony penalty is only relevant to WGD samples, but no WGD has been identified. Penalty will not be applied')
