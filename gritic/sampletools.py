@@ -378,7 +378,11 @@ class Segment:
         
     
     def __str__(self):
-        return f"{self.segment_id}- {self.major_cn}+{self.minor_cn} - {self.n_mutations} Mutations"
+        if self.n_mutations ==1:
+            mutation_text = 'Mutation'
+        else:
+            mutation_text =='Mutations'
+        return f"{self.segment_id}- {self.major_cn}+{self.minor_cn} - {self.n_mutations} {mutation_text}"
     
     def get_all_possible_subclonal_multiplicities(self):
         if self.n_subclones ==0:
@@ -464,6 +468,8 @@ class Segment:
         
       
         normalising_sums = np.sum(multiplicity_probabilities, axis=0)
+
+        
         normalising_sums = np.where(np.isclose(normalising_sums,0),1,normalising_sums)
         multiplicity_probabilities = multiplicity_probabilities / normalising_sums
         new_cols = {}
