@@ -45,8 +45,6 @@ def run_chain(current_position,null_dimension,A_null,timing_state,burn_in=25,ski
         current_position = new_position
     return hit_and_run_store[burn_in::skips]
 
-
-
 @njit()
 def hit_and_run(A_null,timing_state,n_samples=500,burn_in=25,skips=5):
  
@@ -55,8 +53,7 @@ def hit_and_run(A_null,timing_state,n_samples=500,burn_in=25,skips=5):
         for i in range(n_samples):
             hit_and_run_store[i,:] = timing_state
         return hit_and_run_store
-    #note that this can cause problems hitting the 1 limit
-    #but I think this is ok
+   
     if A_null.shape[1] ==1:
 
         

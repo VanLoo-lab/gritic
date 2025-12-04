@@ -460,7 +460,6 @@ class Segment:
             multiplicity_probabilities.append(mult_probability)
 
             three_reads_correction_factor = 1- binom.cdf(2,np.random.poisson(highest_vaf_average_coverage,size=mult_vaf.size),mult_vaf)
-            #three_reads_correction_factor = np.random.binomial(np.random.poisson(highest_vaf_average_coverage,size=mult_vaf.size),mult_vaf,size=mult_vaf.size)
             three_reads_correction_factors.append(three_reads_correction_factor)
 
         multiplicity_probabilities = np.array(multiplicity_probabilities)

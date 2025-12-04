@@ -6,7 +6,7 @@ import itertools
 
 import matplotlib.pyplot as plt
 plt.rcParams["figure.figsize"] = (11,6)
-#I modded to make isomorphic
+#Modified to make isomorphic
 class TreeNode:
      def __init__(self, val=0, left=None, right=None):
         self.val = val
@@ -217,7 +217,6 @@ def get_possible_paths(tree,long_nodes):
         
         all_possible_paths.extend(get_possible_paths_recursive(tree,root_node,[root_node],long_nodes))
     return all_possible_paths
-
 
 def get_wgd_paths_recursive(tree,current_node,path):
     if tree.nodes[current_node]['WGD_Symbol']:

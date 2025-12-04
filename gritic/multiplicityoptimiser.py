@@ -4,7 +4,6 @@ from scipy.optimize import minimize,LinearConstraint
 def unconstrained_mult_optimisation(mult_probabilities,n_subclones):
     n_dim = mult_probabilities.major_cn + n_subclones
     start_point = get_point_on_simplex(n_dim)
-    #start_point = np.ones(n_dim)/n_dim
     bounds = [(0,1)]*n_dim
     #force a sum to one
     constraints = LinearConstraint(np.ones((1,n_dim)),1,1)
