@@ -381,7 +381,7 @@ class Segment:
         if self.n_mutations ==1:
             mutation_text = 'Mutation'
         else:
-            mutation_text =='Mutations'
+            mutation_text ='Mutations'
         return f"{self.segment_id}- {self.major_cn}+{self.minor_cn} - {self.n_mutations} {mutation_text}"
     
     def get_all_possible_subclonal_multiplicities(self):
