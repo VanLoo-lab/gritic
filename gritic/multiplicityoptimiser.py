@@ -19,19 +19,12 @@ def unconstrained_mult_likelihood(x,n_subclones,mult_probabilities):
 def mult_likelihood(x,n_subclones,mult_probabilities,timing_matrix):
     timing_state =x[:(x.size-n_subclones)]
     subclonal_mult_state = x[(x.size-n_subclones):]
-    
     clonal_mult_state = np.dot(timing_state,timing_matrix)
-
     likelihood = mult_probabilities.evaluate_likelihood(clonal_mult_state,subclonal_mult_state)
     return -likelihood
 
 def get_point_on_simplex(n_dim):
-    samples = np.random.uniform(0, 1, size=(n_dim - 1))
-    samples = np.sort(samples)
-    samples = np.insert(samples, 0, 0)
-    samples = np.insert(samples, n_dim, 1)
-    simplex_point = np.diff(samples)
-    return simplex_point
+    return np.random.dirichlet(np.ones(n_dim))
 #to do build a likelihood function where we sum over subclonal states and multiplicity likelihoods
 def solve_timing(mult_probabilities,n_subclones,timing_matrix,full_constraints,full_constraints_sum):
     
