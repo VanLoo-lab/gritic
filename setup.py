@@ -2,15 +2,15 @@ from setuptools import setup
 
 setup(
     name='gritic',
-    version='0.0.7',
+    version='0.0.10',
     packages=['gritic'],
     author='Toby Baker',
-    author_email='tobybaker@mednet.ucla.edu',
-    maintainer='Toby Baker',
-    maintainer_email='tobybaker@mednet.ucla.edu',
+    author_email='tobybaker97@gmail.com',
+    maintainer='Huw A. Ogilvie',
+    maintainer_email='HAOgilvie@mdanderson.org',
     license='GNU AFFERO GENERAL PUBLIC LICENSE Version 3',
     url='https://github.com/VanLoo-lab/gritic',
-    download_url='https://github.com/VanLoo-lab/gritic/archive/refs/tags/v0.0.5.tar.gz',
+    download_url='https://github.com/VanLoo-lab/gritic/archive/refs/tags/v0.0.10.tar.gz',
     description='A module to time complex copy number gains in cancer genomes',
     long_description='''\
 A tool for timing complex copy number gains in cancer. Provides gain timing estimates for segments with a total copy number of up to 9. Only copy number segments with 10 or more SNVs will be timed.
@@ -31,6 +31,10 @@ Each gain timing is measured in mutation time, a scale that ranges from 0 to 1. 
         'scikit-learn',
         'networkx',
         'numba'
-    ]
+    ],
+    entry_points={
+        'console_scripts': [
+            'gritic=gritic.cli:main',
+        ],
+    },
 )
-

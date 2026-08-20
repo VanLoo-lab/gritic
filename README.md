@@ -11,11 +11,11 @@ pip install gritic
 ```
 Python 3.X is required.
 ## Running
-The easiest way to run GRITIC on a single sample is to use the ```rungritic_cmd.py``` script. 
+The easiest way to run GRITIC on a single sample is with the ```gritic``` command installed by pip.
 ```
-python rungritic_cmd.py -ARGS
+gritic --help
 ```
-This script has five required arguments.
+This command has five required arguments.
 - ```--mutation_table``` A path to the SNV table for the sample.
 - ```--copy_number_table``` A path to the copy number table for the sample.
 - ```--purity``` The estimated cellular purity for the sample.
@@ -30,22 +30,65 @@ There are also a number of optional arguments.
 - ```--plot_trees``` Plot the route trees for each segment. Default is True.
 
 
-An command to get GRITIC to run using the example data is:
+A command to run GRITIC using the example data is:
 
 ```
-python rungritic_cmd.py --mutation_table examples/snv_table_example.tsv --subclone_table examples/subclone_table_example.tsv --copy_number_table examples/cn_table_example.tsv  --purity 0.5 --wgd_status T --output examples/output --sample_id TEST_ID
+gritic --mutation_table examples/snv_table_example.tsv --subclone_table examples/subclone_table_example.tsv --copy_number_table examples/cn_table_example.tsv --purity 0.5 --wgd_status T --output examples/output --sample_id TEST_ID
 ```
 
-Alternatively, the similar script ```rungritic.py``` provides a very simple framework to run gritic as part of a larger script.
+GRITIC can also be run programmatically:
+
+```python
+import pandas as pd
+
+from gritic import dataloader, gritictimer, sampletools
+
+copy_number_table, mutation_table = dataloader.load_input_tables(
+    'examples/cn_table_example.tsv',
+    'examples/snv_table_example.tsv',
+)
+subclone_table = pd.read_csv(
+    'examples/subclone_table_example.tsv',
+    sep='\t',
+    dtype={
+        'Cluster': str,
+        'Subclone_CCF': float,
+        'Subclone_Fraction': float,
+    },
+)
+
+sample = sampletools.Sample(
+    mutation_table,
+    copy_number_table,
+    subclone_table,
+    sample_id='TEST_ID',
+    purity=0.5,
+    sex='XX',
+)
+gritictimer.process_sample(
+    sample,
+    output_dir='examples/output',
+    plot_trees=True,
+    wgd_override=True,
+)
+```
 
 ## Input Table Formats
 The three input tables that GRITIC requires should be tab separated. Examples using simulated data are available in the example directory. We currently filter any non-autosomal chromosomes. Data from any allele specific copy number caller, SNV caller and subclone caller can be used as long as the tables are formatted correctly.
 ### Mutation Table 
-All SNVs for the sample. Requires the column names ```Chromosome```, ```Position```, ```Tumor_Ref_Count``` & ```Tumor_Alt_Count```. 
-### Copy Number Table 
-The rounded allele-specific copy number profile for the sample. Requires the column names ```Chromosome```, ```Segment_Start```, ```Segment_End```, ```Major_CN``` & ```Minor_CN```. ```Major_CN``` must be larger than or equal to ```Minor_CN```.
+All SNVs for the sample. The columns ```Chromosome```, ```Tumor_Ref_Count``` and ```Tumor_Alt_Count``` are always required.
 
-GRITIC will merge adjacent segments with the same allele specific copy number.
+GRITIC supports two segment-assignment modes:
+
+- If both the mutation and copy number tables contain ```Segment_ID```, GRITIC uses those IDs to associate mutations with the input copy number segments. ```Position``` is optional in this mode.
+- Otherwise, the mutation table must contain ```Position```, which GRITIC uses to associate mutations with copy number segments.
+
+In supplied-ID mode, every copy number row must have a ```Segment_ID``` that is not null, empty, or whitespace-only, and copy number ```Segment_ID``` values must be globally unique. Every mutation row must also have a ```Segment_ID``` that is not null, empty, or whitespace-only and exactly matches one in the copy number table, with the same ```Chromosome```.
+
+### Copy Number Table 
+The rounded allele-specific copy number profile for the sample. Requires the column names ```Chromosome```, ```Segment_Start```, ```Segment_End```, ```Major_CN``` & ```Minor_CN```. ```Major_CN``` must be larger than or equal to ```Minor_CN```. ```Segment_ID``` is optional and it is only used when it is also present in the mutation table.
+
+By default, in both assignment modes, GRITIC merges adjacent segments with the same allele-specific copy number and generates the final segment IDs from ```Chromosome```, ```Segment_Start``` and ```Segment_End``` (for example, ```1-0-199```).
 ### Subclone Table (*Optional*)
 The identified subclonal peaks and their relative sizes for the sample. All peaks with a cancer cell fraction of less than 0.9 should be included. Any peaks higher than this are automatically filtered. GRITIC assumes a peak with a cancer cell fraction of 1. 
 
@@ -95,7 +138,7 @@ This table is produced for WGD tumours. It gives the timing of the major copy nu
 The mutation table processed by GRITIC to give additional SNV multiplicity information. SNV multiplicity probabilities are given by the ```Prob_Mult_``` columns. The expected number of mutations with the same coverage as the given SNV that would be expected to have less than three reads supporting the alternate allele is given by the ```Three_Reads_Correction_Mult``` columns. This is approximately the number of SNVs that would be missed by the variant caller at this coverage level.
 
 ### _tree_plots
-Binary tree plots for the gain timings for each route for a given segment.  Each plot has two binary trees corresponding to each parental allele. Blue nodes represent independent gains, yellow nodes WGD gains and red nodes the final alleles that were present at time of sampling.
+Binary tree plots for the gain timings for each route for a given segment. Each plot has two binary trees corresponding to each parental allele. Blue nodes represent independent gains, yellow nodes WGD gains and red nodes the final alleles that were present at time of sampling.
 
 ### _timing_dicts
 Python dictionary objects containing the stored gain timing and multiplicity posterior samples for each route for each gained segment. Not necessary for most use cases. Can be read using the ```pickle``` and ```bz2``` modules in python. For example:
@@ -103,7 +146,7 @@ Python dictionary objects containing the stored gain timing and multiplicity pos
 import pickle
 import bz2
 
-with bz2.BZ2File('SAMPLE_ID_timing_dicts/SEGMENT_ID_timing_dict.bz2', 'rb') as f:
+with bz2.BZ2File('SAMPLE_ID_timing_dicts/1-0-199_timing_dict.bz2', 'rb') as f:
     timing_dict = pickle.load(f)
 
 ```
@@ -111,4 +154,3 @@ with bz2.BZ2File('SAMPLE_ID_timing_dicts/SEGMENT_ID_timing_dict.bz2', 'rb') as f
 The keys of each dict correspond to the routes for the sample. Within each route there are ```Timing``` and ```Mult``` keys. The ```Timing``` entry gives the timing samples of the independent gains indexed by the corresponding node in the tree. A WGD timing entry is also given if applicable.
 
 The ```Mult``` entry gives the multiplicity proportions corresponding to each timing sample. It is a N_SamplesxN_Multiplicities numpy array. Across the columns, the multiplicities are orderred from 1 to the major copy number of the segment, followed by the subclonal multiplicity probabilities.
-

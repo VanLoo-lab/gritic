@@ -80,14 +80,14 @@ def get_sample_posterior_table(sample_table_path,input_dir,sample_id:str,apply_p
     segment_frames = []
     for segment_file in os.listdir(dict_dir):
         
-        if not segment_file.endswith(".bz2"):
+        if not segment_file.endswith("_timing_dict.bz2"):
             continue
         
         segment_path = f'{dict_dir}/{segment_file}'
         timing_dict = load_timing_from_dict(segment_path)
         timing_dict = shorten_dict_routes(timing_dict)
         
-        segment_id = segment_file.replace('_timing_dict.bz2','')
+        segment_id = segment_file.removesuffix('_timing_dict.bz2')
         
         segment_table = sample_table[sample_table['Segment_ID']==segment_id]
 
@@ -151,6 +151,3 @@ def get_sample_posterior_table_summary(sample_posterior_table,min_proportion_thr
     sample_posterior_summary = pd.merge(segment_summary_data,sample_posterior_summary,on=['Segment_ID'])
     sample_posterior_summary = sample_posterior_summary[sample_posterior_summary['Proportion']>=min_proportion_threshold]
     return sample_posterior_summary
-
-
-

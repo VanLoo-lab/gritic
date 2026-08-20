@@ -232,6 +232,13 @@ class Sample:
         assert sex in [None,'XX','XY']
         self.merge_cn = merge_cn
         self.apply_reads_correction = apply_reads_correction
+        self.use_supplied_segment_ids = dataloader.validate_input_table_headers(
+            cn_table.columns,
+            mutation_table.columns,
+        )
+        self.supplied_segment_id_map = None
+        if self.use_supplied_segment_ids:
+            dataloader.validate_supplied_segment_ids(cn_table, mutation_table)
         self.copy_number_table = self.process_raw_copy_number_table(cn_table)
         self.mutation_table = self.process_raw_mutation_table(mutation_table,self.copy_number_table)
 
@@ -244,9 +251,19 @@ class Sample:
         mutation_table = mutation_table.copy()
         
         mutation_table['Chromosome'] = mutation_table['Chromosome'].str.replace('chr','')
-        
 
-        mutation_table = dataloader.assign_cn_to_snv(mutation_table,cn_table)
+        if self.use_supplied_segment_ids:
+            mutation_table['Segment_ID'] = (
+                mutation_table['Segment_ID'].astype(str).map(
+                    self.supplied_segment_id_map
+                )
+            )
+
+        mutation_table = dataloader.assign_cn_to_snv(
+            mutation_table,
+            cn_table,
+            use_supplied_segment_ids=self.use_supplied_segment_ids,
+        )
        
         if self.sex is None:
             mutation_table = dataloader.filter_sex_chromosomes(mutation_table)
@@ -262,7 +279,24 @@ class Sample:
         cn_table = cn_table.copy()
         cn_table['Chromosome'] = cn_table['Chromosome'].str.replace('chr','')
         if self.merge_cn:
-            cn_table = dataloader.merge_segments(cn_table)
+            if self.use_supplied_segment_ids:
+                cn_table, self.supplied_segment_id_map = (
+                    dataloader.merge_segments(
+                        cn_table,
+                        return_segment_id_map=True,
+                    )
+                )
+            else:
+                cn_table = dataloader.merge_segments(cn_table)
+        else:
+            if self.use_supplied_segment_ids:
+                supplied_segment_ids = cn_table['Segment_ID'].astype(str)
+            cn_table = dataloader.generate_segment_ids(cn_table)
+            if self.use_supplied_segment_ids:
+                self.supplied_segment_id_map = dict(zip(
+                    supplied_segment_ids,
+                    cn_table['Segment_ID'],
+                ))
         cn_table['Total_CN'] = cn_table['Major_CN']+cn_table['Minor_CN']
         cn_table = cn_table[cn_table['Major_CN']>0]
         return cn_table
@@ -285,7 +319,21 @@ class Sample:
             mutation_table['Phasing'] = np.nan
         if 'Context' not in mutation_table.columns:
             mutation_table['Context'] = np.nan
-        mutation_table = mutation_table[['Segment_ID', 'Chromosome','Segment_Start', 'Segment_End', 'Major_CN','Minor_CN', 'Total_CN','Tumor_Ref_Count', 'Tumor_Alt_Count', 'Position','Phasing','Context']].copy()
+        mutation_columns = [
+            'Segment_ID',
+            'Chromosome',
+            'Segment_Start',
+            'Segment_End',
+            'Major_CN',
+            'Minor_CN',
+            'Total_CN',
+            'Tumor_Ref_Count',
+            'Tumor_Alt_Count',
+        ]
+        if 'Position' in mutation_table.columns:
+            mutation_columns.append('Position')
+        mutation_columns.extend(['Phasing','Context'])
+        mutation_table = mutation_table[mutation_columns].copy()
         mutation_table['Chromosome'] = mutation_table['Chromosome'].astype(str)
         mutation_table["Gain_Type"] = mutation_table["Major_CN"].astype(str)+ "_"+ mutation_table["Minor_CN"].astype(str)
         return mutation_table

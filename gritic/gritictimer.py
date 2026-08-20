@@ -470,7 +470,7 @@ def write_timing_tables(timing_table,timing_table_path):
     timing_table.to_csv(timing_table_path,sep="\t",index=False)
 
 def write_timing_dict(timing_dict,dict_dir,segment_id):
-    output_path = f'{dict_dir}/{segment_id.replace(":","")}_timing_dict.bz2'
+    output_path = f'{dict_dir}/{segment_id}_timing_dict.bz2'
     with bz2.BZ2File(output_path,'wb') as out_file:
         pickle.dump(timing_dict,out_file)
     
@@ -698,7 +698,7 @@ def process_segments(segments,wgd_timing_distribution,output_dir,mult_store_dir,
             write_timing_tables(timing_table,timing_table_path)
 
             if plot_trees:
-                plot_output_dir = f"{output_dir}/{sample_id}_tree_plots/{segment.segment_id}".replace(":","-")
+                plot_output_dir = f"{output_dir}/{sample_id}_tree_plots/{segment.segment_id}"
                 classifier.plot_trees(plot_output_dir,str(segment),wgd_info)
         shutil.rmtree(cn_dir)
         
