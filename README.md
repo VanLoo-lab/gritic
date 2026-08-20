@@ -28,6 +28,7 @@ There are also a number of optional arguments.
 - ```--wgd_status``` GRITIC will identify the WGD status of the sample. This can be overidden through this argument.
 - ```--non_parsimony_penalty``` Apply a penalty on non-parsimonious routes in WGD tumours. Defalt is False. See [publication](https://aacrjournals.org/cancerdiscovery/article/14/10/1810/748591/The-History-of-Chromosomal-Instability-in-Genome) for more details.
 - ```--plot_trees``` Plot the route trees for each segment. Default is True.
+- ```--sample_sex``` Override the sample sex with ```XX``` or ```XY```. If omitted, GRITIC imputes ```XY``` when the copy number table contains a Y-chromosome segment and ```XX``` otherwise.
 
 
 A command to run GRITIC using the example data is:
@@ -63,7 +64,6 @@ sample = sampletools.Sample(
     subclone_table,
     sample_id='TEST_ID',
     purity=0.5,
-    sex='XX',
 )
 gritictimer.process_sample(
     sample,
@@ -74,7 +74,7 @@ gritictimer.process_sample(
 ```
 
 ## Input Table Formats
-The three input tables that GRITIC requires should be tab separated. Examples using simulated data are available in the example directory. We currently filter any non-autosomal chromosomes. Data from any allele specific copy number caller, SNV caller and subclone caller can be used as long as the tables are formatted correctly.
+The three input tables that GRITIC requires should be tab separated. Examples using simulated data are available in the example directory. Data from any allele specific copy number caller, SNV caller and subclone caller can be used as long as the tables are formatted correctly.
 ### Mutation Table 
 All SNVs for the sample. The columns ```Chromosome```, ```Tumor_Ref_Count``` and ```Tumor_Alt_Count``` are always required.
 
@@ -89,6 +89,8 @@ In supplied-ID mode, every copy number row must have a ```Segment_ID``` that is 
 The rounded allele-specific copy number profile for the sample. Requires the column names ```Chromosome```, ```Segment_Start```, ```Segment_End```, ```Major_CN``` & ```Minor_CN```. ```Major_CN``` must be larger than or equal to ```Minor_CN```. ```Segment_ID``` is optional and it is only used when it is also present in the mutation table.
 
 By default, in both assignment modes, GRITIC merges adjacent segments with the same allele-specific copy number and generates the final segment IDs from ```Chromosome```, ```Segment_Start``` and ```Segment_End``` (for example, ```1-0-199```).
+
+When sample sex is not supplied, GRITIC imputes ```XY``` if the copy number table contains any Y-chromosome segment and ```XX``` otherwise. An explicitly supplied sex takes precedence. This inference assumes that Y-chromosome segments have not been removed from the copy number input.
 ### Subclone Table (*Optional*)
 The identified subclonal peaks and their relative sizes for the sample. All peaks with a cancer cell fraction of less than 0.9 should be included. Any peaks higher than this are automatically filtered. GRITIC assumes a peak with a cancer cell fraction of 1. 
 

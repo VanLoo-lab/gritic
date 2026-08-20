@@ -98,8 +98,9 @@ def build_parser():
         '--sample_sex',
         default=None,
         help=(
-            'Sex of the sample, required to time gains on the X chromosome. '
-            'Must be XX or XY.'
+            'Override the sample sex with XX or XY. If omitted, GRITIC '
+            'imputes XY when the copy number table contains a Y segment and '
+            'XX otherwise.'
         ),
     )
     return parser

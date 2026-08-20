@@ -173,6 +173,18 @@ def calculate_ploidy(cn_table):
     cn_total = cn_table['Major_CN'] + cn_table['Minor_CN']
     ploidy = np.average(cn_total,weights=cn_width)
     return ploidy
+
+
+def infer_sex_from_copy_number_table(cn_table):
+    """Infer XX or XY from the presence of a Y copy-number segment."""
+    chromosomes = (
+        cn_table['Chromosome']
+        .astype(str)
+        .str.replace('chr', '', regex=False)
+    )
+    return 'XY' if chromosomes.eq('Y').any() else 'XX'
+
+
 def calculate_normal_ploidy(sex):
     sex_table = pd.read_csv('/camp/home/bakert/secure-working/GRITIC/Analysis_Pipeline/resources/chrom_arm_positions.tsv',sep='\t').groupby('Chromosome').agg({'Arm_End':'max'}).reset_index()
     sex_table = sex_table.rename(columns={'Arm_End':'Chromosome_Size'})
@@ -191,6 +203,8 @@ def calculate_normal_ploidy(sex):
     return np.average(sex_table['Total_Copy_Number'],weights=sex_table['Chromosome_Size'])
 def calculate_nrpcc(cn_table,mutation_table,purity,sex=None):
     tumor_ploidy = calculate_ploidy(cn_table)
+    if sex is None:
+        sex = infer_sex_from_copy_number_table(cn_table)
     normal_ploidy = calculate_normal_ploidy(sex)
     sample_ploidy = purity*tumor_ploidy+normal_ploidy*(1-purity)
     mutation_table = mutation_table[mutation_table['Chromosome'].isin(list(map(str,range(1,23)))+['X','Y'])].copy()
@@ -248,10 +262,6 @@ def merge_segments(cn_table, return_segment_id_map=False):
         for source_segment_id in source_ids_by_index[index]:
             segment_id_map[source_segment_id] = merged_segment_id
     return merged_table.reset_index(drop=True), segment_id_map
-def filter_sex_chromosomes(mutation_table):
-    autosomes = list(map(str,range(1,23)))
-    mutation_table = mutation_table[mutation_table['Chromosome'].isin(autosomes)]
-    return mutation_table
 def assign_cn_to_snv(snv_table, cn_table, use_supplied_segment_ids):
     """Attach copy number annotations using supplied IDs or genomic position."""
     cn_table = cn_table.copy()

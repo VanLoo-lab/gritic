@@ -228,13 +228,17 @@ class Sample:
         self.chromosome_order.extend(['X','Y'])
         self.sample_id = sample_id
         self.purity = purity
-        self.sex = sex
         assert sex in [None,'XX','XY']
         self.merge_cn = merge_cn
         self.apply_reads_correction = apply_reads_correction
         self.use_supplied_segment_ids = dataloader.validate_input_table_headers(
             cn_table.columns,
             mutation_table.columns,
+        )
+        self.sex = (
+            dataloader.infer_sex_from_copy_number_table(cn_table)
+            if sex is None
+            else sex
         )
         self.supplied_segment_id_map = None
         if self.use_supplied_segment_ids:
@@ -265,9 +269,6 @@ class Sample:
             use_supplied_segment_ids=self.use_supplied_segment_ids,
         )
        
-        if self.sex is None:
-            mutation_table = dataloader.filter_sex_chromosomes(mutation_table)
-            
         mutation_table = self.filter_mutation_table(mutation_table)
      
         
