@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import pandas as pd
 
@@ -52,7 +54,11 @@ def validate_input_table_headers(copy_number_columns, mutation_columns):
     return use_supplied_segment_ids
 
 
-def validate_supplied_segment_ids(copy_number_table, mutation_table):
+def validate_supplied_segment_ids(
+    copy_number_table,
+    mutation_table,
+    allow_unmatched=False,
+):
     """Validate the value-level contract for supplied segment IDs."""
     copy_number_id_strings = copy_number_table['Segment_ID'].astype('string')
     mutation_id_strings = mutation_table['Segment_ID'].astype('string')
@@ -88,10 +94,9 @@ def validate_supplied_segment_ids(copy_number_table, mutation_table):
             "duplicate value(s): " + ", ".join(duplicate_copy_number_ids)
         )
 
-    unknown_mutation_ids = mutation_ids[
-        ~mutation_ids.isin(copy_number_ids)
-    ].unique()
-    if unknown_mutation_ids.size:
+    matched_mutation_ids = mutation_ids.isin(copy_number_ids)
+    unknown_mutation_ids = mutation_ids[~matched_mutation_ids].unique()
+    if unknown_mutation_ids.size and not allow_unmatched:
         raise ValueError(
             "Mutation table Segment_ID value(s) not present in the copy "
             "number table: " + ", ".join(unknown_mutation_ids)
@@ -111,7 +116,9 @@ def validate_supplied_segment_ids(copy_number_table, mutation_table):
         regex=False,
     )
     expected_chromosomes = mutation_ids.map(chromosome_by_segment_id)
-    chromosome_mismatches = mutation_chromosomes != expected_chromosomes
+    chromosome_mismatches = matched_mutation_ids & (
+        mutation_chromosomes != expected_chromosomes
+    )
     if chromosome_mismatches.any():
         mismatched_segment_ids = mutation_ids[
             chromosome_mismatches
@@ -122,7 +129,30 @@ def validate_supplied_segment_ids(copy_number_table, mutation_table):
         )
 
 
-def load_input_tables(copy_number_path, mutation_table_path):
+def drop_unmatched_segment_id_mutations(copy_number_table, mutation_table):
+    """Drop mutations whose supplied segment ID has no copy-number match."""
+    copy_number_ids = copy_number_table['Segment_ID'].astype('string')
+    mutation_ids = mutation_table['Segment_ID'].astype('string')
+    matched_mutations = mutation_ids.isin(copy_number_ids)
+    unmatched_snv_count = int((~matched_mutations).sum())
+
+    if unmatched_snv_count:
+        snv_label = 'SNV' if unmatched_snv_count == 1 else 'SNVs'
+        warnings.warn(
+            f'Dropping {unmatched_snv_count} unmatched {snv_label} because '
+            'their Segment_ID is not present in the copy number table.',
+            UserWarning,
+            stacklevel=2,
+        )
+
+    return mutation_table.loc[matched_mutations].copy()
+
+
+def load_input_tables(
+    copy_number_path,
+    mutation_table_path,
+    drop_unmatched_snvs=False,
+):
     """Load paired copy number and mutation tables using their joint schema."""
     copy_number_header = pd.read_csv(copy_number_path, sep='\t', nrows=0)
     mutation_header = pd.read_csv(mutation_table_path, sep='\t', nrows=0)
@@ -164,7 +194,16 @@ def load_input_tables(copy_number_path, mutation_table_path):
         converters=mutation_converters,
     )
     if use_supplied_segment_ids:
-        validate_supplied_segment_ids(copy_number_table, mutation_table)
+        validate_supplied_segment_ids(
+            copy_number_table,
+            mutation_table,
+            allow_unmatched=drop_unmatched_snvs,
+        )
+        if drop_unmatched_snvs:
+            mutation_table = drop_unmatched_segment_id_mutations(
+                copy_number_table,
+                mutation_table,
+            )
     return copy_number_table, mutation_table
 
 def calculate_ploidy(cn_table):

@@ -29,6 +29,7 @@ There are also a number of optional arguments.
 - ```--non_parsimony_penalty``` Apply a penalty on non-parsimonious routes in WGD tumours. Defalt is False. See [publication](https://aacrjournals.org/cancerdiscovery/article/14/10/1810/748591/The-History-of-Chromosomal-Instability-in-Genome) for more details.
 - ```--plot_trees``` Plot the route trees for each segment. Default is True.
 - ```--sample_sex``` Override the sample sex with ```XX``` or ```XY```. If omitted, GRITIC imputes ```XY``` when the copy number table contains a Y-chromosome segment and ```XX``` otherwise.
+- ```--drop_unmatched_snvs``` In supplied-ID mode, drop mutation rows whose ```Segment_ID``` is absent from the copy number table and issue one warning reporting the number dropped. By default, unmatched IDs raise an error.
 
 
 A command to run GRITIC using the example data is:
@@ -83,7 +84,9 @@ GRITIC supports two segment-assignment modes:
 - If both the mutation and copy number tables contain ```Segment_ID```, GRITIC uses those IDs to associate mutations with the input copy number segments. ```Position``` is optional in this mode.
 - Otherwise, the mutation table must contain ```Position```, which GRITIC uses to associate mutations with copy number segments.
 
-In supplied-ID mode, every copy number row must have a ```Segment_ID``` that is not null, empty, or whitespace-only, and copy number ```Segment_ID``` values must be globally unique. Every mutation row must also have a ```Segment_ID``` that is not null, empty, or whitespace-only and exactly matches one in the copy number table, with the same ```Chromosome```.
+In supplied-ID mode, every copy number row must have a ```Segment_ID``` that is not null, empty, or whitespace-only, and copy number ```Segment_ID``` values must be globally unique. Every mutation row must also have a ```Segment_ID``` that is not null, empty, or whitespace-only. By default, every mutation ```Segment_ID``` must be present in the copy number table, and ```Chromosome``` must match the corresponding copy number row. If ```--drop_unmatched_snvs``` is supplied, mutation rows whose ```Segment_ID``` is absent from the copy number table are instead dropped with a single warning reporting the number of unmatched SNVs. Missing or blank IDs and chromosome mismatches remain errors.
+
+Programmatic callers can enable the same behavior with ```drop_unmatched_snvs=True``` in ```dataloader.load_input_tables```, or in ```sampletools.Sample``` when constructing a sample directly from DataFrames.
 
 ### Copy Number Table 
 The rounded allele-specific copy number profile for the sample. Requires the column names ```Chromosome```, ```Segment_Start```, ```Segment_End```, ```Major_CN``` & ```Minor_CN```. ```Major_CN``` must be larger than or equal to ```Minor_CN```. ```Segment_ID``` is optional and it is only used when it is also present in the mutation table.

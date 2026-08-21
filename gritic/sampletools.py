@@ -222,7 +222,7 @@ class MultProbabilityStore:
 
 class Sample:
    
-    def __init__(self,mutation_table,cn_table,subclone_table,sample_id,purity,sex=None,merge_cn=True,apply_reads_correction=True):
+    def __init__(self,mutation_table,cn_table,subclone_table,sample_id,purity,sex=None,merge_cn=True,apply_reads_correction=True,drop_unmatched_snvs=False):
         
         self.chromosome_order  = list(map(str,range(1,23)))
         self.chromosome_order.extend(['X','Y'])
@@ -231,6 +231,7 @@ class Sample:
         assert sex in [None,'XX','XY']
         self.merge_cn = merge_cn
         self.apply_reads_correction = apply_reads_correction
+        self.drop_unmatched_snvs = drop_unmatched_snvs
         self.use_supplied_segment_ids = dataloader.validate_input_table_headers(
             cn_table.columns,
             mutation_table.columns,
@@ -242,7 +243,16 @@ class Sample:
         )
         self.supplied_segment_id_map = None
         if self.use_supplied_segment_ids:
-            dataloader.validate_supplied_segment_ids(cn_table, mutation_table)
+            dataloader.validate_supplied_segment_ids(
+                cn_table,
+                mutation_table,
+                allow_unmatched=self.drop_unmatched_snvs,
+            )
+            if self.drop_unmatched_snvs:
+                mutation_table = dataloader.drop_unmatched_segment_id_mutations(
+                    cn_table,
+                    mutation_table,
+                )
         self.copy_number_table = self.process_raw_copy_number_table(cn_table)
         self.mutation_table = self.process_raw_mutation_table(mutation_table,self.copy_number_table)
 

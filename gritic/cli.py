@@ -35,7 +35,7 @@ def build_parser():
         help=(
             'A tab separated file containing Chromosome, Tumor_Ref_Count, '
             'Tumor_Alt_Count and either Position or a Segment_ID column also '
-            'present in the copy number table'
+            'present in the copy number table.'
         ),
     )
     parser.add_argument(
@@ -60,6 +60,16 @@ def build_parser():
         help=(
             'The output directory. GRITIC stores sample output in '
             'OUTPUT/SAMPLE_ID.'
+        ),
+    )
+    parser.add_argument(
+        '--drop_unmatched_snvs',
+        action='store_true',
+        help=(
+            'Drop mutations whose Segment_ID is absent from the copy number '
+            'table and emit one warning with the number dropped. By default, '
+            'unmatched Segment_ID values raise an error. This option applies '
+            'only when both input tables contain Segment_ID.'
         ),
     )
     parser.add_argument(
@@ -112,6 +122,7 @@ def main(argv=None):
     copy_number_table, mutation_table = dataloader.load_input_tables(
         args.copy_number_table,
         args.mutation_table,
+        drop_unmatched_snvs=args.drop_unmatched_snvs,
     )
     subclone_table = (
         None
@@ -126,6 +137,7 @@ def main(argv=None):
         args.sample_id,
         args.purity,
         sex=args.sample_sex,
+        drop_unmatched_snvs=args.drop_unmatched_snvs,
     )
     gritictimer.process_sample(
         sample,
