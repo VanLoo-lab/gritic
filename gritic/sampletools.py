@@ -317,6 +317,8 @@ class Sample:
         
         subclone_table = subclone_table.copy()
         subclone_table = dataloader.get_valid_subclones(subclone_table)
+        if subclone_table.empty:
+            return None
 
         
         subclone_table = dataloader.filter_excess_subclones(subclone_table)
