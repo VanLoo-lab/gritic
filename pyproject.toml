@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=77.0.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gritic"
+version = "0.0.10"
+description = "A module to time complex copy number gains in cancer genomes"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "AGPL-3.0-only"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Toby Baker", email = "tobybaker97@gmail.com" },
+]
+maintainers = [
+    { name = "Huw A. Ogilvie", email = "HAOgilvie@mdanderson.org" },
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "numpy",
+    "pandas",
+    "matplotlib",
+    "scipy",
+    "scikit-learn",
+    "networkx",
+    "numba",
+]
+
+[project.urls]
+Homepage = "https://github.com/VanLoo-lab/gritic"
+Download = "https://github.com/VanLoo-lab/gritic/archive/refs/tags/v0.0.10.tar.gz"
+
+[project.scripts]
+gritic = "gritic.cli:main"
+
+[tool.setuptools]
+packages = ["gritic"]
+include-package-data = false

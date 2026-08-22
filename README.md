@@ -9,7 +9,7 @@ GRITIC can be installed using pip
 ```
 pip install gritic
 ```
-Python 3.X is required.
+Python 3.10 or newer is required.
 ## Running
 The easiest way to run GRITIC on a single sample is with the ```gritic``` command installed by pip.
 ```
