@@ -5,17 +5,112 @@ import pickle
 import numpy as np
 import pandas as pd
 import warnings
-def apply_penalty_to_table(sample_table,prior_penalty):
- 
-    prior_table = sample_table[['Sample_ID','Segment_ID','Route','Average_N_Events','Probability']].copy().drop_duplicates()
-    n_vars = len(prior_table[['Sample_ID','Segment_ID']].drop_duplicates())
-    print(prior_table)
-    if n_vars >1:
-        prior_table['Probability'] = prior_table.groupby(['Sample_ID','Segment_ID'], group_keys=False).apply(lambda g: np.multiply(g.Probability,np.exp(-prior_penalty*g.Average_N_Events))/np.sum(np.multiply(g.Probability,np.exp(-prior_penalty*g.Average_N_Events))))
-    else:
-        prior_table['Probability'] = np.multiply(prior_table['Probability'].values,np.exp(-prior_penalty*prior_table['Average_N_Events'].values))/np.sum(np.multiply(prior_table['Probability'].values,np.exp(-prior_penalty*prior_table['Average_N_Events'].values)))
-    sample_table = sample_table.drop(columns=['Probability']).merge(prior_table,how='inner')
-    return sample_table.copy()
+
+
+NON_PARSIMONY_PENALTY_COEFFICIENT = 2.7
+ROUTE_KEY_COLUMNS = ['Sample_ID', 'Segment_ID', 'Route']
+
+
+def apply_non_parsimony_penalty(sample_table):
+    """Return a copy with route probabilities penalized and renormalized."""
+    required_columns = ROUTE_KEY_COLUMNS + [
+        'Average_N_Events',
+        'Probability',
+    ]
+    missing_columns = [
+        column for column in required_columns
+        if column not in sample_table.columns
+    ]
+    if missing_columns:
+        raise ValueError(
+            'Cannot apply the non-parsimony penalty because the gain timing '
+            f"table is missing columns: {', '.join(missing_columns)}"
+        )
+
+    route_table = sample_table[required_columns].drop_duplicates()
+    inconsistent_routes = route_table.duplicated(
+        subset=ROUTE_KEY_COLUMNS,
+        keep=False,
+    )
+    if inconsistent_routes.any():
+        inconsistent_keys = (
+            route_table.loc[inconsistent_routes, ROUTE_KEY_COLUMNS]
+            .drop_duplicates()
+            .astype(str)
+            .agg(':'.join, axis=1)
+            .tolist()
+        )
+        raise ValueError(
+            'Each route must have exactly one Probability and '
+            'Average_N_Events value; inconsistent routes: '
+            f"{', '.join(inconsistent_keys)}"
+        )
+
+    route_table = route_table.copy()
+    if route_table[ROUTE_KEY_COLUMNS].isnull().any().any():
+        raise ValueError(
+            'Sample_ID, Segment_ID, and Route must be present for every '
+            'gain timing table row'
+        )
+    route_table['Probability'] = pd.to_numeric(
+        route_table['Probability'],
+        errors='coerce',
+    )
+    route_table['Average_N_Events'] = pd.to_numeric(
+        route_table['Average_N_Events'],
+        errors='coerce',
+    )
+    if (route_table['Probability'] < 0).any():
+        raise ValueError('Route probabilities must be non-negative')
+    if (route_table['Average_N_Events'] < 0).any():
+        raise ValueError('Average_N_Events values must be non-negative')
+
+    route_table['_Route_Data_Valid'] = (
+        np.isfinite(route_table['Probability'])
+        & np.isfinite(route_table['Average_N_Events'])
+    )
+    group_columns = ['Sample_ID', 'Segment_ID']
+    route_table['_Segment_Data_Valid'] = route_table.groupby(
+        group_columns,
+        sort=False,
+    )['_Route_Data_Valid'].transform('all')
+    valid_routes = route_table['_Segment_Data_Valid']
+    route_table['_Penalized_Weight'] = np.nan
+    route_table.loc[valid_routes, '_Penalized_Weight'] = (
+        route_table.loc[valid_routes, 'Probability']
+        * np.exp(
+            -NON_PARSIMONY_PENALTY_COEFFICIENT
+            * route_table.loc[valid_routes, 'Average_N_Events']
+        )
+    )
+    normalizers = route_table.groupby(
+        group_columns,
+        sort=False,
+    )['_Penalized_Weight'].transform('sum')
+    valid_normalizers = (
+        route_table['_Segment_Data_Valid']
+        & np.isfinite(normalizers)
+        & (normalizers > 0)
+    )
+    route_table.loc[valid_normalizers, 'Probability'] = (
+        route_table.loc[valid_normalizers, '_Penalized_Weight']
+        / normalizers[valid_normalizers]
+    )
+    route_table.loc[~valid_normalizers, 'Probability'] = np.nan
+
+    probability_lookup = route_table.set_index(
+        ROUTE_KEY_COLUMNS
+    )['Probability']
+    row_route_keys = pd.MultiIndex.from_frame(
+        sample_table[ROUTE_KEY_COLUMNS]
+    )
+    penalized_probabilities = probability_lookup.reindex(
+        row_route_keys
+    ).to_numpy()
+    penalized_table = sample_table.copy()
+    penalized_table['Probability'] = penalized_probabilities
+    return penalized_table
+
 
 def load_route_table(path):
     read_cols = ['Sample_ID','Segment_ID','Route','Average_N_Events','Average_Pre_WGD_Losses','Average_Post_WGD_Losses','Probability','Chromosome','Segment_Start','Segment_End','Major_CN','Minor_CN','WGD_Status','N_Mutations']
@@ -68,11 +163,29 @@ def load_timing_from_dict(segment_path):
     timing_dict = pickle.load(input_file)
     input_file.close()
     return timing_dict
-def get_sample_posterior_table(sample_table_path,input_dir,sample_id:str,apply_penalty:bool,prior_penalty:float=2.7,n_posterior_samples:int=100):
+def get_sample_posterior_table(
+    sample_table_path,
+    input_dir,
+    sample_id: str,
+    n_posterior_samples: int = 100,
+    apply_penalty: bool = False,
+):
 
-    sample_table = pd.read_csv(sample_table_path,sep='\t',dtype={'Chromosome':str})
+    if not isinstance(apply_penalty, (bool, np.bool_)):
+        raise ValueError('apply_penalty must be a boolean')
+
+    sample_table = pd.read_csv(
+        sample_table_path,
+        sep='\t',
+        dtype={'Chromosome': str},
+        converters={
+            'Sample_ID': str,
+            'Segment_ID': str,
+            'Route': str,
+        },
+    )
     if apply_penalty:
-        sample_table = apply_penalty_to_table(sample_table,prior_penalty)
+        sample_table = apply_non_parsimony_penalty(sample_table)
     full_segment_table = sample_table[['Segment_ID','Chromosome','Segment_Start','Segment_End','Major_CN','Minor_CN','N_Mutations']].drop_duplicates()
     node_table = sample_table[['Route','Node','Node_Phasing','Major_CN','Minor_CN','WGD_Status']].drop_duplicates()
 
@@ -98,6 +211,8 @@ def get_sample_posterior_table(sample_table_path,input_dir,sample_id:str,apply_p
             warnings.warn(f'WARNING {segment_id} has NAs in probability, skipping in posterior.')
             continue
         segment_frames.append(segment_frame)
+    if not segment_frames:
+        return pd.DataFrame()
     segment_frame = pd.concat(segment_frames)
     segment_frame = pd.merge(full_segment_table,segment_frame,on=['Segment_ID'],how='inner')
     segment_frame = pd.merge(segment_frame,node_table,how='inner')

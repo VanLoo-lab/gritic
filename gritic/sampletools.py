@@ -1,4 +1,7 @@
 import warnings
+import unicodedata
+from numbers import Integral, Real
+
 import numpy as np
 import pandas as pd
 from scipy.stats import binom
@@ -8,8 +11,142 @@ from numba import njit,prange
 import time
 import gritic.multiplicityoptimiser as multiplicityoptimiser
 import gritic.dataloader as dataloader
+
+
+DEFAULT_MIN_MUTATION_ALT_COUNT = 3
+DEFAULT_MIN_MUTATION_COVERAGE = 10
+DEFAULT_MAX_SUBCLONE_CCF = 0.9
+DEFAULT_MIN_SUBCLONE_FRACTION = 0.1
+DEFAULT_AUTOSOME_COUNT = 22
+
+_WINDOWS_FORBIDDEN_FILENAME_CHARACTERS = frozenset('<>:"/\\|?*')
+_WINDOWS_RESERVED_DEVICE_NAMES = frozenset({
+    'CON',
+    'PRN',
+    'AUX',
+    'NUL',
+    'CLOCK$',
+    'CONIN$',
+    'CONOUT$',
+    *(f'COM{number}' for number in range(1, 10)),
+    *(f'LPT{number}' for number in range(1, 10)),
+    'COM¹',
+    'COM²',
+    'COM³',
+    'LPT¹',
+    'LPT²',
+    'LPT³',
+})
+_MAX_PATH_COMPONENT_UNITS = 255
+_LONGEST_SAMPLE_ID_OUTPUT_SUFFIX = (
+    '_posterior_timing_table_summary_penalty_False.tsv'
+)
+
+
+def _validate_non_negative_integer(value, parameter_name):
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, Integral)
+        or value < 0
+    ):
+        raise ValueError(f'{parameter_name} must be a non-negative integer')
+    return int(value)
+
+
+def _validate_unit_interval_number(value, parameter_name):
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, Real)
+        or not np.isfinite(value)
+        or not 0 <= value <= 1
+    ):
+        raise ValueError(
+            f'{parameter_name} must be a finite number between 0 and 1'
+        )
+    return float(value)
+
+
+def validate_purity(value):
+    """Return a finite purity in the biologically meaningful ``(0, 1]``."""
+    return dataloader.validate_purity(value)
+
+
+def get_normal_total_copy_number(chromosome, sex):
+    """Return normal-cell copy number for an autosome or sex chromosome."""
+    return dataloader.get_normal_total_copy_number(chromosome, sex)
+
+
+def validate_sample_id(sample_id):
+    """Validate that ``sample_id`` is a portable filename component.
+
+    GRITIC uses the ID both as a directory name and as a filename prefix. The
+    accepted form is therefore one non-empty path component that is safe under
+    common POSIX and Windows filename rules. The ID must not be ``.`` or ``..``;
+    contain a path separator, a Windows-forbidden filename character, or a
+    Unicode control, format, or surrogate character; end in a dot or space; or
+    have a Windows device-name stem. Its longest derived GRITIC filename must
+    fit both the usual 255-byte POSIX component limit and the
+    255-UTF-16-code-unit Windows component limit. The value is validated, never
+    normalized or sanitized.
+    """
+    if not isinstance(sample_id, str):
+        raise ValueError('Sample_ID must be a string')
+    if not sample_id:
+        raise ValueError('Sample_ID must not be empty')
+    if sample_id in {'.', '..'}:
+        raise ValueError("Sample_ID must not be '.' or '..'")
+
+    forbidden_characters = sorted(
+        set(sample_id) & _WINDOWS_FORBIDDEN_FILENAME_CHARACTERS
+    )
+    if forbidden_characters:
+        raise ValueError(
+            'Sample_ID contains a path separator or Windows-forbidden '
+            f'filename character: {forbidden_characters[0]!r}'
+        )
+
+    for character in sample_id:
+        if unicodedata.category(character) in {'Cc', 'Cf', 'Cs'}:
+            raise ValueError(
+                'Sample_ID must not contain Unicode control, format, or '
+                'surrogate characters'
+            )
+
+    if sample_id.endswith(('.', ' ')):
+        raise ValueError('Sample_ID must not end in a dot or space')
+
+    # Windows reserves device names even when followed by an extension and
+    # ignores spaces immediately before that extension during device lookup.
+    device_stem = sample_id.partition('.')[0].rstrip(' ').upper()
+    if device_stem in _WINDOWS_RESERVED_DEVICE_NAMES:
+        raise ValueError(
+            f'Sample_ID uses a reserved Windows device name: {device_stem!r}'
+        )
+
+    derived_filename = sample_id + _LONGEST_SAMPLE_ID_OUTPUT_SUFFIX
+    try:
+        utf8_bytes = len(derived_filename.encode('utf-8'))
+        utf16_code_units = len(derived_filename.encode('utf-16-le')) // 2
+    except UnicodeEncodeError as error:
+        raise ValueError('Sample_ID must contain valid Unicode text') from error
+    if (
+        utf8_bytes > _MAX_PATH_COMPONENT_UNITS
+        or utf16_code_units > _MAX_PATH_COMPONENT_UNITS
+    ):
+        raise ValueError(
+            'Sample_ID is too long: GRITIC-derived filenames must be at most '
+            f'{_MAX_PATH_COMPONENT_UNITS} UTF-8 bytes and UTF-16 code units'
+        )
+
+    return sample_id
+
+
 def get_major_cn_mode_from_cn_table(cn_table):
-    cn_table['Segment_Width'] = cn_table['Segment_End']-cn_table['Segment_Start']
+    cn_table = dataloader.validate_segment_coordinates(cn_table)
+    cn_table = dataloader.validate_non_overlapping_segments(cn_table)
+    cn_table['Segment_Width'] = (
+        dataloader.get_segment_widths(cn_table)
+    )
     major_cn_widths = cn_table.groupby('Major_CN').agg({'Segment_Width':'sum'})
     max_width = major_cn_widths['Segment_Width'].max()
 
@@ -18,6 +155,19 @@ def get_major_cn_mode_from_cn_table(cn_table):
 
 def get_major_cn_mode(sample):
     cn_table = sample.cn_table.copy()
+    normalized_chromosomes = (
+        cn_table['Chromosome']
+        .astype(str)
+        .str.replace(r'^chr', '', regex=True)
+    )
+    cn_table = cn_table.loc[
+        normalized_chromosomes.isin(sample.autosomes)
+    ].copy()
+    if cn_table.empty:
+        raise ValueError(
+            'Cannot infer WGD status because the copy number table contains '
+            'no segments on the configured numbered autosomes'
+        )
     return get_major_cn_mode_from_cn_table(cn_table)
 
 @njit(parallel=True)                           
@@ -222,31 +372,94 @@ class MultProbabilityStore:
 
 class Sample:
    
-    def __init__(self,mutation_table,cn_table,subclone_table,sample_id,purity,sex=None,merge_cn=True,apply_reads_correction=True,drop_unmatched_snvs=False):
-        
-        self.chromosome_order  = list(map(str,range(1,23)))
-        self.chromosome_order.extend(['X','Y'])
-        self.sample_id = sample_id
-        self.purity = purity
-        assert sex in [None,'XX','XY']
+    def __init__(
+        self,
+        mutation_table,
+        cn_table,
+        subclone_table,
+        sample_id,
+        purity,
+        sex=None,
+        merge_cn=False,
+        apply_reads_correction=True,
+        drop_unmatched_snvs=False,
+        drop_unmatched_chromosomes=False,
+        min_mutation_alt_count=DEFAULT_MIN_MUTATION_ALT_COUNT,
+        min_mutation_coverage=DEFAULT_MIN_MUTATION_COVERAGE,
+        max_subclone_ccf=DEFAULT_MAX_SUBCLONE_CCF,
+        min_subclone_fraction=DEFAULT_MIN_SUBCLONE_FRACTION,
+        autosome_count=DEFAULT_AUTOSOME_COUNT,
+    ):
+
+        self.sample_id = validate_sample_id(sample_id)
+        self.purity = validate_purity(purity)
+        sex = dataloader.validate_sex_karyotype(sex)
+        self.autosome_count = dataloader.validate_autosome_count(
+            autosome_count,
+        )
+        self.autosomes = dataloader.get_autosome_labels(self.autosome_count)
         self.merge_cn = merge_cn
         self.apply_reads_correction = apply_reads_correction
         self.drop_unmatched_snvs = drop_unmatched_snvs
+        self.drop_unmatched_chromosomes = drop_unmatched_chromosomes
+        self.min_mutation_alt_count = _validate_non_negative_integer(
+            min_mutation_alt_count,
+            'min_mutation_alt_count',
+        )
+        self.min_mutation_coverage = _validate_non_negative_integer(
+            min_mutation_coverage,
+            'min_mutation_coverage',
+        )
+        self.max_subclone_ccf = _validate_unit_interval_number(
+            max_subclone_ccf,
+            'max_subclone_ccf',
+        )
+        self.min_subclone_fraction = _validate_unit_interval_number(
+            min_subclone_fraction,
+            'min_subclone_fraction',
+        )
         self.use_supplied_segment_ids = dataloader.validate_input_table_headers(
             cn_table.columns,
             mutation_table.columns,
         )
-        self.sex = (
-            dataloader.infer_sex_from_copy_number_table(cn_table)
-            if sex is None
-            else sex
+        cn_table, mutation_table, self.sex = (
+            dataloader.validate_or_drop_input_chromosomes(
+                cn_table,
+                mutation_table,
+                self.autosome_count,
+                sex,
+                drop_unmatched_chromosomes=(
+                    self.drop_unmatched_chromosomes
+                ),
+            )
         )
+        self.chromosome_order = list(self.autosomes)
+        self.chromosome_order.extend(
+            dataloader.SEX_CHROMOSOME_PAIR[self.sex]
+        )
+        cn_table = dataloader.validate_segment_coordinates(cn_table)
+        cn_table = dataloader.validate_non_overlapping_segments(cn_table)
+        if 'Position' in mutation_table.columns:
+            mutation_table = mutation_table.copy()
+            mutation_table['Position'] = (
+                dataloader.parse_positions(
+                    mutation_table['Position']
+                )
+            )
+        mutation_table = dataloader.validate_mutation_read_counts(
+            mutation_table
+        )
+        cn_table = dataloader.validate_copy_number_values(cn_table)
         self.supplied_segment_id_map = None
         if self.use_supplied_segment_ids:
             dataloader.validate_supplied_segment_ids(
                 cn_table,
                 mutation_table,
                 allow_unmatched=self.drop_unmatched_snvs,
+            )
+            dataloader.validate_source_scoped_mutation_components(
+                mutation_table['Segment_ID'],
+                dataloader.get_gritic_mutation_id_components(mutation_table),
             )
             if self.drop_unmatched_snvs:
                 mutation_table = dataloader.drop_unmatched_segment_id_mutations(
@@ -256,17 +469,34 @@ class Sample:
         self.copy_number_table = self.process_raw_copy_number_table(cn_table)
         self.mutation_table = self.process_raw_mutation_table(mutation_table,self.copy_number_table)
 
-        self.cn_table = cn_table
+        self.cn_table = cn_table.copy()
         self.n_snvs = len(self.mutation_table.index)
         self.subclone_table = self.format_subclone_table(subclone_table)
         self.segments = self.get_segments()
-    
+
     def process_raw_mutation_table(self,mutation_table,cn_table):
         mutation_table = mutation_table.copy()
         
-        mutation_table['Chromosome'] = mutation_table['Chromosome'].str.replace('chr','')
+        mutation_table['Chromosome'] = (
+            mutation_table['Chromosome'].str.replace(
+                r'^chr', '', regex=True
+            )
+        )
+        gritic_id_components = dataloader.get_gritic_mutation_id_components(
+            mutation_table
+        )
+        mutation_table['_GRITIC_Mutation_ID_Component'] = gritic_id_components
+        if 'Mutation_ID' in mutation_table.columns:
+            mutation_table['Mutation_ID'] = gritic_id_components
+        else:
+            mutation_table['Mutation_ID'] = pd.NA
+        if 'Position' not in mutation_table.columns:
+            mutation_table['Position'] = pd.NA
 
         if self.use_supplied_segment_ids:
+            mutation_table['Source_Segment_ID'] = (
+                mutation_table['Segment_ID'].astype(str)
+            )
             mutation_table['Segment_ID'] = (
                 mutation_table['Segment_ID'].astype(str).map(
                     self.supplied_segment_id_map
@@ -277,6 +507,24 @@ class Sample:
             mutation_table,
             cn_table,
             use_supplied_segment_ids=self.use_supplied_segment_ids,
+            drop_unmatched_snvs=self.drop_unmatched_snvs,
+        )
+        if not self.use_supplied_segment_ids:
+            mutation_table['Source_Segment_ID'] = (
+                mutation_table['Segment_ID'].astype(str)
+            )
+        gritic_id_components = mutation_table.pop(
+            '_GRITIC_Mutation_ID_Component'
+        )
+        dataloader.validate_source_scoped_mutation_components(
+            mutation_table['Source_Segment_ID'],
+            gritic_id_components,
+        )
+        mutation_table['GRITIC_Mutation_ID'] = (
+            dataloader.generate_gritic_mutation_ids(
+                mutation_table['Source_Segment_ID'],
+                gritic_id_components,
+            )
         )
        
         mutation_table = self.filter_mutation_table(mutation_table)
@@ -288,7 +536,9 @@ class Sample:
         return mutation_table
     def process_raw_copy_number_table(self,cn_table):
         cn_table = cn_table.copy()
-        cn_table['Chromosome'] = cn_table['Chromosome'].str.replace('chr','')
+        cn_table['Chromosome'] = cn_table['Chromosome'].str.replace(
+            r'^chr', '', regex=True
+        )
         if self.merge_cn:
             if self.use_supplied_segment_ids:
                 cn_table, self.supplied_segment_id_map = (
@@ -315,25 +565,51 @@ class Sample:
         if subclone_table is None:
             return None
         
-        subclone_table = subclone_table.copy()
-        subclone_table = dataloader.get_valid_subclones(subclone_table)
+        subclone_table = dataloader.validate_subclone_values(subclone_table)
+        subclone_table = dataloader.get_valid_subclones(
+            subclone_table,
+            max_ccf=self.max_subclone_ccf,
+            min_fraction=self.min_subclone_fraction,
+        )
         if subclone_table.empty:
             return None
 
         
         subclone_table = dataloader.filter_excess_subclones(subclone_table)
-        if not 'N_SNVs' in list(subclone_table.columns):
-            n_snvs = np.round(len(self.mutation_table.index)*subclone_table['Subclone_Fraction']).astype(int)
-            subclone_table['N_SNVs'] = n_snvs
+        n_snvs = np.round(
+            len(self.mutation_table.index)
+            * subclone_table['Subclone_Fraction']
+        ).astype(int)
+        subclone_table['N_SNVs'] = n_snvs
         return subclone_table
     
     def format_mutation_table(self,mutation_table):
+        mutation_table = mutation_table.reset_index(drop=True)
         if 'Phasing' not in mutation_table.columns:
             mutation_table['Phasing'] = np.nan
         if 'Context' not in mutation_table.columns:
             mutation_table['Context'] = np.nan
+        canonical_order = mutation_table.sort_values(
+            ['Segment_ID', 'GRITIC_Mutation_ID'],
+            kind='mergesort',
+        )
+        canonical_indices = canonical_order.groupby(
+            'Segment_ID',
+            sort=False,
+        ).cumcount()
+        mutation_table.loc[
+            canonical_order.index,
+            'Segment_Mutation_Index',
+        ] = canonical_indices.to_numpy()
+        mutation_table['Segment_Mutation_Index'] = mutation_table[
+            'Segment_Mutation_Index'
+        ].astype(np.int64)
         mutation_columns = [
             'Segment_ID',
+            'Source_Segment_ID',
+            'Mutation_ID',
+            'GRITIC_Mutation_ID',
+            'Segment_Mutation_Index',
             'Chromosome',
             'Segment_Start',
             'Segment_End',
@@ -342,25 +618,42 @@ class Sample:
             'Total_CN',
             'Tumor_Ref_Count',
             'Tumor_Alt_Count',
+            'Position',
         ]
-        if 'Position' in mutation_table.columns:
-            mutation_columns.append('Position')
         mutation_columns.extend(['Phasing','Context'])
         mutation_table = mutation_table[mutation_columns].copy()
         mutation_table['Chromosome'] = mutation_table['Chromosome'].astype(str)
         mutation_table["Gain_Type"] = mutation_table["Major_CN"].astype(str)+ "_"+ mutation_table["Minor_CN"].astype(str)
         return mutation_table
     
-    def filter_mutation_table(self,mutation_table,min_alt_count=3,min_coverage=10):
+    def filter_mutation_table(self,mutation_table):
         if mutation_table['Tumor_Alt_Count'].min() > 10:
-            warnings.warn("There are no mutations with less than 10 alt reads. This may indicate a higher threshold for mutation calling than the default of 3 alt reads assumed by GRITIC")
+            warnings.warn(
+                'There are no mutations with less than 10 alt reads. This '
+                'may indicate a higher threshold for mutation calling than '
+                'the minimum alternate-read count configured for GRITIC '
+                f'({self.min_mutation_alt_count})'
+            )
         if len(mutation_table.index) ==0:
             raise ValueError("There are no mutations in the mutation table. Please check the mutation table is formatted correctly")
         mutation_table['Total_Count'] = mutation_table['Tumor_Ref_Count']+mutation_table['Tumor_Alt_Count']
         
 
-        mutation_table = mutation_table[mutation_table['Tumor_Alt_Count']>=min_alt_count]
-        mutation_table = mutation_table[(mutation_table['Tumor_Ref_Count']+mutation_table['Tumor_Alt_Count'])>=min_coverage]
+        mutation_table = mutation_table[
+            mutation_table['Tumor_Alt_Count']
+            >= self.min_mutation_alt_count
+        ]
+        mutation_table = mutation_table[
+            (
+                mutation_table['Tumor_Ref_Count']
+                + mutation_table['Tumor_Alt_Count']
+            ) >= self.min_mutation_coverage
+        ]
+        if mutation_table.empty:
+            raise ValueError(
+                'No mutations remain after applying the configured minimum '
+                'alternate-read count and coverage thresholds'
+            )
         
         return mutation_table
     
@@ -368,7 +661,14 @@ class Sample:
         segments = []
         for segment_id,segment_table in self.mutation_table.groupby('Segment_ID'):
             if len(segment_table.index) >= min_mutations:
-                segment = Segment(segment_table,self.subclone_table,self.purity,self.sex,apply_reads_correction=self.apply_reads_correction)
+                segment = Segment(
+                    segment_table,
+                    self.subclone_table,
+                    self.purity,
+                    self.sex,
+                    apply_reads_correction=self.apply_reads_correction,
+                    min_mutation_alt_count=self.min_mutation_alt_count,
+                )
                 segments.append(segment)
         return segments
     
@@ -397,16 +697,37 @@ class Sample:
 
 class Segment:
     
-    def __init__(self,mutation_table,subclone_table,purity,sex,apply_reads_correction=True):
-        self.mutation_table = mutation_table
+    def __init__(
+        self,
+        mutation_table,
+        subclone_table,
+        purity,
+        sex,
+        apply_reads_correction=True,
+        min_mutation_alt_count=DEFAULT_MIN_MUTATION_ALT_COUNT,
+    ):
+        self.mutation_table = dataloader.validate_mutation_read_counts(
+            mutation_table
+        )
+        self.mutation_table = dataloader.validate_segment_coordinates(
+            self.mutation_table
+        )
         self.n_snvs = len(mutation_table.index)
         self.n_mutations = len(self.mutation_table.index)
-        self.subclone_table = subclone_table
+        self.subclone_table = (
+            None
+            if subclone_table is None
+            else dataloader.validate_subclone_values(subclone_table)
+        )
         self.sex = sex
+        self.min_mutation_alt_count = _validate_non_negative_integer(
+            min_mutation_alt_count,
+            'min_mutation_alt_count',
+        )
         self.sample_clone_fractions = self.get_sample_clone_fractions()
         self.n_subclones = self.get_n_subclones()
         self.apply_reads_correction = apply_reads_correction
-        self.purity = purity
+        self.purity = validate_purity(purity)
 
         self.segment_id = self.get_unique_attribute_from_table('Segment_ID')
 
@@ -424,7 +745,7 @@ class Segment:
         self.chromosome = self.get_unique_attribute_from_table('Chromosome')
         self.start = self.get_unique_attribute_from_table('Segment_Start')
         self.end = self.get_unique_attribute_from_table('Segment_End')
-        self.width = self.end - self.start
+        self.width = int(self.end) - int(self.start)
         
         self.timeable = False
         self.in_wgd_range = False
@@ -490,13 +811,28 @@ class Segment:
     
     def assign_multiplicity_probabilities(self):
         #remove mult cols if they already exist
-        mult_cols = [col for col in self.mutation_table.columns if 'Prob_' in col or 'Three_Reads_Correction_' in col]
+        mult_cols = [
+            col
+            for col in self.mutation_table.columns
+            if 'Prob_' in col or 'Alt_Count_Correction_' in col
+        ]
         self.mutation_table = self.mutation_table.drop(columns=mult_cols)
-        if 'X' in set(self.mutation_table['Chromosome'].unique()) or 'Y' in set(self.mutation_table['Chromosome'].unique()):
-            assert self.sex is not None
-        normal_total_cn = self.mutation_table['Chromosome'].map(lambda x: 1 if (x =='Y') or (x=='X' and self.sex=='XY') else 2)
+        represented_sex_chromosomes = (
+            set(self.mutation_table['Chromosome'].unique())
+            & {'X', 'Y', 'Z', 'W'}
+        )
+        if represented_sex_chromosomes and self.sex is None:
+            raise ValueError(
+                'sex must be specified when timing sex-chromosome segments'
+            )
+        normal_total_cn = self.mutation_table['Chromosome'].map(
+            lambda chromosome: get_normal_total_copy_number(
+                chromosome,
+                self.sex,
+            )
+        )
         
-        three_reads_correction_factors = []
+        alt_count_correction_factors = []
         multiplicity_probabilities = []
 
         mult_one_vaf = self.purity / (self.total_cn* self.purity + normal_total_cn * (1 - self.purity))
@@ -520,11 +856,22 @@ class Segment:
             mult_probability = binom.logpmf(self.mutation_table["Tumor_Alt_Count"],total_counts,mult_vaf)
             multiplicity_probabilities.append(mult_probability)
 
-            three_reads_correction_factor = 1- binom.cdf(2,np.random.poisson(highest_vaf_average_coverage,size=mult_vaf.size),mult_vaf)
-            three_reads_correction_factors.append(three_reads_correction_factor)
+            alt_count_correction_factor = 1 - binom.cdf(
+                self.min_mutation_alt_count - 1,
+                np.random.poisson(
+                    highest_vaf_average_coverage,
+                    size=mult_vaf.size,
+                ),
+                mult_vaf,
+            )
+            alt_count_correction_factors.append(
+                alt_count_correction_factor
+            )
 
         multiplicity_probabilities = np.array(multiplicity_probabilities)
-        three_reads_correction_factors = np.array(three_reads_correction_factors)
+        alt_count_correction_factors = np.array(
+            alt_count_correction_factors
+        )
         
         multiplicity_probabilities = np.exp(multiplicity_probabilities-np.max(multiplicity_probabilities,axis=0))
         
@@ -536,7 +883,9 @@ class Segment:
         new_cols = {}
         for index, peak_name in enumerate(peak_names):
             new_cols[f"Prob_{peak_name}"] = multiplicity_probabilities[index, :]
-            new_cols[f'Three_Reads_Correction_{peak_name}'] = three_reads_correction_factors[index,:]
+            new_cols[f'Alt_Count_Correction_{peak_name}'] = (
+                alt_count_correction_factors[index, :]
+            )
         new_cols_table = pd.DataFrame(new_cols,index=self.mutation_table.index)
         self.mutation_table = pd.concat((self.mutation_table,new_cols_table),axis=1)
         
@@ -546,8 +895,14 @@ class Segment:
             clonal_multiplicities = np.arange(1,self.minor_cn+1)
         else:
             clonal_multiplicities = np.arange(1,self.major_cn+1)
-        mult_names = [f"Three_Reads_Correction_Mult_{mult}" for mult in clonal_multiplicities]
-        mult_names.extend([f"Three_Reads_Correction_Subclone_{subclone}" for subclone in range(self.n_subclones)])
+        mult_names = [
+            f"Alt_Count_Correction_Mult_{mult}"
+            for mult in clonal_multiplicities
+        ]
+        mult_names.extend([
+            f"Alt_Count_Correction_Subclone_{subclone}"
+            for subclone in range(self.n_subclones)
+        ])
  
         reads_correction = self.mutation_table[mult_names].to_numpy()
 
