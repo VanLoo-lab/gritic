@@ -8,7 +8,6 @@ from scipy.stats import binom
 
 from numba import njit,prange
 
-import time
 import gritic.multiplicityoptimiser as multiplicityoptimiser
 import gritic.dataloader as dataloader
 
@@ -18,6 +17,8 @@ DEFAULT_MIN_MUTATION_COVERAGE = 10
 DEFAULT_MAX_SUBCLONE_CCF = 0.9
 DEFAULT_MIN_SUBCLONE_FRACTION = 0.1
 DEFAULT_AUTOSOME_COUNT = 22
+
+_VALIDATED_INPUT_TABLES = object()
 
 _WINDOWS_FORBIDDEN_FILENAME_CHARACTERS = frozenset('<>:"/\\|?*')
 _WINDOWS_RESERVED_DEVICE_NAMES = frozenset({
@@ -141,16 +142,16 @@ def validate_sample_id(sample_id):
     return sample_id
 
 
-def get_major_cn_mode_from_cn_table(cn_table):
-    cn_table = dataloader.validate_segment_coordinates(cn_table)
-    cn_table = dataloader.validate_non_overlapping_segments(cn_table)
+def get_major_cn_mode_from_cn_table(cn_table, *, _validated=False):
+    if _validated:
+        cn_table = cn_table.copy()
+    else:
+        cn_table = dataloader.validate_segment_coordinates(cn_table)
+        cn_table = dataloader.validate_non_overlapping_segments(cn_table)
     cn_table['Segment_Width'] = (
         dataloader.get_segment_widths(cn_table)
     )
-    major_cn_widths = cn_table.groupby('Major_CN').agg({'Segment_Width':'sum'})
-    max_width = major_cn_widths['Segment_Width'].max()
-
-    major_cn_mode = major_cn_widths[major_cn_widths['Segment_Width']==max_width].index[0]
+    major_cn_mode = cn_table.groupby('Major_CN')['Segment_Width'].sum().idxmax()
     return major_cn_mode
 
 def get_major_cn_mode(sample):
@@ -168,7 +169,7 @@ def get_major_cn_mode(sample):
             'Cannot infer WGD status because the copy number table contains '
             'no segments on the configured numbered autosomes'
         )
-    return get_major_cn_mode_from_cn_table(cn_table)
+    return get_major_cn_mode_from_cn_table(cn_table, _validated=True)
 
 @njit(parallel=True)                           
 def log_likelihood_numba_parallel(mult_array,mult_states):
@@ -182,20 +183,6 @@ def log_likelihood_numba_parallel(mult_array,mult_states):
         log_likelihood = np.sum(np.log(log_likelihood + 2.2e-300))
         log_likelihood_store[i] = log_likelihood
     return log_likelihood_store
-
-@njit                           
-def log_likelihood_numba(mult_array,mult_states):
-    log_likelihood_store = np.zeros(mult_states.shape[0])                                  
-    for i in range(mult_states.shape[0]):
-        mult_state = mult_states[i]
-        mult_state = np.clip(mult_state,0.0,1.0)
-        log_likelihood = np.multiply(mult_state, mult_array)
-    
-        log_likelihood = np.sum(log_likelihood, axis=1)
-        log_likelihood = np.sum(np.log(log_likelihood + 2.2e-300))
-        log_likelihood_store[i] = log_likelihood
-    return log_likelihood_store
-
 
 @njit  
 def evaluate_likelihood_array_numba(full_states,non_phased_array,reads_correction_array,tolerance=1e-8):
@@ -212,25 +199,6 @@ def evaluate_likelihood_array_numba(full_states,non_phased_array,reads_correctio
     likelihood_array = log_likelihood_numba_parallel(non_phased_array,full_states)
 
     return likelihood_array
-
-'''@njit 
-def evaluate_likelihood_array_one_subclone_numba(clonal_states,non_phased_array,reads_correction_array,n_subclone_points=25):
-      ll_store = np.zeros(clonal_states.shape[0])
-      for index in range(clonal_states.shape[0]):
-        clonal_state = clonal_states[index]
-        subclonal_share = np.linspace(0,1,n_subclone_points)
-        
-        mult_states = np.zeros((n_subclone_points,clonal_state.size+1))
-        for i in range(mult_states.shape[0]):
-          mult_states[i,0:clonal_state.size] = clonal_state*(1-subclonal_share[i])
-          mult_states[i,-1] = subclonal_share[i]
-    
-       
-        likelihood_array = evaluate_likelihood_array_numba(mult_states,non_phased_array,reads_correction_array)
-        exponential_constant = np.max(likelihood_array)
-        ll_sum = np.log(np.sum(np.exp(likelihood_array-exponential_constant)))+exponential_constant
-        ll_store[index] = ll_sum
-      return ll_store'''
 
 class MultProbabilityStore:
     def __init__(self,mult_array_store,reads_correction_store,major_cn,minor_cn,n_subclones):
@@ -271,9 +239,6 @@ class MultProbabilityStore:
         self.minor_cn = minor_cn
         self.n_subclones = n_subclones
     
-    def sample_array(self,array):
-        return array[np.random.choice(array.shape[0],size=array.shape[0],replace=True),:]
-    
     def __str__(self):
         return str(np.average(self.non_phased_array,axis=0))
     
@@ -296,29 +261,6 @@ class MultProbabilityStore:
         weights = np.array(weights)
         weights = weights/np.sum(weights)
         return np.average(arrays,axis=0,weights=weights)
-    def sample(self):
-        non_phased_array = self.sample_array(self.non_phased_array)
-        major_array = self.sample_array(self.major_array)
-        minor_array = self.sample_array(self.minor_array)
-        return MultProbabilityStore(non_phased_array,major_array,minor_array,self.major_cn,self.minor_cn,self.n_subclones)
-
-    def array_log_likelihood(self,clonal_mult_state,subclonal_mult_state,mult_array):
-
-        if mult_array.shape[0] ==1 and np.isclose(np.sum(mult_array),0):
-            return 0
-        if not np.isclose(np.sum(clonal_mult_state),0):
-            clonal_mult_state = clonal_mult_state/np.sum(clonal_mult_state)
-        mult_state = np.concatenate((clonal_mult_state,subclonal_mult_state))
-        mult_state = np.clip(mult_state,0.0,1.0)
-        mult_state = mult_state/np.sum(mult_state)
-        
-        log_likelihood = np.multiply(mult_state, mult_array)
-        
-        log_likelihood = np.sum(log_likelihood, axis=1)
-        log_likelihood = np.sum(np.log(log_likelihood + 2.2e-300))
-
-        return log_likelihood
-    
 
     def array_likelihood(self,mult_state,array):
         likelihood = np.multiply(mult_state, array)
@@ -335,7 +277,6 @@ class MultProbabilityStore:
         return log_likelihood
     
     def evaluate_likelihood_array(self,full_states):
-        start_time = time.time()
         #to do - implement phasing
         #added three reads correction
         subclonal_indicies = np.arange(full_states.shape[1]-self.n_subclones,full_states.shape[1])
@@ -371,6 +312,14 @@ class MultProbabilityStore:
     
 
 class Sample:
+
+    @classmethod
+    def _from_validated_input_tables(cls, *args, **kwargs):
+        return cls(
+            *args,
+            **kwargs,
+            _validation_token=_VALIDATED_INPUT_TABLES,
+        )
    
     def __init__(
         self,
@@ -389,6 +338,8 @@ class Sample:
         max_subclone_ccf=DEFAULT_MAX_SUBCLONE_CCF,
         min_subclone_fraction=DEFAULT_MIN_SUBCLONE_FRACTION,
         autosome_count=DEFAULT_AUTOSOME_COUNT,
+        *,
+        _validation_token=None,
     ):
 
         self.sample_id = validate_sample_id(sample_id)
@@ -418,63 +369,100 @@ class Sample:
             min_subclone_fraction,
             'min_subclone_fraction',
         )
-        self.use_supplied_segment_ids = dataloader.validate_input_table_headers(
-            cn_table.columns,
-            mutation_table.columns,
+        if (
+            _validation_token is not None
+            and _validation_token is not _VALIDATED_INPUT_TABLES
+        ):
+            raise ValueError('_validation_token is reserved for internal use')
+        input_tables_validated = (
+            _validation_token is _VALIDATED_INPUT_TABLES
         )
-        cn_table, mutation_table, self.sex = (
-            dataloader.validate_or_drop_input_chromosomes(
-                cn_table,
-                mutation_table,
-                self.autosome_count,
-                sex,
-                drop_unmatched_chromosomes=(
-                    self.drop_unmatched_chromosomes
-                ),
+        self.supplied_segment_id_map = None
+        if input_tables_validated:
+            self.use_supplied_segment_ids = (
+                'Segment_ID' in cn_table.columns
+                and 'Segment_ID' in mutation_table.columns
             )
-        )
+            self.sex = (
+                dataloader.infer_sex_from_copy_number_table(cn_table)
+                if sex is None
+                else sex
+            )
+            cn_table = cn_table.copy()
+            mutation_table = mutation_table.copy()
+        else:
+            self.use_supplied_segment_ids = (
+                dataloader.validate_input_table_headers(
+                    cn_table.columns,
+                    mutation_table.columns,
+                )
+            )
+            cn_table, mutation_table, self.sex = (
+                dataloader.validate_or_drop_input_chromosomes(
+                    cn_table,
+                    mutation_table,
+                    self.autosome_count,
+                    sex,
+                    drop_unmatched_chromosomes=(
+                        self.drop_unmatched_chromosomes
+                    ),
+                )
+            )
+            cn_table = dataloader.validate_segment_coordinates(cn_table)
+            cn_table = dataloader.validate_non_overlapping_segments(cn_table)
+            if 'Position' in mutation_table.columns:
+                mutation_table = mutation_table.copy()
+                mutation_table['Position'] = dataloader.parse_positions(
+                    mutation_table['Position']
+                )
+            mutation_table = dataloader.validate_mutation_read_counts(
+                mutation_table
+            )
+            cn_table = dataloader.validate_copy_number_values(cn_table)
+            if self.use_supplied_segment_ids:
+                dataloader.validate_supplied_segment_ids(
+                    cn_table,
+                    mutation_table,
+                    allow_unmatched=self.drop_unmatched_snvs,
+                )
+                dataloader.validate_source_scoped_mutation_components(
+                    mutation_table['Segment_ID'],
+                    dataloader.get_gritic_mutation_id_components(
+                        mutation_table
+                    ),
+                )
+                if self.drop_unmatched_snvs:
+                    mutation_table = (
+                        dataloader.drop_unmatched_segment_id_mutations(
+                            cn_table,
+                            mutation_table,
+                        )
+                    )
         self.chromosome_order = list(self.autosomes)
         self.chromosome_order.extend(
             dataloader.SEX_CHROMOSOME_PAIR[self.sex]
         )
-        cn_table = dataloader.validate_segment_coordinates(cn_table)
-        cn_table = dataloader.validate_non_overlapping_segments(cn_table)
-        if 'Position' in mutation_table.columns:
-            mutation_table = mutation_table.copy()
-            mutation_table['Position'] = (
-                dataloader.parse_positions(
-                    mutation_table['Position']
-                )
-            )
-        mutation_table = dataloader.validate_mutation_read_counts(
-            mutation_table
+        self.copy_number_table = self.process_raw_copy_number_table(
+            cn_table,
+            _validated=True,
         )
-        cn_table = dataloader.validate_copy_number_values(cn_table)
-        self.supplied_segment_id_map = None
-        if self.use_supplied_segment_ids:
-            dataloader.validate_supplied_segment_ids(
-                cn_table,
-                mutation_table,
-                allow_unmatched=self.drop_unmatched_snvs,
-            )
-            dataloader.validate_source_scoped_mutation_components(
-                mutation_table['Segment_ID'],
-                dataloader.get_gritic_mutation_id_components(mutation_table),
-            )
-            if self.drop_unmatched_snvs:
-                mutation_table = dataloader.drop_unmatched_segment_id_mutations(
-                    cn_table,
-                    mutation_table,
-                )
-        self.copy_number_table = self.process_raw_copy_number_table(cn_table)
-        self.mutation_table = self.process_raw_mutation_table(mutation_table,self.copy_number_table)
+        self.mutation_table = self.process_raw_mutation_table(
+            mutation_table,
+            self.copy_number_table,
+            _validated=True,
+        )
 
         self.cn_table = cn_table.copy()
-        self.n_snvs = len(self.mutation_table.index)
         self.subclone_table = self.format_subclone_table(subclone_table)
-        self.segments = self.get_segments()
+        self.segments = self.get_segments(_validated=True)
 
-    def process_raw_mutation_table(self,mutation_table,cn_table):
+    def process_raw_mutation_table(
+        self,
+        mutation_table,
+        cn_table,
+        *,
+        _validated=False,
+    ):
         mutation_table = mutation_table.copy()
         
         mutation_table['Chromosome'] = (
@@ -508,6 +496,7 @@ class Sample:
             cn_table,
             use_supplied_segment_ids=self.use_supplied_segment_ids,
             drop_unmatched_snvs=self.drop_unmatched_snvs,
+            _validated=_validated,
         )
         if not self.use_supplied_segment_ids:
             mutation_table['Source_Segment_ID'] = (
@@ -516,10 +505,11 @@ class Sample:
         gritic_id_components = mutation_table.pop(
             '_GRITIC_Mutation_ID_Component'
         )
-        dataloader.validate_source_scoped_mutation_components(
-            mutation_table['Source_Segment_ID'],
-            gritic_id_components,
-        )
+        if not (_validated and self.use_supplied_segment_ids):
+            dataloader.validate_source_scoped_mutation_components(
+                mutation_table['Source_Segment_ID'],
+                gritic_id_components,
+            )
         mutation_table['GRITIC_Mutation_ID'] = (
             dataloader.generate_gritic_mutation_ids(
                 mutation_table['Source_Segment_ID'],
@@ -534,7 +524,12 @@ class Sample:
 
         
         return mutation_table
-    def process_raw_copy_number_table(self,cn_table):
+    def process_raw_copy_number_table(
+        self,
+        cn_table,
+        *,
+        _validated=False,
+    ):
         cn_table = cn_table.copy()
         cn_table['Chromosome'] = cn_table['Chromosome'].str.replace(
             r'^chr', '', regex=True
@@ -545,10 +540,14 @@ class Sample:
                     dataloader.merge_segments(
                         cn_table,
                         return_segment_id_map=True,
+                        _validated=_validated,
                     )
                 )
             else:
-                cn_table = dataloader.merge_segments(cn_table)
+                cn_table = dataloader.merge_segments(
+                    cn_table,
+                    _validated=_validated,
+                )
         else:
             if self.use_supplied_segment_ids:
                 supplied_segment_ids = cn_table['Segment_ID'].astype(str)
@@ -581,7 +580,10 @@ class Sample:
             * subclone_table['Subclone_Fraction']
         ).astype(int)
         subclone_table['N_SNVs'] = n_snvs
-        return subclone_table
+        return subclone_table.loc[
+            :,
+            dataloader.SUBCLONE_OUTPUT_COLUMNS,
+        ].copy()
     
     def format_mutation_table(self,mutation_table):
         mutation_table = mutation_table.reset_index(drop=True)
@@ -657,9 +659,9 @@ class Sample:
         
         return mutation_table
     
-    def get_segments(self,min_mutations=0):
+    def get_segments(self,min_mutations=0, *, _validated=False):
         segments = []
-        for segment_id,segment_table in self.mutation_table.groupby('Segment_ID'):
+        for _,segment_table in self.mutation_table.groupby('Segment_ID'):
             if len(segment_table.index) >= min_mutations:
                 segment = Segment(
                     segment_table,
@@ -668,19 +670,10 @@ class Sample:
                     self.sex,
                     apply_reads_correction=self.apply_reads_correction,
                     min_mutation_alt_count=self.min_mutation_alt_count,
+                    _validated=_validated,
                 )
                 segments.append(segment)
         return segments
-    
-    def get_segments_with_copy_number(self,major_cn=None,minor_cn=None):
-        segments_with_copy_number = []
-        for segment in self.segments:
-            if major_cn is not None and segment.major_cn != major_cn:
-                continue
-            if minor_cn is not None and segment.minor_cn != minor_cn:
-                continue
-            segments_with_copy_number.append(segment)
-        return segments_with_copy_number
     
     def get_mutation_table(self):
         mutation_table = pd.concat([segment.mutation_table for segment in self.segments])
@@ -705,20 +698,27 @@ class Segment:
         sex,
         apply_reads_correction=True,
         min_mutation_alt_count=DEFAULT_MIN_MUTATION_ALT_COUNT,
+        *,
+        _validated=False,
     ):
-        self.mutation_table = dataloader.validate_mutation_read_counts(
-            mutation_table
-        )
-        self.mutation_table = dataloader.validate_segment_coordinates(
-            self.mutation_table
-        )
-        self.n_snvs = len(mutation_table.index)
+        if _validated:
+            self.mutation_table = mutation_table.copy()
+        else:
+            self.mutation_table = dataloader.validate_mutation_read_counts(
+                mutation_table
+            )
+            self.mutation_table = dataloader.validate_segment_coordinates(
+                self.mutation_table
+            )
         self.n_mutations = len(self.mutation_table.index)
-        self.subclone_table = (
-            None
-            if subclone_table is None
-            else dataloader.validate_subclone_values(subclone_table)
-        )
+        if subclone_table is None:
+            self.subclone_table = None
+        elif _validated:
+            self.subclone_table = subclone_table.copy()
+        else:
+            self.subclone_table = dataloader.validate_subclone_values(
+                subclone_table
+            )
         self.sex = sex
         self.min_mutation_alt_count = _validate_non_negative_integer(
             min_mutation_alt_count,
@@ -737,8 +737,6 @@ class Segment:
         self.minor_cn = self.get_unique_attribute_from_table('Minor_CN')
         self.total_cn = self.major_cn + self.minor_cn
 
-        self.possible_clonal_multiplicities = np.arange(1,self.major_cn+1)
-
         self.all_possible_clonal_multiplicities = np.arange(self.major_cn)+1
         self.all_possible_subclonal_multiplicities = self.get_all_possible_subclonal_multiplicities()
         
@@ -747,12 +745,6 @@ class Segment:
         self.end = self.get_unique_attribute_from_table('Segment_End')
         self.width = int(self.end) - int(self.start)
         
-        self.timeable = False
-        self.in_wgd_range = False
-        self.gain_timing_distribution = None
-        self.complex_timing_distributions = None
-        
-        self.phased = not self.mutation_table['Phasing'].isnull().all()
         self.assign_multiplicity_probabilities()
         
         self.multiplicity_probabilities = self.get_multiplicity_probabilities()

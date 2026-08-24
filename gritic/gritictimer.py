@@ -1,5 +1,7 @@
 import os
 import bz2
+import gzip
+import logging
 import pickle
 from numbers import Integral
 
@@ -16,6 +18,7 @@ from scipy.optimize import nnls
 from scipy.linalg import null_space
 
 from gritic.sampletools import Segment, get_major_cn_mode, validate_sample_id
+from gritic.dataloader import validate_pascal_snake_case_columns
 
 from sklearn.neighbors import NearestNeighbors
 
@@ -32,7 +35,47 @@ import gritic.posteriortablegen as posteriortablegen
 import pathlib
 
 
+logger = logging.getLogger(__name__)
+
+
 MIN_WGD_MUTATIONS = 10
+NUMPY_CACHE_VERSION = 1
+
+
+ROUTE_TABLE_COLUMNS = [
+    'Sample_ID',
+    'Segment_ID',
+    'Chromosome',
+    'Segment_Start',
+    'Segment_End',
+    'Major_CN',
+    'Minor_CN',
+    'Total_CN',
+    'N_Mutations',
+    'Mutation_Rate',
+    'Route',
+    'Probability',
+    'Average_N_Events',
+    'Average_Pre_WGD_Losses',
+    'Average_Post_WGD_Losses',
+    'Time',
+    'Density',
+    'WGD_Status',
+    'WGD_Timing',
+    'WGD_Timing_CI_Low',
+    'WGD_Timing_CI_High',
+]
+
+GAIN_TIMING_TABLE_COLUMNS = [
+    'Sample_ID',
+    'Segment_ID',
+    'Route',
+    'Node',
+    'Node_Phasing',
+    'Timing',
+    'Timing_CI_Low',
+    'Timing_CI_High',
+]
 
 
 class Route:
@@ -49,7 +92,6 @@ class Route:
         self.mult_store_dir = mult_store_dir
         self.ll_store = None
         self.node_timing = None
-        self.loss_timing = None
         self.wgd_timing_store = None
         self.n_events_store = None
         self.mult_store = None
@@ -144,13 +186,12 @@ class Route:
         nn_size = np.array([x.size-1 for x in nearest_neighbors])
         return np.mean(nn_size>0.1),np.mean(nn_size>2.1)
     
-    def run_mult_sampling(self,n_snvs,alpha,n_subclones,wgd_timing_distribution,samples_per_run=500,max_samples=5e5,density_cut_off=0.9):
+    def run_mult_sampling(self,alpha,n_subclones,wgd_timing_distribution,samples_per_run=500,max_samples=5e5,density_cut_off=0.9):
         timing_store = []
         wgd_timing_store= []
         mult_store =[]
 
         start_sampling_time = time.perf_counter()
-        n_samples = 0
         next_eval_time = None
         eval_count =0
         
@@ -207,22 +248,26 @@ class Route:
         return mult_store,timing_store,wgd_timing_store,np.array([density,density_high])
 
     def save_gz_numpy(self,path,array):
-        with open(path,'wb') as f:
+        with gzip.open(path,'wb') as f:
             np.save(f,array)
     def load_gz_numpy(self,path):
-        with open(path,'rb') as f:
+        with gzip.open(path,'rb') as f:
             return np.load(f)
     
-    def get_mult_store(self,n_snvs,alpha,n_subclones,wgd_timing_distribution):
+    def get_mult_store(self,alpha,n_subclones,wgd_timing_distribution):
         if self.mult_store_dir is not None:
             cn_dir = self.mult_store_dir/f'{self.major_cn}_{self.minor_cn}'
             os.makedirs(cn_dir,exist_ok=True)
 
             #pathlib version
-            mult_store_path = cn_dir/f'mult_store_{self.short_id}_wgd_{self.wgd_status}.npy.gz'
-            timing_store_path = cn_dir/f'timing_store_{self.short_id}_wgd_{self.wgd_status}.npy.gz'
-            wgd_timing_store_path = cn_dir/f'wgd_timing_store_{self.short_id}_wgd_{self.wgd_status}.npy.gz'
-            density_store_path = cn_dir/f'density_store_{self.short_id}_wgd_{self.wgd_status}.npy.gz'
+            cache_suffix = (
+                f'{self.short_id}_wgd_{self.wgd_status}_'
+                f'v{NUMPY_CACHE_VERSION}.npy.gz'
+            )
+            mult_store_path = cn_dir/f'mult_store_{cache_suffix}'
+            timing_store_path = cn_dir/f'timing_store_{cache_suffix}'
+            wgd_timing_store_path = cn_dir/f'wgd_timing_store_{cache_suffix}'
+            density_store_path = cn_dir/f'density_store_{cache_suffix}'
 
             if os.path.exists(mult_store_path):
                 mult_store = self.load_gz_numpy(mult_store_path)
@@ -233,7 +278,7 @@ class Route:
 
 
                 return mult_store,timing_store,wgd_timing_store,density
-        mult_store,timing_store,wgd_timing_store,density = self.run_mult_sampling(n_snvs,alpha,n_subclones,wgd_timing_distribution)
+        mult_store,timing_store,wgd_timing_store,density = self.run_mult_sampling(alpha,n_subclones,wgd_timing_distribution)
         
         if self.mult_store_dir is not None:
             self.save_gz_numpy(mult_store_path,mult_store)
@@ -256,7 +301,7 @@ class Route:
         raw_samples_store['LL'] = ll_store[random_indexes].copy()
         return raw_samples_store
     
-    def run_sampling(self,mult_probabilities,subclone_table,n_snvs,wgd_timing_distribution,phased):
+    def run_sampling(self,mult_probabilities,subclone_table,wgd_timing_distribution):
 
         run_time = time.perf_counter()
 
@@ -273,7 +318,7 @@ class Route:
         
         n_subclones = 0 if subclone_table is None else len(subclone_table.index)
 
-        mult_store,timing_store,wgd_timing_store,density = self.get_mult_store(n_snvs,alpha,n_subclones,wgd_timing_distribution)
+        mult_store,timing_store,wgd_timing_store,density = self.get_mult_store(alpha,n_subclones,wgd_timing_distribution)
 
         ll_store = mult_probabilities.evaluate_likelihood_array(mult_store)
         self.raw_samples = self.get_raw_samples_store(mult_store,timing_store,wgd_timing_store,ll_store)
@@ -302,8 +347,6 @@ class RouteClassifier:
         self.mult_store_dir = mult_store_dir
         self.routes = self.generate_routes(wgd_trees_status)
 
-        self.min_n_events = None
-
         self.route_probabilities = {}
 
     def get_best_timing(self):
@@ -322,12 +365,12 @@ class RouteClassifier:
             possible_routes[tree_id] = route
         return possible_routes
  
-    def fit_routes(self,mult_probabilities,subclone_table,n_snvs,wgd_timing_distribution,phased):
+    def fit_routes(self,mult_probabilities,subclone_table,wgd_timing_distribution):
         route_ll_store = []
         route_ids = list(sorted(self.routes.keys()))
         for route_id in route_ids:
             route = self.routes[route_id]
-            route.run_sampling(mult_probabilities,subclone_table,n_snvs,wgd_timing_distribution,phased)
+            route.run_sampling(mult_probabilities,subclone_table,wgd_timing_distribution)
             route_ll_store.append(route.ll_store)
 
         #helps keep the exponentiation under control
@@ -343,53 +386,120 @@ class RouteClassifier:
 
         for i,route_id in enumerate(route_ids):
             self.route_probabilities[route_id] = likelihood_store[i]
-    
-    
-    def get_timing_table(self):
-        if len(self.route_probabilities) ==0:
+
+    def _get_output_routes(self):
+        if len(self.route_probabilities) == 0:
             raise ValueError("routes hasn't been fit yet")
-        timing_table_data = {"Route":[],'Probability':[],'Node':[],'Node_Phasing':[],'Timing':[],'Timing_CI_Low':[],'Timing_CI_High':[],'Average_N_Events':[],'Average_Pre_WGD_Losses':[],'Average_Post_WGD_Losses':[],'Time':[],'Density':[],'Density_High':[]}
-        for route_id,probability in self.route_probabilities.items():
+
+        output_routes = []
+        full_ids_by_short_id = {}
+        for route_id, probability in self.route_probabilities.items():
             route = self.routes[route_id]
-            timeable_nodes = route.route_tree.timeable_nodes
-            
-            if len(timeable_nodes)==0:
-                timeable_nodes = [np.nan]
-            
-            for node in timeable_nodes:
-                if not node is np.nan:
-                    node_timing = route.get_node_timing(node)
-                else:
-                    node_timing = np.array([np.nan])
-                
+            output_routes.append((route, probability))
+            full_ids_by_short_id.setdefault(route.short_id, []).append(route_id)
+
+        collisions = {
+            short_id: full_ids
+            for short_id, full_ids in full_ids_by_short_id.items()
+            if len(full_ids) > 1
+        }
+        if collisions:
+            collision_text = '; '.join(
+                f"{short_id}: {', '.join(map(str, full_ids))}"
+                for short_id, full_ids in collisions.items()
+            )
+            raise ValueError(
+                'Route identifiers must be unique after shortening to the '
+                f'output Route value; collisions: {collision_text}'
+            )
+        return output_routes
+
+    def get_route_table(self):
+        route_table_data = {
+            'Route': [],
+            'Probability': [],
+            'Average_N_Events': [],
+            'Average_Pre_WGD_Losses': [],
+            'Average_Post_WGD_Losses': [],
+            'Time': [],
+            'Density': [],
+        }
+        for route, probability in self._get_output_routes():
+            route_table_data['Route'].append(route.short_id)
+            route_table_data['Probability'].append(probability)
+            route_table_data['Average_N_Events'].append(
+                route.get_average_events('N_Events')
+            )
+            route_table_data['Average_Pre_WGD_Losses'].append(
+                route.get_average_events('Pre_WGD_Losses')
+            )
+            route_table_data['Average_Post_WGD_Losses'].append(
+                route.get_average_events('Post_WGD_Losses')
+            )
+            route_table_data['Time'].append(np.round(route.run_time, 3))
+            route_table_data['Density'].append(route.density)
+
+        return pd.DataFrame(route_table_data)
+
+    def get_timing_table(self):
+        timing_table_data = {
+            'Route': [],
+            'Node': [],
+            'Node_Phasing': [],
+            'Timing': [],
+            'Timing_CI_Low': [],
+            'Timing_CI_High': [],
+        }
+        output_routes = self._get_output_routes()
+        for route, _ in output_routes:
+            for node in route.route_tree.timeable_nodes:
+                node_timing = route.get_node_timing(node)
                 timing_table_data['Route'].append(route.short_id)
-                timing_table_data['Probability'].append(probability)
                 timing_table_data['Node'].append(node)
+                timing_table_data['Node_Phasing'].append(
+                    route.route_tree.node_attributes[node]['Phasing']
+                )
+                timing_table_data['Timing'].append(
+                    np.abs(np.round(np.percentile(node_timing, 50), 3))
+                )
+                timing_table_data['Timing_CI_Low'].append(
+                    np.abs(np.round(np.percentile(node_timing, 2.5), 3))
+                )
+                timing_table_data['Timing_CI_High'].append(
+                    np.abs(np.round(np.percentile(node_timing, 97.5), 3))
+                )
 
-                if node in route.route_tree.node_attributes:
-                    timing_table_data['Node_Phasing'].append(route.route_tree.node_attributes[node]['Phasing'])
-                else:
-                    timing_table_data['Node_Phasing'].append(np.nan)
-                
-                timing_table_data['Timing'].append(np.abs(np.round(np.percentile(node_timing,50),3)))
-                timing_table_data['Timing_CI_Low'].append(np.abs(np.round(np.percentile(node_timing,2.5),3)))
-                timing_table_data['Timing_CI_High'].append(np.abs(np.round(np.percentile(node_timing,97.5),3)))
-                timing_table_data['Average_N_Events'].append(route.get_average_events('N_Events'))
-                timing_table_data['Average_Pre_WGD_Losses'].append(route.get_average_events('Pre_WGD_Losses'))
-                timing_table_data['Average_Post_WGD_Losses'].append(route.get_average_events('Post_WGD_Losses'))
-                timing_table_data['Time'].append(np.round(route.run_time,3))
-                timing_table_data['Density'].append(route.density)
-                timing_table_data['Density_High'].append(route.density_high)
+        timing_table = pd.DataFrame(timing_table_data)
+        duplicate_gains = timing_table.duplicated(
+            subset=['Route', 'Node'],
+            keep=False,
+        )
+        if duplicate_gains.any():
+            duplicate_keys = (
+                timing_table.loc[duplicate_gains, ['Route', 'Node']]
+                .drop_duplicates()
+                .astype(str)
+                .agg(':'.join, axis=1)
+                .tolist()
+            )
+            raise ValueError(
+                'Each timeable gain must have a unique Route and Node; '
+                f"duplicates: {', '.join(duplicate_keys)}"
+            )
 
-        return pd.DataFrame(timing_table_data)
+        route_ids = {route.short_id for route, _ in output_routes}
+        unexpected_routes = set(timing_table['Route']) - route_ids
+        if unexpected_routes:
+            raise ValueError(
+                'Every timing-table Route must occur in the route table; '
+                f"unexpected routes: {', '.join(map(str, unexpected_routes))}"
+            )
+        return timing_table
     
     def get_timing_dict(self,n_samples = 5000):
-        if len(self.route_probabilities) ==0:
-            raise ValueError("routes hasn't been fit yet")
         timing_dict = {}
         
-        for route_id in self.route_probabilities:
-            route = self.routes[route_id]
+        for route, _ in self._get_output_routes():
             route_samples = {'Timing':{}}
             
             wgd_timing_store =route.wgd_timing_store
@@ -402,7 +512,7 @@ class RouteClassifier:
             route_samples['Mult'] = route.mult_store[random_indexes]
             route_samples['LL'] = route.ll_store[random_indexes]
             route_samples['Raw_Samples'] = route.raw_samples
-            timing_dict[route_id] = route_samples
+            timing_dict[route.short_id] = route_samples
         return timing_dict
 
     def get_timing_tree_labels(self,route,wgd_info,ci:float=90.0,rounding_digits:int=3):
@@ -444,28 +554,59 @@ class RouteClassifier:
             nx.set_node_attributes(plotting_tree,node_labels,'Label')
             
             treetools.plot_tree(plotting_tree,plot_title,output_path=route_output_path)
-def check_record_segment_timing(segment):
-    if segment.major_cn <=1:
-        return False
-    return True
+def add_wgd_info_to_route_table(route_table,wgd_info,wgd_status:bool):
+    route_table = route_table.copy()
+    route_table['WGD_Timing'] = wgd_info['Timing']
+    route_table['WGD_Timing_CI_Low'] = wgd_info['CI_Low']
+    route_table['WGD_Timing_CI_High'] = wgd_info['CI_High']
+    route_table['WGD_Status'] = wgd_status
+    return route_table
 
-def add_wgd_info_to_table(timing_table,wgd_info,wgd_status:bool):
-    timing_table = timing_table.copy()
-    timing_table['WGD_Timing'] = wgd_info['Timing']
-    timing_table['WGD_Timing_CI_Low'] = wgd_info['CI_Low']
-    timing_table['WGD_Timing_CI_High'] = wgd_info['CI_High']
-    timing_table['WGD_Status'] = wgd_status
-    return timing_table 
 
-def write_timing_tables(timing_table,timing_table_path):
-    timing_table = timing_table[['Sample_ID','Segment_ID', 'Chromosome', 'Segment_Start', 'Segment_End', 'Major_CN',
-       'Minor_CN', 'Total_CN', 'N_Mutations','Mutation_Rate','Route','Probability','Average_N_Events','Average_Pre_WGD_Losses','Average_Post_WGD_Losses','Time','Node','Node_Phasing','Timing', 'Timing_CI_Low', 'Timing_CI_High','WGD_Status','WGD_Timing','WGD_Timing_CI_Low',
-       'WGD_Timing_CI_High','Density']]
+def _append_table(table, table_path, columns):
+    table = table[columns]
+    if os.path.exists(table_path):
+        string_converters = {
+            column: str
+            for column in ('Sample_ID', 'Segment_ID', 'Chromosome', 'Route')
+            if column in columns
+        }
+        previous_table = pd.read_csv(
+            table_path,
+            sep='\t',
+            converters=string_converters,
+        )
+        table = pd.concat([previous_table, table], ignore_index=True)
+    _write_tsv(table, table_path)
 
-    if os.path.exists(timing_table_path):
-        timing_table_prev = pd.read_csv(timing_table_path,sep='\t')
-        timing_table = pd.concat([timing_table_prev,timing_table])
-    timing_table.to_csv(timing_table_path,sep="\t",index=False)
+
+def _write_tsv(table, table_path):
+    """Write one public TSV after enforcing its column-name convention."""
+    validate_pascal_snake_case_columns(
+        table.columns,
+        f'Output table {pathlib.Path(table_path).name}',
+    )
+    table.to_csv(table_path, sep='\t', index=False)
+
+
+def write_route_table(route_table, route_table_path):
+    _append_table(route_table, route_table_path, ROUTE_TABLE_COLUMNS)
+
+
+def write_gain_timing_table(timing_table, timing_table_path):
+    _append_table(
+        timing_table,
+        timing_table_path,
+        GAIN_TIMING_TABLE_COLUMNS,
+    )
+
+
+def _initialize_table(table_path, columns):
+    if not os.path.exists(table_path):
+        _write_tsv(
+            pd.DataFrame(columns=columns),
+            table_path,
+        )
 
 def write_timing_dict(timing_dict,dict_dir,segment_id):
     output_path = f'{dict_dir}/{segment_id}_timing_dict.bz2'
@@ -536,7 +677,7 @@ def time_wgd_major_cn_2(sample,output_dir,mult_store_dir,timing_dict_dir):
     
     wgd_timing_tables = []
     for segment in potential_wgd_segments:
-        print('Timing WGD Segment -',segment)
+        logger.info('Timing WGD segment: %s', segment)
         #treat minor cn of 2 as 0 as they are equivalent
         pseudo_minor_cn = 0 if segment.minor_cn == 2 else segment.minor_cn
 
@@ -545,10 +686,18 @@ def time_wgd_major_cn_2(sample,output_dir,mult_store_dir,timing_dict_dir):
         mult_probabilities =segment.multiplicity_probabilities
         
         mult_probabilities.minor_cn = pseudo_minor_cn
-        classifier.fit_routes(mult_probabilities,segment.subclone_table,segment.n_snvs,None,segment.phased)
+        classifier.fit_routes(mult_probabilities,segment.subclone_table,None)
         mult_probabilities.minor_cn = segment.minor_cn
 
+        wgd_route_table = classifier.get_route_table()
         wgd_timing_table = classifier.get_timing_table()
+        wgd_timing_table = pd.merge(
+            wgd_route_table,
+            wgd_timing_table,
+            on='Route',
+            how='inner',
+            validate='one_to_many',
+        )
         segment_dict = segment.get_info_dict()
 
         for key,val in segment_dict.items():
@@ -584,7 +733,7 @@ def time_wgd_major_cn_2(sample,output_dir,mult_store_dir,timing_dict_dir):
     wgd_timing_table['Overlap_Proportion'] = overlap_proportion
     wgd_timing_table['Intersecting'] = wgd_timing_table['Segment_ID'].isin(segments_with_max_overlap)
     
-    wgd_timing_table.to_csv(wgd_timing_table_path,sep="\t",index=False)
+    _write_tsv(wgd_timing_table, wgd_timing_table_path)
     
    
     overlapping_segments = [segment for segment in potential_wgd_segments if segment.segment_id in segments_with_max_overlap]
@@ -658,9 +807,7 @@ def get_combined_segment_timing_cn_2(overlapping_segments,subclone_table,sample_
         classifier.fit_routes(
             mult_probabilities,
             new_seg.subclone_table,
-            new_seg.n_snvs,
             None,
-            new_seg.phased,
         )
         timing_dict= classifier.get_timing_dict()
         write_timing_dict(timing_dict,timing_dict_dir,f'WGD_minor_cn_{minor_cn}')
@@ -730,39 +877,52 @@ def write_wgd_calling_info(wgd_timing_distribution,overlap_proportion,best_overl
     wgd_info['Best_Overlap_Timing'] = best_overlap_timing
     wgd_info = pd.DataFrame(wgd_info,index=[0])
 
-    wgd_info.to_csv(output_dir/f"{sample_id}_wgd_calling_info.tsv",index=False,sep="\t")
+    _write_tsv(
+        wgd_info,
+        output_dir/f"{sample_id}_wgd_calling_info.tsv",
+    )
 
 def process_segments(segments,wgd_timing_distribution,output_dir,mult_store_dir,timing_dict_dir,sample_id,wgd_status,plot_trees):
 
     wgd_info = get_wgd_info(wgd_timing_distribution)
 
+    route_table_path = output_dir/f"{sample_id}_route_table.tsv"
     timing_table_path = output_dir/f"{sample_id}_gain_timing_table.tsv"
 
+    _initialize_table(route_table_path, ROUTE_TABLE_COLUMNS)
+    _initialize_table(timing_table_path, GAIN_TIMING_TABLE_COLUMNS)
 
     for cn_state in segments:
         cn_dir = f'{mult_store_dir}/{cn_state[0]}_{cn_state[1]}'
-        for i,segment in enumerate(segments[cn_state]):
-            print('Timing gained segment -',segment)
+        for segment in segments[cn_state]:
+            logger.info('Timing gained segment: %s', segment)
             mult_probabilities =segment.multiplicity_probabilities
 
             wgd_trees_status = 'Default'
             classifier = RouteClassifier(segment.major_cn,segment.minor_cn,wgd_status,wgd_trees_status,mult_store_dir)
             
-            classifier.fit_routes(mult_probabilities,segment.subclone_table,segment.n_snvs,wgd_timing_distribution,segment.phased)
-            
-                
+            classifier.fit_routes(mult_probabilities,segment.subclone_table,wgd_timing_distribution)
+
+            segment_route_table = classifier.get_route_table()
+            segment_timing_table = classifier.get_timing_table()
             timing_dict= classifier.get_timing_dict()
             write_timing_dict(timing_dict,timing_dict_dir,segment.segment_id)
-            
-            
-            timing_table = classifier.get_timing_table()
+
             segment_dict = segment.get_info_dict()
             for key,val in segment_dict.items():
-                timing_table[key] = val
-            timing_table = add_wgd_info_to_table(timing_table,wgd_info,wgd_status)
-            timing_table['Sample_ID'] = sample_id
-            
-            write_timing_tables(timing_table,timing_table_path)
+                segment_route_table[key] = val
+            segment_route_table = add_wgd_info_to_route_table(
+                segment_route_table,
+                wgd_info,
+                wgd_status,
+            )
+            segment_route_table['Sample_ID'] = sample_id
+
+            segment_timing_table['Segment_ID'] = segment.segment_id
+            segment_timing_table['Sample_ID'] = sample_id
+
+            write_route_table(segment_route_table, route_table_path)
+            write_gain_timing_table(segment_timing_table, timing_table_path)
 
             if plot_trees:
                 plot_output_dir = f"{output_dir}/{sample_id}_tree_plots/{segment.segment_id}"
@@ -815,12 +975,12 @@ def process_sample(
 
     sample_mutation_table = sample.get_mutation_table()
     sample_mutation_table_path = output_dir/f"{sample.sample_id}_mutation_table.tsv"
-    sample_mutation_table.to_csv(sample_mutation_table_path,sep="\t",index=False)
+    _write_tsv(sample_mutation_table, sample_mutation_table_path)
     
     sample_subclone_table = sample.get_subclone_table()
     sample_subclone_table_path = output_dir/f"{sample.sample_id}_subclone_table.tsv"
     if sample_subclone_table is not None:
-        sample_subclone_table.to_csv(sample_subclone_table_path,sep="\t",index=False)
+        _write_tsv(sample_subclone_table, sample_subclone_table_path)
     
     mult_store_dir = output_dir/f"{sample.sample_id}_mult_stores_temp"
  
@@ -874,44 +1034,61 @@ def process_sample(
                 wgd_status = True
 
     write_wgd_calling_info(wgd_timing_distribution,overlap_proportion,best_overlap_timing,major_cn_mode,wgd_status,output_dir,sample.sample_id)
-    if major_cn_mode <=2:
+    timeable_complex_segments = get_timeable_segments(
+        sample,
+        wgd_status=wgd_status,
+        excluded_segment_ids=non_overlapping_segment_ids,
+    )
 
-        timeable_complex_segments = get_timeable_segments(
-            sample,
-            wgd_status=wgd_status,
-            excluded_segment_ids=non_overlapping_segment_ids,
-        )
-    
-        timing_table_path = f"{output_dir}/{sample.sample_id}_gain_timing_table.tsv"
+    route_table_path = output_dir/f"{sample.sample_id}_route_table.tsv"
+    timing_table_path = (
+        output_dir/f"{sample.sample_id}_gain_timing_table.tsv"
+    )
 
-        process_segments(
-            timeable_complex_segments,
-            wgd_timing_distribution,
-            output_dir,
-            mult_store_dir,
-            timing_dict_dir,
-            sample.sample_id,
-            wgd_status,
-            plot_trees=plot_trees,
-        )
+    process_segments(
+        timeable_complex_segments,
+        wgd_timing_distribution,
+        output_dir,
+        mult_store_dir,
+        timing_dict_dir,
+        sample.sample_id,
+        wgd_status,
+        plot_trees=plot_trees,
+    )
 
-        if os.path.exists(timing_table_path):
-            for apply_penalty in (False, True):
-                sample_posterior_table = posteriortablegen.get_sample_posterior_table(
-                    timing_table_path,
-                    output_dir,
-                    sample.sample_id,
-                    apply_penalty=apply_penalty,
+    if os.path.exists(route_table_path):
+        for apply_penalty in (False, True):
+            (
+                sample_posterior_table,
+                sample_posterior_route_draw_table,
+            ) = posteriortablegen.get_sample_posterior_tables(
+                route_table_path,
+                timing_table_path,
+                output_dir,
+                sample.sample_id,
+                apply_penalty=apply_penalty,
+            )
+
+            sample_posterior_table_summary = (
+                posteriortablegen.get_sample_posterior_table_summary(
+                    sample_posterior_table,
+                    sample_posterior_route_draw_table,
                 )
+            )
 
-                if len(sample_posterior_table)>0:
-                    sample_posterior_table_summary = posteriortablegen.get_sample_posterior_table_summary(sample_posterior_table)
+            posterior_table_path = output_dir/f"{sample.sample_id}_posterior_timing_table_penalty_{apply_penalty}.tsv"
+            posterior_route_draw_table_path = output_dir/f"{sample.sample_id}_posterior_route_draw_table_penalty_{apply_penalty}.tsv"
+            posterior_table_summary_path = output_dir/f"{sample.sample_id}_posterior_timing_table_summary_penalty_{apply_penalty}.tsv"
 
-                    posterior_table_path = output_dir/f"{sample.sample_id}_posterior_timing_table_penalty_{apply_penalty}.tsv"
-                    posterior_table_summary_path = output_dir/f"{sample.sample_id}_posterior_timing_table_summary_penalty_{apply_penalty}.tsv"
-
-                    sample_posterior_table.to_csv(posterior_table_path,sep="\t",index=False)
-                    sample_posterior_table_summary.to_csv(posterior_table_summary_path,sep="\t",index=False)
+            _write_tsv(sample_posterior_table, posterior_table_path)
+            _write_tsv(
+                sample_posterior_route_draw_table,
+                posterior_route_draw_table_path,
+            )
+            _write_tsv(
+                sample_posterior_table_summary,
+                posterior_table_summary_path,
+            )
 
     shutil.rmtree(mult_store_dir)
     

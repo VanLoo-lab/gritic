@@ -27,7 +27,6 @@ class RouteTree:
         self.wgd_constraint_matrix = self.get_wgd_constraint_matrix()
 
         self.timing_matrix = self.get_timing_matrix()
-        self.unphased_timing_matrix = self.get_unphased_timing_matrix()
 
     def get_timeable_nodes(self):
         timeable_nodes = []
@@ -38,20 +37,6 @@ class RouteTree:
             ):
                 timeable_nodes.append(node)
         return timeable_nodes
-
-    def get_non_terminal_nodes(self):
-        non_terminal_nodes = []
-        for node in self.non_phased_node_order:
-            if len(self.main_tree.out_edges(node)) > 0:
-                non_terminal_nodes.append(node)
-        return non_terminal_nodes
-
-    def get_terminal_nodes(self):
-        terminal_nodes = []
-        for node in self.non_phased_node_order:
-            if len(self.main_tree.out_edges(node)) == 0:
-                terminal_nodes.append(node)
-        return terminal_nodes
 
     def get_wgd_nodes(self):
         wgd_nodes = []
@@ -89,18 +74,6 @@ class RouteTree:
                 timing_matrix[i, final_mult - mult_offset + self.major_cn] = 1
             if node in self.minor_tree.nodes():
                 timing_matrix[i, final_mult - mult_offset + 2 * self.major_cn] = 1
-        return timing_matrix
-
-    def get_unphased_timing_matrix(self):
-        n_mults = self.major_cn
-        mult_offset = 1
-
-        timing_matrix = np.zeros((len(self.non_phased_node_order), n_mults))
-
-        for i, node in enumerate(self.non_phased_node_order):
-            final_mult = self.node_attributes[node]["Multiplicity"]
-            timing_matrix[i, final_mult - mult_offset] = 1
-
         return timing_matrix
 
     # an mxn matrix
@@ -149,9 +122,8 @@ class RouteTree:
         return combined_constraint_matrix, combined_constraints_sum
 
     def get_n_events(self, node_timing, wgd_timing):
-        n_events_store = []
-        if wgd_timing is None:
-            # if no wgd the number of events is the number of gains
+        if not self.wgd_status:
+            # In non-WGD tumours, only loss of the minor allele is identifiable.
             n_events = len(
                 [
                     node
@@ -159,6 +131,8 @@ class RouteTree:
                     if len(list(self.main_tree.successors(node))) == 2
                 ]
             )
+            if self.minor_cn == 0:
+                n_events += 1
             return n_events, np.nan, np.nan
 
         pre_wgd_losses = 0

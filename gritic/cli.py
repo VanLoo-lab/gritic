@@ -1,9 +1,34 @@
 import argparse
+import logging
 import math
+from contextlib import contextmanager
 
 import pandas as pd
 
 from gritic import dataloader, gritictimer, sampletools
+
+
+@contextmanager
+def _cli_progress_logging():
+    logger = gritictimer.logger
+    if logger.handlers:
+        yield
+        return
+
+    previous_level = logger.level
+    previous_propagate = logger.propagate
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter('%(message)s'))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    try:
+        yield
+    finally:
+        logger.removeHandler(handler)
+        handler.close()
+        logger.setLevel(previous_level)
+        logger.propagate = previous_propagate
 
 
 def nonnegative_integer(value):
@@ -41,7 +66,7 @@ def unit_interval_number(value):
 
 
 def load_subclone_table(subclone_table_path):
-    return pd.read_csv(
+    subclone_table = pd.read_csv(
         subclone_table_path,
         sep='\t',
         dtype={
@@ -50,10 +75,22 @@ def load_subclone_table(subclone_table_path):
             'Subclone_Fraction': float,
         },
     )
+    dataloader.validate_pascal_snake_case_columns(
+        subclone_table.columns,
+        'Subclone table',
+    )
+    return subclone_table
 
 
 def build_parser():
-    parser = argparse.ArgumentParser(allow_abbrev=False)
+    parser = argparse.ArgumentParser(
+        allow_abbrev=False,
+        description=(
+            'GRITIC input TSV column names are case-sensitive and must use '
+            'Pascal_Snake_Case; established acronyms such as ID, CN, SNV, '
+            'WGD, CCF, CI, GRITIC, ICGC, and SBS remain uppercase.'
+        ),
+    )
     parser.add_argument(
         '--mutation-table',
         required=True,
@@ -233,7 +270,7 @@ def main(argv=None):
         else load_subclone_table(args.subclone_table)
     )
 
-    sample = sampletools.Sample(
+    sample = sampletools.Sample._from_validated_input_tables(
         mutation_table,
         copy_number_table,
         subclone_table,
@@ -249,12 +286,13 @@ def main(argv=None):
         drop_unmatched_snvs=args.drop_unmatched_snvs,
         drop_unmatched_chromosomes=args.drop_unmatched_chromosomes,
     )
-    gritictimer.process_sample(
-        sample,
-        args.output,
-        plot_trees=args.plot_trees,
-        wgd_count=args.wgd_count,
-    )
+    with _cli_progress_logging():
+        gritictimer.process_sample(
+            sample,
+            args.output,
+            plot_trees=args.plot_trees,
+            wgd_count=args.wgd_count,
+        )
 
 
 if __name__ == '__main__':

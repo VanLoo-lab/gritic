@@ -1,3 +1,4 @@
+import re
 import warnings
 from decimal import Decimal, InvalidOperation
 from numbers import Integral
@@ -29,6 +30,24 @@ SUBCLONE_REQUIRED_COLUMNS = (
     'Subclone_CCF',
     'Subclone_Fraction',
 )
+SUBCLONE_OUTPUT_COLUMNS = SUBCLONE_REQUIRED_COLUMNS + ('N_SNVs',)
+
+ESTABLISHED_COLUMN_ACRONYMS = frozenset({
+    'ID',
+    'CN',
+    'SNV',
+    'WGD',
+    'CCF',
+    'CI',
+    'GRITIC',
+    'ICGC',
+    'SBS',
+})
+_PASCAL_WORD_PATTERN = re.compile(r'[A-Z][a-z0-9]*\Z')
+_UPPERCASE_OR_NUMERIC_TOKEN_PATTERN = re.compile(r'[A-Z0-9]+\Z')
+_PLURALIZED_ACRONYM_PATTERN = re.compile(r'[A-Z][A-Z0-9]*s\Z')
+_ACRONYM_SUFFIX_PATTERN = re.compile(r'[0-9]*s?\Z')
+_POTENTIAL_ACRONYM_SUFFIX_PATTERN = re.compile(r'[0-9sS]*\Z')
 
 VALID_SEX_KARYOTYPES = frozenset({'XX', 'XY', 'ZZ', 'ZW'})
 SEX_CHROMOSOME_PAIR = {
@@ -45,8 +64,70 @@ PRESENT_SEX_CHROMOSOMES = {
 }
 
 
+def is_pascal_snake_case_column(column):
+    """Return whether a public table column follows Pascal_Snake_Case.
+
+    Underscore-delimited words are Pascal-cased, while acronym and numeric
+    tokens remain uppercase. A trailing lowercase ``s`` is allowed when
+    pluralizing an uppercase acronym, as in ``N_SNVs``. Established GRITIC
+    acronyms are case-sensitive and cannot be written as ordinary Pascal
+    words (for example, ``Sample_Id`` is invalid).
+    """
+    if not isinstance(column, str) or not column:
+        return False
+    tokens = column.split('_')
+    if any(not token for token in tokens):
+        return False
+
+    for token in tokens:
+        for acronym in ESTABLISHED_COLUMN_ACRONYMS:
+            if token[:len(acronym)].upper() != acronym:
+                continue
+            suffix = token[len(acronym):]
+            if not _POTENTIAL_ACRONYM_SUFFIX_PATTERN.fullmatch(suffix):
+                continue
+            if (
+                token[:len(acronym)] != acronym
+                or not _ACRONYM_SUFFIX_PATTERN.fullmatch(suffix)
+            ):
+                return False
+            break
+
+        if not (
+            _PASCAL_WORD_PATTERN.fullmatch(token)
+            or _UPPERCASE_OR_NUMERIC_TOKEN_PATTERN.fullmatch(token)
+            or _PLURALIZED_ACRONYM_PATTERN.fullmatch(token)
+        ):
+            return False
+    return True
+
+
+def validate_pascal_snake_case_columns(columns, table_name):
+    """Require every public TSV/CSV header to use Pascal_Snake_Case."""
+    invalid_columns = [
+        column
+        for column in columns
+        if not is_pascal_snake_case_column(column)
+    ]
+    if invalid_columns:
+        formatted_columns = ', '.join(map(repr, invalid_columns))
+        raise ValueError(
+            f'{table_name} column names must use Pascal_Snake_Case; '
+            f'invalid column(s): {formatted_columns}'
+        )
+    return tuple(columns)
+
+
 def validate_input_table_headers(copy_number_columns, mutation_columns):
     """Validate both input schemas and return whether supplied IDs can be used."""
+    validate_pascal_snake_case_columns(
+        copy_number_columns,
+        'Copy number table',
+    )
+    validate_pascal_snake_case_columns(
+        mutation_columns,
+        'Mutation table',
+    )
     copy_number_columns = set(copy_number_columns)
     mutation_columns = set(mutation_columns)
 
@@ -589,6 +670,10 @@ def validate_copy_number_values(copy_number_table):
 
 def validate_subclone_values(subclone_table):
     """Validate and canonicalize the subclone table used as a mixture prior."""
+    validate_pascal_snake_case_columns(
+        subclone_table.columns,
+        'Subclone table',
+    )
     missing_columns = [
         column for column in SUBCLONE_REQUIRED_COLUMNS
         if column not in subclone_table.columns
@@ -1031,11 +1116,19 @@ def validate_non_overlapping_segments(copy_number_table):
     return copy_number_table
 
 
-def merge_segments(cn_table, return_segment_id_map=False):
+def merge_segments(
+    cn_table,
+    return_segment_id_map=False,
+    *,
+    _validated=False,
+):
     """Merge equal-CN segments that share a half-open interval boundary."""
 
-    cn_table = validate_segment_coordinates(cn_table)
-    cn_table = validate_non_overlapping_segments(cn_table)
+    if _validated:
+        cn_table = cn_table.copy()
+    else:
+        cn_table = validate_segment_coordinates(cn_table)
+        cn_table = validate_non_overlapping_segments(cn_table)
     cn_table.loc[:,'Gain_Type'] = cn_table['Major_CN'].astype(str) + "_"+cn_table['Minor_CN'].astype(str)
     source_ids_by_index = None
     if return_segment_id_map:
@@ -1044,8 +1137,7 @@ def merge_segments(cn_table, return_segment_id_map=False):
             for index, segment_id in cn_table['Segment_ID'].items()
         }
     indexes_to_delete = []
-    for chromosome,chr_data in cn_table.groupby("Chromosome"):
-        #print(chr_data)
+    for _, chr_data in cn_table.groupby("Chromosome"):
         for i in range(len(chr_data.index)-1):
             index = chr_data.index[i]
             forward_index= chr_data.index[i+1]
@@ -1069,7 +1161,8 @@ def merge_segments(cn_table, return_segment_id_map=False):
                     )
 
     merged_table = cn_table.loc[~cn_table.index.isin(indexes_to_delete)].copy()
-    merged_table = validate_segment_coordinates(merged_table)
+    if not _validated:
+        merged_table = validate_segment_coordinates(merged_table)
     merged_table = generate_segment_ids(merged_table)
     if not return_segment_id_map:
         return merged_table.reset_index(drop=True)
@@ -1084,10 +1177,15 @@ def assign_cn_to_snv(
     cn_table,
     use_supplied_segment_ids,
     drop_unmatched_snvs=False,
+    *,
+    _validated=False,
 ):
     """Attach copy number annotations using supplied IDs or genomic position."""
-    cn_table = validate_segment_coordinates(cn_table)
-    cn_table = validate_non_overlapping_segments(cn_table)
+    if _validated:
+        cn_table = cn_table.copy()
+    else:
+        cn_table = validate_segment_coordinates(cn_table)
+        cn_table = validate_non_overlapping_segments(cn_table)
     snv_table = snv_table.copy()
 
     if use_supplied_segment_ids:
@@ -1096,8 +1194,10 @@ def assign_cn_to_snv(
     else:
         cn_table = generate_segment_ids(cn_table)
         snv_table.loc[:, 'Segment_ID'] = "None"
-        numeric_positions = parse_positions(
+        numeric_positions = (
             snv_table['Position']
+            if _validated
+            else parse_positions(snv_table['Position'])
         )
         for _, segment in cn_table.iterrows():
             matching_segments = (

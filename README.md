@@ -91,6 +91,9 @@ gritictimer.process_sample(
 
 ## Input Table Formats
 The required copy-number and mutation tables, and the optional subclone table, should be tab separated. Examples using simulated data are available in the example directory. Data from any allele specific copy number caller, SNV caller and subclone caller can be used as long as the tables are formatted correctly.
+
+All input and output TSV column names use case-sensitive ```Pascal_Snake_Case```. Each underscore-delimited word begins with an uppercase letter, while established acronyms such as ```ID```, ```CN```, ```SNV```, ```WGD```, ```CCF```, ```CI```, ```GRITIC```, ```ICGC```, and ```SBS``` remain uppercase. Numeric and plural suffixes do not change acronym casing, as in ```SBS96```, ```ID2```, and ```N_SNVs```. This rule applies to extra input columns even when GRITIC otherwise ignores them; lower-snake-case, camelCase, and incorrectly cased acronym aliases are rejected rather than converted.
+
 ### Mutation Table 
 All SNVs for the sample. The columns ```Chromosome```, ```Tumor_Ref_Count``` and ```Tumor_Alt_Count``` are always required. A chromosome must be a canonical integer from 1 through ```--autosome-count``` or a sex chromosome present under the selected/inferred karyotype; one leading ```chr``` prefix is accepted and removed. Thus XX accepts X, XY accepts X/Y, ZZ accepts Z, and ZW accepts Z/W. Both read counts must be finite non-negative integers within the signed 64-bit range; their sum must be greater than zero and must also fit within that range. Integer-equivalent spellings are canonicalized to signed-64-bit integers. Every mutation table must also contain either ```Mutation_ID``` or ```Position```. ```Mutation_ID``` is loaded as literal text, so values such as ```000123```, ```NA```, and ```NULL``` are preserved. When present, every ```Position``` must instead be a finite non-negative integer within the signed 64-bit range; integer-equivalent spellings such as ```000123``` or ```123.0``` are canonicalized to ```123```.
 
@@ -133,23 +136,31 @@ Each run requires its ```OUTPUT/SAMPLE_ID``` directory to be absent or empty. GR
 ### _posterior_timing_table_summary_penalty_&lt;True|False&gt;.tsv (Main Output)
 Gives a summary of the gain timing information for each gained segment. For each gained segment, the sequential gains are labelled with ```Gain_Index```. The median and the 95% interval for the gain timing of each sequential gain are reported.
 
-In WGD tumours, the number of gains that arise independently of the WGD will vary depending on the route. Only gains that arise independently of the WGD in at least 80% of posterior samples are reported, this is recorded in the ```Proportion``` column. The timing of the WGD and the probability that each gain arose before the WGD is also recorded.
+In WGD tumours, the number of gains that arise independently of the WGD will vary depending on the route. Only gains that arise independently of the WGD in at least 80% of posterior route draws are reported; this is recorded in the ```Proportion``` column. The denominator includes draws of routes with no independent gains, using the corresponding posterior route-draw table rather than inferring the draw count from gain rows. The timing of the WGD and the probability that each gain arose before the WGD are also recorded.
 
 Two summary tables are produced for every run that produces timing output, including non-WGD runs. The filename ending in ```_penalty_False.tsv``` summarizes draws from the ordinary route probabilities. The filename ending in ```_penalty_True.tsv``` summarizes a second set of draws after each route probability has been reweighted once by the post-hoc non-parsimony penalty and renormalized. No command-line option is required to produce either result.
 
 ### _posterior_timing_table_penalty_&lt;True|False&gt;.tsv
-This table gives 100 direct samples from the timing posterior for each gained segment. Both the gain and the WGD timing are given in the case of a WGD tumour.
+This table contains the independent-gain rows produced by 100 direct draws from the timing posterior for each gained segment. Both the gain and the WGD timing are given in the case of a WGD tumour.
 
-Each individual sample from the posterior for a given segment is labelled with ```Posterior_Sample_Index```. The route for each posterior sample is given by the route column.
+Each posterior draw for a segment is labelled with ```Posterior_Sample_Index```. A selected route contributes one row for each of its independent gains, ordered by sampled ```Gain_Timing``` and labelled with ```Gain_Index```. A route with no independent gains contributes no row to this table; its draw is still recorded in the posterior route-draw table described below.
 
 Again, as the number of gains that arise independently of the WGD will vary depending on the route, the number of gains per ```Posterior_Sample_Index``` can vary in WGD tumours.
 
 Two posterior-sample tables are produced for every run that produces timing output, with the same ```_penalty_False.tsv``` and ```_penalty_True.tsv``` mode tags as their corresponding summary tables. The unpenalized and penalized draws are generated separately. The penalty is applied once, post-hoc, when constructing the ```_penalty_True.tsv``` draw set; it is not incorporated into route fitting or applied again during summarization.
 
-### _gain_timing_table.tsv
-This table gives more details about each possible route for each gained segment. As well as giving the timing for each gain in the route, it records the ordinary, unpenalized route probability. The total number of events implied for each route is also given, as well as the density of the timing samples.
+### _posterior_route_draw_table_penalty_&lt;True|False&gt;.tsv
+This is the one-row-per-draw ledger corresponding to each posterior timing table. Its key is ```(Sample_ID, Segment_ID, Posterior_Sample_Index)```, and it records the selected ```Route``` and sampled ```WGD_Timing```. Every valid segment has exactly 100 rows, including draws of routes with no independent gains. This table is therefore authoritative for route frequencies and posterior-draw denominators.
 
-The ```Probability``` values in this table are used directly for the ```_penalty_False.tsv``` posterior draws. For each segment, GRITIC derives the route probabilities for the ```_penalty_True.tsv``` draws by multiplying each route's ordinary probability by ```exp(-2.7 * Average_N_Events)``` exactly once and renormalizing across routes. This post-hoc calculation does not modify the gain timing table. Tree output and downstream mutation timing therefore continue to use the unpenalized route probabilities. See [the publication](https://aacrjournals.org/cancerdiscovery/article/14/10/1810/748591/The-History-of-Chromosomal-Instability-in-Genome) for details of the penalty.
+### _route_table.tsv
+This table contains exactly one row for each possible route of each timed segment. Its key is ```(Sample_ID, Segment_ID, Route)```. It stores the ordinary, unpenalized ```Probability```, average event and loss counts, route density and runtime, and the segment and WGD metadata. Routes with no independently timeable gains are retained here.
+
+The ```Probability``` values are used directly for ```_penalty_False.tsv``` route draws. For ```_penalty_True.tsv```, GRITIC multiplies each unique route's ordinary probability by ```exp(-2.7 * Average_N_Events)``` exactly once and renormalizes across routes within the segment. The number of independent gains does not alter the route-selection probability. This post-hoc calculation does not modify the route table. Tree output and downstream mutation timing therefore continue to use the unpenalized route probabilities. See [the publication](https://aacrjournals.org/cancerdiscovery/article/14/10/1810/748591/The-History-of-Chromosomal-Instability-in-Genome) for details of the penalty.
+
+### _gain_timing_table.tsv
+This table contains exactly one row per independently timeable gain node per route, keyed by ```(Sample_ID, Segment_ID, Route, Node)```. It stores ```Node_Phasing``` and the median and 95% credible interval of that node's timing. Route probabilities and other route-level fields are not duplicated here. A route without an independently timeable gain has no row in this table; no artificial ```NA``` node is written.
+
+When constructing posterior draws, GRITIC first selects a route from the unique rows in ```_route_table.tsv```. It then selects one posterior-array index for that route and uses the same index for the WGD and every independent-gain timing, preserving their joint dependence. The gain timing table supplies node identity and phasing metadata; the full aligned posterior arrays remain in ```_timing_dicts```.
 
 Please see the supplementary materials of the accompanying preprint for more details on the route densities.
 
