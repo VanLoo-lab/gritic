@@ -1,9 +1,9 @@
 import os
-import bz2
 import gzip
+import hashlib
 import json
 import logging
-import pickle
+import sys
 from numbers import Integral
 
 import warnings
@@ -29,6 +29,7 @@ from gritic.tableschemas import (
     GAIN_TIMING_TABLE_COLUMNS,
     ROUTE_TABLE_COLUMNS,
 )
+from gritic.timingio import write_timing_archive
 
 from sklearn.neighbors import NearestNeighbors
 
@@ -49,13 +50,278 @@ logger = logging.getLogger(__name__)
 
 
 MIN_WGD_MUTATIONS = 10
-NUMPY_CACHE_VERSION = 1
 ROUTE_CONDITIONAL_SAMPLE_COUNT = 1000
 COMBINED_WGD_SAMPLE_COUNT = 500
+SUBCLONE_PRIOR_MODES = ('corrected', 'uncorrected')
+DEFAULT_SUBCLONE_PRIOR = 'corrected'
+
+
+def validate_subclone_prior(subclone_prior):
+    if subclone_prior not in SUBCLONE_PRIOR_MODES:
+        permitted = ', '.join(SUBCLONE_PRIOR_MODES)
+        raise ValueError(
+            f'subclone_prior must be one of: {permitted}'
+        )
+    return subclone_prior
+
+
+def get_sample_clone_fractions(subclone_table):
+    if subclone_table is None:
+        return np.array([1.0])
+
+    subclone_fractions = np.asarray(
+        subclone_table['Subclone_Fraction'],
+        dtype=float,
+    )
+    return np.concatenate((
+        [1.0 - np.sum(subclone_fractions)],
+        subclone_fractions,
+    ))
+
+
+def get_clone_share_prior_alpha(
+    sample_clone_fractions,
+    subclonal_correction_array=None,
+    subclone_prior=DEFAULT_SUBCLONE_PRIOR,
+):
+    subclone_prior = validate_subclone_prior(subclone_prior)
+    clone_fractions = np.asarray(sample_clone_fractions, dtype=float)
+    if clone_fractions.ndim != 1 or clone_fractions.size == 0:
+        raise ValueError(
+            'sample_clone_fractions must be a non-empty one-dimensional array'
+        )
+    if (
+        not np.isfinite(clone_fractions).all()
+        or (clone_fractions < 0).any()
+        or not np.isclose(np.sum(clone_fractions), 1.0)
+    ):
+        raise ValueError(
+            'sample_clone_fractions must contain finite non-negative values '
+            'that sum to 1'
+        )
+
+    if subclone_prior == 'uncorrected':
+        prior_fractions = clone_fractions
+    else:
+        correction = np.asarray(subclonal_correction_array, dtype=float)
+        if correction.shape != clone_fractions.shape:
+            raise ValueError(
+                'subclonal_correction_array must have the same shape as '
+                'sample_clone_fractions'
+            )
+        if not np.isfinite(correction).all() or (correction <= 0).any():
+            raise ValueError(
+                'subclonal_correction_array must contain finite positive '
+                'values'
+            )
+        # Normalize in log space so a very small but positive detection
+        # probability does not overflow the inverse correction.
+        log_prior_weights = np.full(clone_fractions.shape, -np.inf)
+        positive_fraction = clone_fractions > 0
+        log_prior_weights[positive_fraction] = (
+            np.log(clone_fractions[positive_fraction])
+            - np.log(correction[positive_fraction])
+        )
+        prior_fractions = np.exp(
+            log_prior_weights - logsumexp(log_prior_weights)
+        )
+
+    return 1.0 + prior_fractions
+
+
+def get_segment_cache_identity(segment_id):
+    return f'segment:{segment_id}'
+
+
+def get_pooled_wgd_cache_identity(minor_cn, source_segment_ids):
+    source_segment_ids = sorted(map(str, source_segment_ids))
+    context = json.dumps(
+        {
+            'kind': 'pooled_wgd',
+            'minor_cn': _json_scalar(minor_cn),
+            'source_segment_ids': source_segment_ids,
+        },
+        sort_keys=True,
+        separators=(',', ':'),
+    )
+    digest = hashlib.sha256(context.encode('utf-8')).hexdigest()
+    return f'pooled-wgd:{digest}'
+
+
+def get_subclone_prior_cache_namespace(
+    subclone_prior,
+    segment_cache_identity=None,
+):
+    subclone_prior = validate_subclone_prior(subclone_prior)
+    if subclone_prior == 'uncorrected':
+        return pathlib.Path('uncorrected')
+    if segment_cache_identity is None:
+        raise ValueError(
+            'segment_cache_identity is required for the corrected '
+            'subclone prior'
+        )
+    identity = str(segment_cache_identity)
+    if not identity:
+        raise ValueError(
+            'segment_cache_identity must not be empty for the corrected '
+            'subclone prior'
+        )
+    digest = hashlib.sha256(identity.encode('utf-8')).hexdigest()
+    return pathlib.Path('corrected') / digest
+
+
+def get_cache_subclone_prior(subclone_prior, subclone_table):
+    """Use the shared cache when no subclone prior is sampled."""
+    subclone_prior = validate_subclone_prior(subclone_prior)
+    if subclone_table is None:
+        return 'uncorrected'
+    if isinstance(subclone_table, pd.DataFrame) and subclone_table.empty:
+        return 'uncorrected'
+    return subclone_prior
+
+
+def _remove_cache_directory_preserving_error(cache_dir):
+    """Remove a cache directory without masking an active exception."""
+    cache_dir = pathlib.Path(cache_dir)
+    if not cache_dir.is_dir():
+        return
+    active_exception = sys.exc_info()[0] is not None
+    try:
+        shutil.rmtree(cache_dir)
+    except OSError:
+        if not active_exception:
+            raise
+        logger.exception(
+            'Failed to remove cache directory %s while preserving the '
+            'active processing error',
+            cache_dir,
+        )
+
+
+def _remove_cache_file_preserving_error(cache_path):
+    """Remove a cache file without masking an active exception."""
+    cache_path = pathlib.Path(cache_path)
+    if not cache_path.is_file():
+        return
+    active_exception = sys.exc_info()[0] is not None
+    try:
+        cache_path.unlink()
+    except OSError:
+        if not active_exception:
+            raise
+        logger.exception(
+            'Failed to remove cache file %s while preserving the active '
+            'processing error',
+            cache_path,
+        )
+
+
+def remove_mult_store_cache_namespace(
+    mult_store_dir,
+    subclone_prior,
+    segment_cache_identity=None,
+):
+    """Remove one resolved cache namespace, if it exists."""
+    if mult_store_dir is None:
+        return
+    namespace = get_subclone_prior_cache_namespace(
+        subclone_prior,
+        segment_cache_identity,
+    )
+    cache_dir = pathlib.Path(mult_store_dir, namespace)
+    _remove_cache_directory_preserving_error(cache_dir)
+
+    corrected_root = pathlib.Path(mult_store_dir, 'corrected')
+    if corrected_root.is_dir():
+        try:
+            corrected_root.rmdir()
+        except OSError:
+            pass
+
+
+def remove_mult_store_route_caches(
+    mult_store_dir,
+    subclone_prior,
+    route_ids,
+    wgd_status,
+    wgd_timing_distribution,
+    segment_cache_identity=None,
+):
+    """Remove cached arrays for exact routes in one WGD context."""
+    if mult_store_dir is None:
+        return
+    namespace = get_subclone_prior_cache_namespace(
+        subclone_prior,
+        segment_cache_identity,
+    )
+    cache_dir = pathlib.Path(mult_store_dir, namespace)
+    cache_prefixes = (
+        'mult_store',
+        'timing_store',
+        'wgd_timing_store',
+        'density_store',
+    )
+    for route_id in route_ids:
+        cache_key = get_mult_store_cache_key(
+            route_id,
+            wgd_status,
+            wgd_timing_distribution,
+        )
+        for cache_prefix in cache_prefixes:
+            _remove_cache_file_preserving_error(
+                cache_dir/f'{cache_prefix}_{cache_key}.npy.gz'
+            )
+    if cache_dir.is_dir():
+        try:
+            cache_dir.rmdir()
+        except OSError:
+            pass
+
+
+def get_wgd_context_digest(wgd_status, wgd_timing_distribution):
+    """Digest the explicit WGD status and exact timing distribution."""
+    if not isinstance(wgd_status, (bool, np.bool_)):
+        raise ValueError('wgd_status must be a boolean')
+
+    hasher = hashlib.sha256()
+    hasher.update(f'wgd-status:{int(wgd_status)}\0'.encode('ascii'))
+    if wgd_timing_distribution is None:
+        hasher.update(b'no-wgd-timing-distribution')
+        return hasher.hexdigest()
+
+    distribution = np.ascontiguousarray(
+        np.asarray(wgd_timing_distribution, dtype='<f8')
+    )
+    hasher.update(b'wgd-timing-distribution\0')
+    hasher.update(json.dumps(distribution.shape).encode('ascii'))
+    hasher.update(b'\0')
+    hasher.update(distribution.tobytes())
+    return hasher.hexdigest()
+
+
+def get_mult_store_cache_key(
+    route_id,
+    wgd_status,
+    wgd_timing_distribution,
+):
+    """Identify a full route within its explicit WGD sampling context."""
+    return (
+        f'{route_id}_wgd_'
+        f'{get_wgd_context_digest(wgd_status, wgd_timing_distribution)}'
+    )
 
 
 class Route:
-    def __init__(self,route_id,tree,major_cn,minor_cn,wgd_status,mult_store_dir):
+    def __init__(
+        self,
+        route_id,
+        tree,
+        major_cn,
+        minor_cn,
+        wgd_status,
+        mult_store_dir,
+        cache_namespace,
+    ):
         self.route_id = route_id
         self.short_id = route_id[:9]
         self.route_tree = RouteTree(tree,major_cn,minor_cn,wgd_status)
@@ -66,6 +332,7 @@ class Route:
 
         self.wgd_status = wgd_status
         self.mult_store_dir = mult_store_dir
+        self.cache_namespace = cache_namespace
         self.ll_store = None
         self.node_timing = None
         self.wgd_timing_store = None
@@ -155,10 +422,7 @@ class Route:
     
 
     @staticmethod
-    def simulate_clone_share(alpha,n_samples,prior_weight=1.0):
-        alpha = alpha/np.sum(alpha)
-        alpha = prior_weight*alpha +1
-
+    def simulate_clone_share(alpha,n_samples):
         dirichlet_sample = np.random.dirichlet(alpha,size=n_samples)
         return dirichlet_sample
     def get_density_estimate(self,samples,n_test_points=1000,radius=0.05):
@@ -239,18 +503,24 @@ class Route:
     
     def get_mult_store(self,alpha,n_subclones,wgd_timing_distribution):
         if self.mult_store_dir is not None:
-            cn_dir = self.mult_store_dir/f'{self.major_cn}_{self.minor_cn}'
-            os.makedirs(cn_dir,exist_ok=True)
-
-            #pathlib version
-            cache_suffix = (
-                f'{self.short_id}_wgd_{self.wgd_status}_'
-                f'v{NUMPY_CACHE_VERSION}.npy.gz'
+            cache_dir = pathlib.Path(
+                self.mult_store_dir,
+                self.cache_namespace,
             )
-            mult_store_path = cn_dir/f'mult_store_{cache_suffix}'
-            timing_store_path = cn_dir/f'timing_store_{cache_suffix}'
-            wgd_timing_store_path = cn_dir/f'wgd_timing_store_{cache_suffix}'
-            density_store_path = cn_dir/f'density_store_{cache_suffix}'
+            os.makedirs(cache_dir,exist_ok=True)
+
+            cache_key = get_mult_store_cache_key(
+                self.route_id,
+                self.wgd_status,
+                wgd_timing_distribution,
+            )
+            cache_suffix = f'{cache_key}.npy.gz'
+            mult_store_path = cache_dir/f'mult_store_{cache_suffix}'
+            timing_store_path = cache_dir/f'timing_store_{cache_suffix}'
+            wgd_timing_store_path = (
+                cache_dir/f'wgd_timing_store_{cache_suffix}'
+            )
+            density_store_path = cache_dir/f'density_store_{cache_suffix}'
 
             if os.path.exists(mult_store_path):
                 mult_store = self.load_gz_numpy(mult_store_path)
@@ -284,22 +554,39 @@ class Route:
         raw_samples_store['LL'] = ll_store[random_indexes].copy()
         return raw_samples_store
     
-    def run_sampling(self,mult_probabilities,subclone_table,wgd_timing_distribution):
+    def run_sampling(
+        self,
+        mult_probabilities,
+        subclone_table,
+        wgd_timing_distribution,
+        subclone_prior=DEFAULT_SUBCLONE_PRIOR,
+    ):
 
         run_time = time.perf_counter()
 
-        #alpha os subclonal clonal proportions
+        subclone_prior = validate_subclone_prior(subclone_prior)
+        n_subclones = (
+            0
+            if subclone_table is None
+            else len(subclone_table.index)
+        )
         alpha = None
-        if subclone_table is not None:
-            n_clonal_snvs_sample = np.round(subclone_table['N_SNVs'].sum()/subclone_table['Subclone_Fraction'].sum()*(1-subclone_table['Subclone_Fraction'].sum())).astype(int)
-            alpha = np.concatenate([[n_clonal_snvs_sample],subclone_table['N_SNVs']])+1
-            subclonal_correction_array = mult_probabilities.get_subclonal_correction_array(subclone_table)
-            
-        
-            alpha = alpha/subclonal_correction_array
-            
-        
-        n_subclones = 0 if subclone_table is None else len(subclone_table.index)
+        if n_subclones > 0:
+            sample_clone_fractions = get_sample_clone_fractions(
+                subclone_table
+            )
+            subclonal_correction_array = None
+            if subclone_prior == 'corrected':
+                subclonal_correction_array = (
+                    mult_probabilities.get_subclonal_correction_array(
+                        subclone_table
+                    )
+                )
+            alpha = get_clone_share_prior_alpha(
+                sample_clone_fractions,
+                subclonal_correction_array,
+                subclone_prior,
+            )
 
         mult_store,timing_store,wgd_timing_store,density = self.get_mult_store(alpha,n_subclones,wgd_timing_distribution)
 
@@ -323,11 +610,24 @@ class Route:
 
 
 class RouteClassifier:
-    def __init__(self,major_cn,minor_cn,wgd_status,wgd_trees_status,mult_store_dir):
+    def __init__(
+        self,
+        major_cn,
+        minor_cn,
+        wgd_status,
+        wgd_trees_status,
+        mult_store_dir,
+        *,
+        subclone_prior=DEFAULT_SUBCLONE_PRIOR,
+        segment_cache_identity=None,
+    ):
         self.major_cn = major_cn
         self.minor_cn = minor_cn
         self.wgd_status = wgd_status
         self.mult_store_dir = mult_store_dir
+        self.subclone_prior = validate_subclone_prior(subclone_prior)
+        self.segment_cache_identity = segment_cache_identity
+        self.cache_namespace = None
         self.routes = self.generate_routes(wgd_trees_status)
 
         self.route_probabilities = {}
@@ -344,16 +644,41 @@ class RouteClassifier:
         possible_routes = {}
         possible_trees = treetools.get_nx_trees(self.major_cn,self.minor_cn,self.wgd_status,wgd_trees_status)
         for tree_id,tree in possible_trees.items():
-            route = Route(tree_id,tree,self.major_cn,self.minor_cn,self.wgd_status,self.mult_store_dir)
+            route = Route(
+                tree_id,
+                tree,
+                self.major_cn,
+                self.minor_cn,
+                self.wgd_status,
+                self.mult_store_dir,
+                self.cache_namespace,
+            )
             possible_routes[tree_id] = route
         return possible_routes
  
     def fit_routes(self,mult_probabilities,subclone_table,wgd_timing_distribution):
+        self.cache_subclone_prior = get_cache_subclone_prior(
+            self.subclone_prior,
+            subclone_table,
+        )
+        if getattr(self, 'mult_store_dir', None) is not None:
+            self.cache_namespace = get_subclone_prior_cache_namespace(
+                self.cache_subclone_prior,
+                self.segment_cache_identity,
+            )
+            for route in self.routes.values():
+                route.cache_namespace = self.cache_namespace
+
         route_ll_store = []
         route_ids = list(sorted(self.routes.keys()))
         for route_id in route_ids:
             route = self.routes[route_id]
-            route.run_sampling(mult_probabilities,subclone_table,wgd_timing_distribution)
+            route.run_sampling(
+                mult_probabilities,
+                subclone_table,
+                wgd_timing_distribution,
+                self.subclone_prior,
+            )
             route_ll_store.append(route.ll_store)
 
         #helps keep the exponentiation under control
@@ -616,12 +941,6 @@ def _initialize_table(table_path, columns):
             table_path,
         )
 
-def write_timing_dict(timing_dict,dict_dir,segment_id):
-    output_path = f'{dict_dir}/{segment_id}_timing_dict.bz2'
-    with bz2.BZ2File(output_path,'wb') as out_file:
-        pickle.dump(timing_dict,out_file)
-    
-
 def get_wgd_info(
     wgd_timing_distribution,
     interval=DEFAULT_TIMING_INTERVALS.sample_wgd,
@@ -689,13 +1008,80 @@ def get_combined_distribution(
     combined_distribution_samples = np.random.choice(bin_mid_points,p=combined_distribution,size=n_samples,replace=True)
     return combined_distribution_samples
 
+
+def _time_wgd_segment(
+    segment,
+    mult_store_dir,
+    interval_config,
+    subclone_prior,
+):
+    segment_cache_identity = get_segment_cache_identity(
+        getattr(segment, 'segment_id', str(segment))
+    )
+    subclone_table = getattr(segment, 'subclone_table', None)
+    cache_subclone_prior = get_cache_subclone_prior(
+        subclone_prior,
+        subclone_table,
+    )
+    try:
+        pseudo_minor_cn = 0 if segment.minor_cn == 2 else segment.minor_cn
+        classifier = RouteClassifier(
+            segment.major_cn,
+            pseudo_minor_cn,
+            False,
+            'No_WGD',
+            mult_store_dir,
+            subclone_prior=subclone_prior,
+            segment_cache_identity=segment_cache_identity,
+        )
+
+        mult_probabilities = segment.multiplicity_probabilities
+        original_minor_cn = mult_probabilities.minor_cn
+        try:
+            mult_probabilities.minor_cn = pseudo_minor_cn
+            classifier.fit_routes(
+                mult_probabilities,
+                subclone_table,
+                None,
+            )
+        finally:
+            mult_probabilities.minor_cn = original_minor_cn
+
+        wgd_route_table = classifier.get_route_table()
+        wgd_timing_table = classifier.get_timing_table(
+            interval=interval_config.route_gain,
+        )
+        wgd_timing_table = pd.merge(
+            wgd_route_table,
+            wgd_timing_table,
+            on='Route',
+            how='inner',
+            validate='one_to_many',
+        )
+        for key, val in segment.get_info_dict().items():
+            wgd_timing_table[key] = val
+
+        classifier_route = list(classifier.routes.values())[0]
+        segment_timing = classifier_route.get_node_timing(0)
+        return wgd_timing_table, segment_timing
+    finally:
+        if cache_subclone_prior == 'corrected':
+            remove_mult_store_cache_namespace(
+                mult_store_dir,
+                cache_subclone_prior,
+                segment_cache_identity,
+            )
+
+
 def time_wgd_major_cn_2(
     sample,
     output_dir,
     mult_store_dir,
     timing_dict_dir,
     interval_config=DEFAULT_TIMING_INTERVALS,
+    subclone_prior=DEFAULT_SUBCLONE_PRIOR,
 ):
+    subclone_prior = validate_subclone_prior(subclone_prior)
 
     wgd_timing_table_path = output_dir/f"{sample.sample_id}_gain_timing_table_wgd_segments.tsv"
     potential_wgd_segments = get_potential_wgd_segments(sample)
@@ -713,45 +1099,26 @@ def time_wgd_major_cn_2(
     wgd_timing_tables = []
     for segment in potential_wgd_segments:
         logger.info('Timing WGD segment: %s', segment)
-        #treat minor cn of 2 as 0 as they are equivalent
-        pseudo_minor_cn = 0 if segment.minor_cn == 2 else segment.minor_cn
-
-        classifier =  RouteClassifier(segment.major_cn,pseudo_minor_cn,False,'No_WGD',mult_store_dir)
- 
-        mult_probabilities =segment.multiplicity_probabilities
-        
-        mult_probabilities.minor_cn = pseudo_minor_cn
-        classifier.fit_routes(mult_probabilities,segment.subclone_table,None)
-        mult_probabilities.minor_cn = segment.minor_cn
-
-        wgd_route_table = classifier.get_route_table()
-        wgd_timing_table = classifier.get_timing_table(
-            interval=interval_config.route_gain,
+        wgd_timing_table, segment_timing = _time_wgd_segment(
+            segment,
+            mult_store_dir,
+            interval_config,
+            subclone_prior,
         )
-        wgd_timing_table = pd.merge(
-            wgd_route_table,
-            wgd_timing_table,
-            on='Route',
-            how='inner',
-            validate='one_to_many',
-        )
-        segment_dict = segment.get_info_dict()
-
-        for key,val in segment_dict.items():
-            wgd_timing_table[key] = val
         wgd_timing_tables.append(wgd_timing_table)
-        
-        
-        classifier_route = list(classifier.routes.values())[0]
-        segment_timing = classifier_route.get_node_timing(0)
+
         if not np.isfinite(segment_timing).all():
             continue
-        segment_timing_ci_low, segment_timing_ci_high = get_interval_bounds(
-            segment_timing,
-            interval_config.wgd_overlap,
+        segment_timing_ci_low, segment_timing_ci_high = (
+            get_interval_bounds(
+                segment_timing,
+                interval_config.wgd_overlap,
+            )
         )
-        
-        segment_ci_store[segment.segment_id] = (segment_timing_ci_low,segment_timing_ci_high)
+        segment_ci_store[segment.segment_id] = (
+            segment_timing_ci_low,
+            segment_timing_ci_high,
+        )
         segment_width_store[segment.segment_id] = segment.width
 
     if not segment_ci_store:
@@ -778,17 +1145,109 @@ def time_wgd_major_cn_2(
     overlapping_segments = [segment for segment in potential_wgd_segments if segment.segment_id in segments_with_max_overlap]
     non_overlapping_segment_ids = [segment.segment_id for segment in potential_wgd_segments if segment.segment_id not in segments_with_max_overlap]
     
-    cn_distributions = get_combined_segment_timing_cn_2(overlapping_segments,sample.subclone_table,sample.purity,mult_store_dir,timing_dict_dir)
+    cn_distributions = get_combined_segment_timing_cn_2(
+        overlapping_segments,
+        sample.subclone_table,
+        sample.purity,
+        mult_store_dir,
+        timing_dict_dir,
+        subclone_prior=subclone_prior,
+    )
     wgd_timing_distribution = get_combined_distribution(cn_distributions)
     
     return wgd_timing_distribution,non_overlapping_segment_ids,overlap_proportion,best_overlap_timing
 
 
+def _time_combined_wgd_segment(
+    minor_cn,
+    mutation_table,
+    combined_width,
+    source_segment_ids,
+    subclone_table,
+    sample_purity,
+    apply_reads_correction,
+    min_mutation_alt_count,
+    coverage_vaf_percentile,
+    mult_store_dir,
+    timing_dict_dir,
+    subclone_prior,
+):
+    mutation_table = mutation_table.copy()
+    mutation_table['Segment_ID'] = f'Minor_CN_{minor_cn}'
+    mutation_table['Chromosome'] = np.nan
+    mutation_table['Segment_Start'] = 0
+    mutation_table['Segment_End'] = combined_width
 
-def get_combined_segment_timing_cn_2(overlapping_segments,subclone_table,sample_purity,mult_store_dir,timing_dict_dir):
+    new_seg = Segment(
+        mutation_table,
+        subclone_table,
+        sample_purity,
+        sex=None,
+        apply_reads_correction=apply_reads_correction,
+        min_mutation_alt_count=min_mutation_alt_count,
+        coverage_vaf_percentile=coverage_vaf_percentile,
+    )
+    segment_cache_identity = get_pooled_wgd_cache_identity(
+        minor_cn,
+        source_segment_ids,
+    )
+    cache_subclone_prior = get_cache_subclone_prior(
+        subclone_prior,
+        new_seg.subclone_table,
+    )
+    try:
+        pseudo_minor_cn = 0 if minor_cn == 2 else minor_cn
+        classifier = RouteClassifier(
+            new_seg.major_cn,
+            pseudo_minor_cn,
+            False,
+            'No_WGD',
+            mult_store_dir,
+            subclone_prior=subclone_prior,
+            segment_cache_identity=segment_cache_identity,
+        )
+        mult_probabilities = new_seg.multiplicity_probabilities
+        original_minor_cn = mult_probabilities.minor_cn
+        try:
+            mult_probabilities.minor_cn = pseudo_minor_cn
+            classifier.fit_routes(
+                mult_probabilities,
+                new_seg.subclone_table,
+                None,
+            )
+        finally:
+            mult_probabilities.minor_cn = original_minor_cn
+
+        timing_dict = classifier.get_timing_dict()
+        write_timing_archive(
+            timing_dict,
+            timing_dict_dir,
+            f'WGD_minor_cn_{minor_cn}',
+        )
+        return classifier.get_best_timing()[0]
+    finally:
+        if cache_subclone_prior == 'corrected':
+            remove_mult_store_cache_namespace(
+                mult_store_dir,
+                cache_subclone_prior,
+                segment_cache_identity,
+            )
+
+
+
+def get_combined_segment_timing_cn_2(
+    overlapping_segments,
+    subclone_table,
+    sample_purity,
+    mult_store_dir,
+    timing_dict_dir,
+    subclone_prior=DEFAULT_SUBCLONE_PRIOR,
+):
+    subclone_prior = validate_subclone_prior(subclone_prior)
 
     mutation_tables = []
     combined_width_by_minor_cn = {}
+    source_segment_ids_by_minor_cn = {}
     min_mutation_alt_counts = {
         segment.min_mutation_alt_count
         for segment in overlapping_segments
@@ -799,6 +1258,15 @@ def get_combined_segment_timing_cn_2(overlapping_segments,subclone_table,sample_
             'alternate-read count'
         )
     min_mutation_alt_count = min_mutation_alt_counts.pop()
+    coverage_vaf_percentiles = {
+        segment.coverage_vaf_percentile
+        for segment in overlapping_segments
+    }
+    if len(coverage_vaf_percentiles) != 1:
+        raise ValueError(
+            'Combined WGD segments must use one coverage VAF percentile'
+        )
+    coverage_vaf_percentile = coverage_vaf_percentiles.pop()
     apply_reads_correction_values = {
         segment.apply_reads_correction
         for segment in overlapping_segments
@@ -814,45 +1282,31 @@ def get_combined_segment_timing_cn_2(overlapping_segments,subclone_table,sample_
             combined_width_by_minor_cn.get(segment.minor_cn, 0)
             + int(segment.width)
         )
+        source_segment_ids_by_minor_cn.setdefault(
+            segment.minor_cn,
+            [],
+        ).append(getattr(segment, 'segment_id', str(segment)))
     combined_mutation_table = pd.concat(mutation_tables)
     assert len(combined_mutation_table['Major_CN'].unique()) ==1
     segment_timing_store = []
-    
-    for minor_cn,minor_cn_mutation_table in combined_mutation_table.groupby('Minor_CN'):
-        minor_cn_mutation_table = minor_cn_mutation_table.copy()
-        
-        # Represent this potentially discontiguous aggregate by a synthetic
-        # half-open interval whose width is the sum of its source segments.
-        minor_cn_mutation_table['Segment_ID'] = f'Minor_CN_{minor_cn}'
-        minor_cn_mutation_table['Chromosome'] = np.nan
-        minor_cn_mutation_table['Segment_Start'] = 0
-        minor_cn_mutation_table['Segment_End'] = (
-            combined_width_by_minor_cn[minor_cn]
+    grouped_mutations = combined_mutation_table.groupby('Minor_CN')
+    for minor_cn, minor_cn_mutation_table in grouped_mutations:
+        segment_timing_store.append(
+            _time_combined_wgd_segment(
+                minor_cn,
+                minor_cn_mutation_table,
+                combined_width_by_minor_cn[minor_cn],
+                source_segment_ids_by_minor_cn[minor_cn],
+                subclone_table,
+                sample_purity,
+                apply_reads_correction,
+                min_mutation_alt_count,
+                coverage_vaf_percentile,
+                mult_store_dir,
+                timing_dict_dir,
+                subclone_prior,
+            )
         )
-
-        pseudo_minor_cn = 0 if minor_cn == 2 else minor_cn
-        #sex is None as it is autosomal segments only
-        new_seg = Segment(
-            minor_cn_mutation_table,
-            subclone_table,
-            sample_purity,
-            sex=None,
-            apply_reads_correction=apply_reads_correction,
-            min_mutation_alt_count=min_mutation_alt_count,
-        )
-        classifier =  RouteClassifier(new_seg.major_cn,pseudo_minor_cn,False,'No_WGD',mult_store_dir)
-        mult_probabilities =new_seg.multiplicity_probabilities
-        mult_probabilities.minor_cn = pseudo_minor_cn
-        classifier.fit_routes(
-            mult_probabilities,
-            new_seg.subclone_table,
-            None,
-        )
-        timing_dict= classifier.get_timing_dict()
-        write_timing_dict(timing_dict,timing_dict_dir,f'WGD_minor_cn_{minor_cn}')
-        mult_probabilities.minor_cn = minor_cn
-        segment_timing = classifier.get_best_timing()[0]
-        segment_timing_store.append(segment_timing)
     
     return segment_timing_store
 
@@ -946,6 +1400,93 @@ def write_wgd_calling_info(
         output_file.write('\n')
 
 
+def _process_segment(
+    segment,
+    wgd_timing_distribution,
+    output_dir,
+    mult_store_dir,
+    timing_dict_dir,
+    sample_id,
+    wgd_status,
+    plot_trees,
+    wgd_info,
+    interval_config,
+    subclone_prior,
+    route_table_path,
+    timing_table_path,
+):
+    segment_cache_identity = get_segment_cache_identity(
+        getattr(segment, 'segment_id', str(segment))
+    )
+    subclone_table = getattr(segment, 'subclone_table', None)
+    cache_subclone_prior = get_cache_subclone_prior(
+        subclone_prior,
+        subclone_table,
+    )
+    try:
+        classifier = RouteClassifier(
+            segment.major_cn,
+            segment.minor_cn,
+            wgd_status,
+            'Default',
+            mult_store_dir,
+            subclone_prior=subclone_prior,
+            segment_cache_identity=segment_cache_identity,
+        )
+        classifier.fit_routes(
+            segment.multiplicity_probabilities,
+            subclone_table,
+            wgd_timing_distribution,
+        )
+
+        segment_route_table = classifier.get_route_table()
+        segment_timing_table = classifier.get_timing_table(
+            interval=interval_config.route_gain,
+        )
+        timing_dict = classifier.get_timing_dict()
+        write_timing_archive(
+            timing_dict,
+            timing_dict_dir,
+            segment.segment_id,
+        )
+
+        for key, val in segment.get_info_dict().items():
+            segment_route_table[key] = val
+        segment_route_table = add_wgd_info_to_route_table(
+            segment_route_table,
+            wgd_info,
+            wgd_status,
+        )
+        segment_route_table['Sample_ID'] = sample_id
+        segment_route_table = posteriortablegen.add_penalized_probability(
+            segment_route_table
+        )
+
+        segment_timing_table['Segment_ID'] = segment.segment_id
+        segment_timing_table['Sample_ID'] = sample_id
+
+        write_route_table(segment_route_table, route_table_path)
+        write_gain_timing_table(segment_timing_table, timing_table_path)
+
+        if plot_trees:
+            plot_output_dir = (
+                f'{output_dir}/{sample_id}_tree_plots/{segment.segment_id}'
+            )
+            classifier.plot_trees(
+                plot_output_dir,
+                str(segment),
+                wgd_info,
+                gain_interval=interval_config.tree_gain,
+            )
+    finally:
+        if cache_subclone_prior == 'corrected':
+            remove_mult_store_cache_namespace(
+                mult_store_dir,
+                cache_subclone_prior,
+                segment_cache_identity,
+            )
+
+
 def process_segments(
     segments,
     wgd_timing_distribution,
@@ -957,7 +1498,9 @@ def process_segments(
     plot_trees,
     wgd_info,
     interval_config=DEFAULT_TIMING_INTERVALS,
+    subclone_prior=DEFAULT_SUBCLONE_PRIOR,
 ):
+    subclone_prior = validate_subclone_prior(subclone_prior)
 
     route_table_path = output_dir/f"{sample_id}_route_table.tsv"
     timing_table_path = output_dir/f"{sample_id}_gain_timing_table.tsv"
@@ -966,53 +1509,38 @@ def process_segments(
     _initialize_table(timing_table_path, GAIN_TIMING_TABLE_COLUMNS)
 
     for cn_state in segments:
-        cn_dir = f'{mult_store_dir}/{cn_state[0]}_{cn_state[1]}'
-        for segment in segments[cn_state]:
-            logger.info('Timing gained segment: %s', segment)
-            mult_probabilities =segment.multiplicity_probabilities
-
-            wgd_trees_status = 'Default'
-            classifier = RouteClassifier(segment.major_cn,segment.minor_cn,wgd_status,wgd_trees_status,mult_store_dir)
-            
-            classifier.fit_routes(mult_probabilities,segment.subclone_table,wgd_timing_distribution)
-
-            segment_route_table = classifier.get_route_table()
-            segment_timing_table = classifier.get_timing_table(
-                interval=interval_config.route_gain,
-            )
-            timing_dict= classifier.get_timing_dict()
-            write_timing_dict(timing_dict,timing_dict_dir,segment.segment_id)
-
-            segment_dict = segment.get_info_dict()
-            for key,val in segment_dict.items():
-                segment_route_table[key] = val
-            segment_route_table = add_wgd_info_to_route_table(
-                segment_route_table,
-                wgd_info,
-                wgd_status,
-            )
-            segment_route_table['Sample_ID'] = sample_id
-            segment_route_table = (
-                posteriortablegen.add_penalized_probability(
-                    segment_route_table
-                )
-            )
-
-            segment_timing_table['Segment_ID'] = segment.segment_id
-            segment_timing_table['Sample_ID'] = sample_id
-
-            write_route_table(segment_route_table, route_table_path)
-            write_gain_timing_table(segment_timing_table, timing_table_path)
-
-            if plot_trees:
-                plot_output_dir = f"{output_dir}/{sample_id}_tree_plots/{segment.segment_id}"
-                classifier.plot_trees(
-                    plot_output_dir,
-                    str(segment),
+        route_ids = tuple(treetools.get_nx_trees(
+            cn_state[0],
+            cn_state[1],
+            wgd_status,
+            'Default',
+        ))
+        try:
+            for segment in segments[cn_state]:
+                logger.info('Timing gained segment: %s', segment)
+                _process_segment(
+                    segment,
+                    wgd_timing_distribution,
+                    output_dir,
+                    mult_store_dir,
+                    timing_dict_dir,
+                    sample_id,
+                    wgd_status,
+                    plot_trees,
                     wgd_info,
-                    gain_interval=interval_config.tree_gain,
+                    interval_config,
+                    subclone_prior,
+                    route_table_path,
+                    timing_table_path,
                 )
-        shutil.rmtree(cn_dir)
+        finally:
+            remove_mult_store_route_caches(
+                mult_store_dir,
+                'uncorrected',
+                route_ids,
+                wgd_status,
+                wgd_timing_distribution,
+            )
 
 def _validate_wgd_count(wgd_count):
     if wgd_count is None:
@@ -1024,6 +1552,151 @@ def _validate_wgd_count(wgd_count):
     return int(wgd_count)
 
 
+def _process_sample_with_mult_store(
+    sample,
+    output_dir,
+    timing_dict_dir,
+    mult_store_dir,
+    plot_trees,
+    min_wgd_overlap,
+    wgd_count,
+    interval_config,
+    subclone_prior,
+    major_cn_mode,
+):
+    if wgd_count is not None:
+        if major_cn_mode == 1 and wgd_count == 1:
+            warnings.warn(
+                'Sample was specified with WGD count 1 but major CN mode is '
+                '1. Please check the WGD count of the sample'
+            )
+        if major_cn_mode == 2 and wgd_count == 0:
+            warnings.warn(
+                'Sample was specified with WGD count 0 but major CN mode is '
+                '2. Please check the WGD count of the sample'
+            )
+
+        if wgd_count == 1:
+            (
+                wgd_timing_distribution,
+                non_overlapping_segment_ids,
+                overlap_proportion,
+                best_overlap_timing,
+            ) = time_wgd_major_cn_2(
+                sample,
+                output_dir,
+                mult_store_dir,
+                timing_dict_dir,
+                interval_config=interval_config,
+                subclone_prior=subclone_prior,
+            )
+            wgd_status = True
+        else:
+            wgd_status = False
+            wgd_timing_distribution = None
+            non_overlapping_segment_ids = []
+            best_overlap_timing = np.nan
+            overlap_proportion = np.nan
+    elif major_cn_mode == 1:
+        wgd_status = False
+        wgd_timing_distribution = None
+        non_overlapping_segment_ids = []
+        best_overlap_timing = np.nan
+        overlap_proportion = np.nan
+    else:
+        (
+            wgd_timing_distribution,
+            non_overlapping_segment_ids,
+            overlap_proportion,
+            best_overlap_timing,
+        ) = time_wgd_major_cn_2(
+            sample,
+            output_dir,
+            mult_store_dir,
+            timing_dict_dir,
+            interval_config=interval_config,
+            subclone_prior=subclone_prior,
+        )
+        if overlap_proportion < min_wgd_overlap:
+            warnings.warn(
+                'The major CN mode is 2, but the overlap proportion is '
+                f'less than {min_wgd_overlap}. There are a lot of copy '
+                'number 2 segments, but they are not overlapping enough '
+                'to be confident in a WGD call. The sample will be '
+                'treated as a non-WGD sample. Proceed with caution in '
+                'downstream analysis for this sample'
+            )
+            wgd_timing_distribution = None
+            non_overlapping_segment_ids = []
+            wgd_status = False
+        else:
+            wgd_status = True
+
+    wgd_info = get_wgd_info(
+        wgd_timing_distribution,
+        interval=interval_config.sample_wgd,
+    )
+    write_wgd_calling_info(
+        wgd_info,
+        overlap_proportion,
+        best_overlap_timing,
+        major_cn_mode,
+        wgd_status,
+        output_dir,
+        sample.sample_id,
+    )
+    timeable_complex_segments = get_timeable_segments(
+        sample,
+        wgd_status=wgd_status,
+        excluded_segment_ids=non_overlapping_segment_ids,
+    )
+
+    route_table_path = output_dir/f'{sample.sample_id}_route_table.tsv'
+    timing_table_path = output_dir/f'{sample.sample_id}_gain_timing_table.tsv'
+    process_segments(
+        timeable_complex_segments,
+        wgd_timing_distribution,
+        output_dir,
+        mult_store_dir,
+        timing_dict_dir,
+        sample.sample_id,
+        wgd_status,
+        plot_trees=plot_trees,
+        wgd_info=wgd_info,
+        interval_config=interval_config,
+        subclone_prior=subclone_prior,
+    )
+
+    if os.path.exists(route_table_path):
+        for apply_penalty in (False, True):
+            (
+                sample_posterior_table,
+                sample_posterior_route_draw_table,
+            ) = posteriortablegen.get_sample_posterior_tables(
+                route_table_path,
+                timing_table_path,
+                output_dir,
+                sample.sample_id,
+                apply_penalty=apply_penalty,
+            )
+            sample_posterior_table_summary = (
+                posteriortablegen.get_sample_posterior_table_summary(
+                    sample_posterior_table,
+                    sample_posterior_route_draw_table,
+                    interval=interval_config.posterior_summary,
+                )
+            )
+            posterior_table_summary_path = (
+                output_dir
+                / f'{sample.sample_id}_posterior_timing_table_summary_'
+                f'penalty_{apply_penalty}.tsv'
+            )
+            _write_tsv(
+                sample_posterior_table_summary,
+                posterior_table_summary_path,
+            )
+
+
 def process_sample(
     sample,
     output_dir,
@@ -1031,9 +1704,11 @@ def process_sample(
     min_wgd_overlap=0.6,
     wgd_count=None,
     interval_config=DEFAULT_TIMING_INTERVALS,
+    subclone_prior=DEFAULT_SUBCLONE_PRIOR,
 ):
     if not isinstance(interval_config, TimingIntervalConfig):
         raise TypeError('interval_config must be a TimingIntervalConfig')
+    subclone_prior = validate_subclone_prior(subclone_prior)
     wgd_count = _validate_wgd_count(wgd_count)
     validate_sample_id(sample.sample_id)
     major_cn_mode = get_major_cn_mode(sample)
@@ -1056,7 +1731,7 @@ def process_sample(
             )
     else:
         os.makedirs(output_dir, exist_ok=False)
-   
+
 
     timing_dict_dir= output_dir/f"{sample.sample_id}_timing_dicts/"
     os.makedirs(timing_dict_dir,exist_ok=True)
@@ -1064,7 +1739,7 @@ def process_sample(
     sample_mutation_table = sample.get_mutation_table()
     sample_mutation_table_path = output_dir/f"{sample.sample_id}_mutation_table.tsv"
     _write_tsv(sample_mutation_table, sample_mutation_table_path)
-    
+
     sample_subclone_table = sample.get_subclone_table()
     sample_subclone_table_path = output_dir/f"{sample.sample_id}_subclone_table.tsv"
     if sample_subclone_table is None:
@@ -1072,137 +1747,22 @@ def process_sample(
             columns=dataloader.SUBCLONE_OUTPUT_COLUMNS,
         )
     _write_tsv(sample_subclone_table, sample_subclone_table_path)
-    
+
     mult_store_dir = output_dir/f"{sample.sample_id}_mult_stores_temp"
- 
+
     os.makedirs(mult_store_dir,exist_ok=True)
-
-    if wgd_count is not None:
-        if major_cn_mode ==1 and wgd_count == 1:
-            warnings.warn(
-                'Sample was specified with WGD count 1 but major CN mode is '
-                '1. Please check the WGD count of the sample'
-            )
-        if major_cn_mode ==2 and wgd_count == 0:
-            warnings.warn(
-                'Sample was specified with WGD count 0 but major CN mode is '
-                '2. Please check the WGD count of the sample'
-            )
-
-        
-        if wgd_count == 1:
-            wgd_timing_distribution,non_overlapping_segment_ids,overlap_proportion,best_overlap_timing= time_wgd_major_cn_2(
-                sample,
-                output_dir,
-                mult_store_dir,
-                timing_dict_dir,
-                interval_config=interval_config,
-            )
-            wgd_status = True
-        else:
-            wgd_status = False
-            wgd_timing_distribution = None
-            non_overlapping_segment_ids = []
-            best_overlap_timing = np.nan
-            overlap_proportion = np.nan
-    else:
-        if major_cn_mode ==1:
-            wgd_status = False
-            wgd_timing_distribution = None
-            non_overlapping_segment_ids = []
-            best_overlap_timing = np.nan
-            overlap_proportion = np.nan
-        elif major_cn_mode ==2:
-            wgd_timing_distribution,non_overlapping_segment_ids,overlap_proportion,best_overlap_timing= time_wgd_major_cn_2(
-                sample,
-                output_dir,
-                mult_store_dir,
-                timing_dict_dir,
-                interval_config=interval_config,
-            )
-            if overlap_proportion < min_wgd_overlap:
-                warnings.warn(
-                    'The major CN mode is 2, but the overlap proportion is '
-                    f'less than {min_wgd_overlap}. There are a lot of copy '
-                    'number 2 segments, but they are not overlapping enough '
-                    'to be confident in a WGD call. The sample will be '
-                    'treated as a non-WGD sample. Proceed with caution in '
-                    'downstream analysis for this sample'
-                )
-
-                wgd_timing_distribution = None
-                non_overlapping_segment_ids = []
-                wgd_status = False
-            else:
-                wgd_status = True
-
-    wgd_info = get_wgd_info(
-        wgd_timing_distribution,
-        interval=interval_config.sample_wgd,
-    )
-    write_wgd_calling_info(
-        wgd_info,
-        overlap_proportion,
-        best_overlap_timing,
-        major_cn_mode,
-        wgd_status,
-        output_dir,
-        sample.sample_id,
-    )
-    timeable_complex_segments = get_timeable_segments(
-        sample,
-        wgd_status=wgd_status,
-        excluded_segment_ids=non_overlapping_segment_ids,
-    )
-
-    route_table_path = output_dir/f"{sample.sample_id}_route_table.tsv"
-    timing_table_path = (
-        output_dir/f"{sample.sample_id}_gain_timing_table.tsv"
-    )
-
-    process_segments(
-        timeable_complex_segments,
-        wgd_timing_distribution,
-        output_dir,
-        mult_store_dir,
-        timing_dict_dir,
-        sample.sample_id,
-        wgd_status,
-        plot_trees=plot_trees,
-        wgd_info=wgd_info,
-        interval_config=interval_config,
-    )
-
-    if os.path.exists(route_table_path):
-        for apply_penalty in (False, True):
-            (
-                sample_posterior_table,
-                sample_posterior_route_draw_table,
-            ) = posteriortablegen.get_sample_posterior_tables(
-                route_table_path,
-                timing_table_path,
-                output_dir,
-                sample.sample_id,
-                apply_penalty=apply_penalty,
-            )
-
-            sample_posterior_table_summary = (
-                posteriortablegen.get_sample_posterior_table_summary(
-                    sample_posterior_table,
-                    sample_posterior_route_draw_table,
-                    interval=interval_config.posterior_summary,
-                )
-            )
-
-            posterior_table_summary_path = output_dir/f"{sample.sample_id}_posterior_timing_table_summary_penalty_{apply_penalty}.tsv"
-
-            _write_tsv(
-                sample_posterior_table_summary,
-                posterior_table_summary_path,
-            )
-
-    shutil.rmtree(mult_store_dir)
-    
-
-
-    
+    try:
+        _process_sample_with_mult_store(
+            sample,
+            output_dir,
+            timing_dict_dir,
+            mult_store_dir,
+            plot_trees,
+            min_wgd_overlap,
+            wgd_count,
+            interval_config,
+            subclone_prior,
+            major_cn_mode,
+        )
+    finally:
+        _remove_cache_directory_preserving_error(mult_store_dir)

@@ -65,6 +65,26 @@ def unit_interval_number(value):
     return parsed_value
 
 
+def minimum_subclone_ccf(value):
+    try:
+        parsed_value = float(value)
+        return sampletools.validate_min_subclone_ccf(parsed_value)
+    except (TypeError, ValueError) as error:
+        raise argparse.ArgumentTypeError(
+            'must be a finite number greater than 0 and at most 1'
+        ) from error
+
+
+def percentile(value):
+    try:
+        parsed_value = float(value)
+        return sampletools.validate_coverage_vaf_percentile(parsed_value)
+    except (TypeError, ValueError) as error:
+        raise argparse.ArgumentTypeError(
+            'must be a finite number between 0 and 100'
+        ) from error
+
+
 def interval_width(value):
     try:
         parsed_value = float(value)
@@ -248,11 +268,37 @@ def build_parser():
         ),
     )
     parser.add_argument(
+        '--coverage-vaf-percentile',
+        type=percentile,
+        default=sampletools.DEFAULT_COVERAGE_VAF_PERCENTILE,
+        metavar='PERCENTILE',
+        help=(
+            'Observed-SNV VAF percentile used to select mutations for the '
+            'mean-coverage estimate in the exact Poisson-thinning detection '
+            'correction (default: 90). '
+            'This high-VAF coverage heuristic differs from the publication/'
+            'thesis method, which averages detection power over every SNV\'s '
+            'observed depth in the segment; 90 is the historical code value. '
+            'It affects the likelihood correction in both subclone-prior modes '
+            'and the prior correction only in corrected mode.'
+        ),
+    )
+    parser.add_argument(
+        '--min-subclone-ccf',
+        type=minimum_subclone_ccf,
+        default=sampletools.DEFAULT_MIN_SUBCLONE_CCF,
+        help=(
+            'Minimum Subclone_CCF retained as a subclone, inclusive; it must '
+            'not exceed --max-subclone-ccf (default: 0.01).'
+        ),
+    )
+    parser.add_argument(
         '--max-subclone-ccf',
         type=unit_interval_number,
         default=sampletools.DEFAULT_MAX_SUBCLONE_CCF,
         help=(
-            'Maximum Subclone_CCF retained as a subclone (default: 0.9).'
+            'Maximum Subclone_CCF retained as a subclone, inclusive; it must '
+            'not be below --min-subclone-ccf (default: 0.9).'
         ),
     )
     parser.add_argument(
@@ -286,6 +332,20 @@ def build_parser():
         help=(
             'An optional tab separated file containing Cluster, Subclone_CCF '
             'and Subclone_Fraction.'
+        ),
+    )
+    parser.add_argument(
+        '--subclone-prior',
+        choices=gritictimer.SUBCLONE_PRIOR_MODES,
+        default=gritictimer.DEFAULT_SUBCLONE_PRIOR,
+        help=(
+            'Subclone-proportion prior mode. This selectable corrected/'
+            'uncorrected interface was added after publication. Corrected '
+            'inverse-detection-adjusts clone proportions per segment and is '
+            'an implementation extension not described in the publication; '
+            'uncorrected reproduces the publication/thesis sample-wide prior '
+            '(default: corrected). The likelihood detection correction '
+            'remains per segment in both modes.'
         ),
     )
     parser.add_argument(
@@ -349,7 +409,13 @@ def build_parser():
 
 
 def main(argv=None):
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.min_subclone_ccf > args.max_subclone_ccf:
+        parser.error(
+            '--min-subclone-ccf must be less than or equal to '
+            '--max-subclone-ccf'
+        )
     interval_config = build_interval_config(args)
 
     copy_number_table, mutation_table = dataloader.load_input_tables(
@@ -376,6 +442,8 @@ def main(argv=None):
         merge_cn=args.merge_adjacent_segments,
         min_mutation_alt_count=args.min_mutation_alt_count,
         min_mutation_coverage=args.min_mutation_coverage,
+        coverage_vaf_percentile=args.coverage_vaf_percentile,
+        min_subclone_ccf=args.min_subclone_ccf,
         max_subclone_ccf=args.max_subclone_ccf,
         min_subclone_fraction=args.min_subclone_fraction,
         autosome_count=args.autosome_count,
@@ -389,6 +457,7 @@ def main(argv=None):
             plot_trees=args.plot_trees,
             wgd_count=args.wgd_count,
             interval_config=interval_config,
+            subclone_prior=args.subclone_prior,
         )
 
 

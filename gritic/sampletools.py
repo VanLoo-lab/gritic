@@ -4,7 +4,7 @@ from numbers import Integral, Real
 
 import numpy as np
 import pandas as pd
-from scipy.stats import binom
+from scipy.stats import binom, poisson
 
 from numba import njit,prange
 
@@ -14,6 +14,8 @@ import gritic.dataloader as dataloader
 
 DEFAULT_MIN_MUTATION_ALT_COUNT = 3
 DEFAULT_MIN_MUTATION_COVERAGE = 10
+DEFAULT_COVERAGE_VAF_PERCENTILE = 90.0
+DEFAULT_MIN_SUBCLONE_CCF = 0.01
 DEFAULT_MAX_SUBCLONE_CCF = 0.9
 DEFAULT_MIN_SUBCLONE_FRACTION = 0.1
 DEFAULT_AUTOSOME_COUNT = 22
@@ -63,6 +65,35 @@ def _validate_unit_interval_number(value, parameter_name):
     ):
         raise ValueError(
             f'{parameter_name} must be a finite number between 0 and 1'
+        )
+    return float(value)
+
+
+def validate_min_subclone_ccf(value):
+    """Return a finite lower subclone-CCF bound in ``(0, 1]``."""
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, Real)
+        or not np.isfinite(value)
+        or not 0 < value <= 1
+    ):
+        raise ValueError(
+            'min_subclone_ccf must be a finite number greater than 0 and '
+            'at most 1'
+        )
+    return float(value)
+
+
+def validate_coverage_vaf_percentile(value):
+    """Return a finite VAF percentile in the NumPy-supported ``[0, 100]``."""
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, Real)
+        or not np.isfinite(value)
+        or not 0 <= value <= 100
+    ):
+        raise ValueError(
+            'coverage_vaf_percentile must be a finite number between 0 and 100'
         )
     return float(value)
 
@@ -335,6 +366,8 @@ class Sample:
         drop_unmatched_chromosomes=False,
         min_mutation_alt_count=DEFAULT_MIN_MUTATION_ALT_COUNT,
         min_mutation_coverage=DEFAULT_MIN_MUTATION_COVERAGE,
+        coverage_vaf_percentile=DEFAULT_COVERAGE_VAF_PERCENTILE,
+        min_subclone_ccf=DEFAULT_MIN_SUBCLONE_CCF,
         max_subclone_ccf=DEFAULT_MAX_SUBCLONE_CCF,
         min_subclone_fraction=DEFAULT_MIN_SUBCLONE_FRACTION,
         autosome_count=DEFAULT_AUTOSOME_COUNT,
@@ -361,10 +394,21 @@ class Sample:
             min_mutation_coverage,
             'min_mutation_coverage',
         )
+        self.coverage_vaf_percentile = validate_coverage_vaf_percentile(
+            coverage_vaf_percentile
+        )
+        self.min_subclone_ccf = validate_min_subclone_ccf(
+            min_subclone_ccf,
+        )
         self.max_subclone_ccf = _validate_unit_interval_number(
             max_subclone_ccf,
             'max_subclone_ccf',
         )
+        if self.min_subclone_ccf > self.max_subclone_ccf:
+            raise ValueError(
+                'min_subclone_ccf must be less than or equal to '
+                'max_subclone_ccf'
+            )
         self.min_subclone_fraction = _validate_unit_interval_number(
             min_subclone_fraction,
             'min_subclone_fraction',
@@ -567,6 +611,7 @@ class Sample:
         subclone_table = dataloader.validate_subclone_values(subclone_table)
         subclone_table = dataloader.get_valid_subclones(
             subclone_table,
+            min_ccf=self.min_subclone_ccf,
             max_ccf=self.max_subclone_ccf,
             min_fraction=self.min_subclone_fraction,
         )
@@ -670,6 +715,7 @@ class Sample:
                     self.sex,
                     apply_reads_correction=self.apply_reads_correction,
                     min_mutation_alt_count=self.min_mutation_alt_count,
+                    coverage_vaf_percentile=self.coverage_vaf_percentile,
                     _validated=_validated,
                 )
                 segments.append(segment)
@@ -698,6 +744,7 @@ class Segment:
         sex,
         apply_reads_correction=True,
         min_mutation_alt_count=DEFAULT_MIN_MUTATION_ALT_COUNT,
+        coverage_vaf_percentile=DEFAULT_COVERAGE_VAF_PERCENTILE,
         *,
         _validated=False,
     ):
@@ -723,6 +770,9 @@ class Segment:
         self.min_mutation_alt_count = _validate_non_negative_integer(
             min_mutation_alt_count,
             'min_mutation_alt_count',
+        )
+        self.coverage_vaf_percentile = validate_coverage_vaf_percentile(
+            coverage_vaf_percentile
         )
         self.sample_clone_fractions = self.get_sample_clone_fractions()
         self.n_subclones = self.get_n_subclones()
@@ -833,7 +883,9 @@ class Segment:
         peak_names = self.get_multiplicity_names()
         
         vaf = self.mutation_table["Tumor_Alt_Count"] / (self.mutation_table["Tumor_Alt_Count"] + self.mutation_table["Tumor_Ref_Count"])
-        highest_vaf_m_table = self.mutation_table[vaf>np.percentile(vaf,90)-0.01]
+        highest_vaf_m_table = self.mutation_table[
+            vaf > np.percentile(vaf, self.coverage_vaf_percentile) - 0.01
+        ]
         highest_vaf_average_coverage = np.average(highest_vaf_m_table['Tumor_Alt_Count']+highest_vaf_m_table['Tumor_Ref_Count'])
         
         if not self.apply_reads_correction:
@@ -848,13 +900,13 @@ class Segment:
             mult_probability = binom.logpmf(self.mutation_table["Tumor_Alt_Count"],total_counts,mult_vaf)
             multiplicity_probabilities.append(mult_probability)
 
-            alt_count_correction_factor = 1 - binom.cdf(
+            # If total depth is Poisson and alternate reads are a binomial
+            # thinning of that depth, the alternate-read count is Poisson
+            # with mean coverage * VAF. Evaluate the detection probability
+            # exactly instead of drawing pseudo-depths.
+            alt_count_correction_factor = poisson.sf(
                 self.min_mutation_alt_count - 1,
-                np.random.poisson(
-                    highest_vaf_average_coverage,
-                    size=mult_vaf.size,
-                ),
-                mult_vaf,
+                highest_vaf_average_coverage * mult_vaf,
             )
             alt_count_correction_factors.append(
                 alt_count_correction_factor

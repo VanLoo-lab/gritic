@@ -25,6 +25,7 @@ This command has five required arguments.
 
 There are also a number of optional arguments.
 - ```--subclone-table``` A path to the subclone table for the sample. If not provided it is assumed every SNV is clonal.
+- ```--subclone-prior {corrected,uncorrected}``` Select the subclone-proportion prior through an interface added after publication. ```corrected``` (the default) inverse-detection-adjusts clone proportions per segment and is an implementation extension not described in the publication. ```uncorrected``` reproduces the publication/thesis sample-wide prior.
 - ```--wgd-count {0,1}``` Override GRITIC's inferred whole-genome-duplication count. Counts below 0 or above 1 are rejected because GRITIC currently supports at most one WGD. If omitted, GRITIC infers the count.
 - ```--plot-trees``` Plot the route trees for each segment. This is an opt-in switch and is disabled by default.
 - ```--sample-sex``` Override the sample sex with ```XX```, ```XY```, ```ZZ```, or ```ZW```. If omitted, GRITIC infers the sex-chromosome system and karyotype from exact X, Y, Z, and W copy-number chromosome labels.
@@ -34,8 +35,12 @@ There are also a number of optional arguments.
 - ```--merge-adjacent-segments``` Merge coordinate-adjacent copy-number segments having identical ```Major_CN``` and ```Minor_CN```. This is disabled by default.
 - ```--min-mutation-alt-count``` Minimum ```Tumor_Alt_Count``` needed to retain a mutation. The default is 3.
 - ```--min-mutation-coverage``` Minimum ```Tumor_Ref_Count + Tumor_Alt_Count``` needed to retain a mutation. The default is 10.
-- ```--max-subclone-ccf``` Maximum ```Subclone_CCF``` retained as a subclone. The default is 0.9.
+- ```--coverage-vaf-percentile``` Observed-SNV VAF percentile used to select mutations for the mean-coverage estimate in the exact Poisson-thinning detection correction. The default is 90, the historical code value. This high-VAF coverage heuristic differs from the publication/thesis method, which averages detection power over every SNV's observed depth in the segment. It affects the likelihood correction in both subclone-prior modes and the prior correction only in ```corrected``` mode.
+- ```--min-subclone-ccf``` Minimum ```Subclone_CCF``` retained as a subclone, inclusive. It must be greater than 0 and no greater than ```--max-subclone-ccf```. The default is 0.01.
+- ```--max-subclone-ccf``` Maximum ```Subclone_CCF``` retained as a subclone, inclusive. It must be no lower than ```--min-subclone-ccf```. The default is 0.9.
 - ```--min-subclone-fraction``` A subclone's normalized share of the surviving subclonal mutation fractions must be strictly greater than this threshold. The default is 0.1.
+
+With the corrected prior, each route-and-WGD-context cache is separated by segment. With the uncorrected publication/thesis prior, each route-and-WGD-context cache is shared across all segments in the sample. The likelihood's detection correction is calculated per segment in both modes; changing this option changes only the subclone-proportion prior and its cache scope.
 
 Posterior intervals use the shortest contiguous empirical HPD interval by default. Each interval family has a ```--...-interval-width``` option expressed as a percentage and a matching ```--...-interval-method {hpd,equal-tailed}``` option:
 
@@ -86,6 +91,8 @@ sample = sampletools.Sample(
     merge_cn=False,
     min_mutation_alt_count=3,
     min_mutation_coverage=10,
+    coverage_vaf_percentile=90,
+    min_subclone_ccf=0.01,
     max_subclone_ccf=0.9,
     min_subclone_fraction=0.1,
     autosome_count=22,
@@ -96,6 +103,7 @@ gritictimer.process_sample(
     output_dir='examples/output',
     plot_trees=True,
     wgd_count=1,
+    subclone_prior='corrected',
     interval_config=intervaltools.TimingIntervalConfig(
         route_gain=intervaltools.IntervalSpec(95),
         tree_gain=intervaltools.IntervalSpec(90),
@@ -134,11 +142,11 @@ GRITIC orders copy-number rows by natural chromosome order, ```Segment_Start```,
 
 When sample sex is not supplied, an exact Y chromosome label implies ```XY``` and W implies ```ZW```; if neither is present, X implies ```XX``` and Z implies ```ZZ```. If no sex chromosome is represented, GRITIC defaults to ```XX```, so callers using another system should supply ```--sample-sex```. Inputs that mix the X/Y and Z/W systems cannot be inferred and fail. An explicit karyotype takes precedence. For ```XX```, X is present and Y is unmatched; for ```XY```, both X and Y are present. For ```ZZ```, Z is present and W is unmatched; for ```ZW```, both Z and W are present. Unmatched rows fail unless chromosome dropping is enabled. Normal-cell X/Y copy numbers are 2/0 for XX and 1/1 for XY; the corresponding Z/W values are 2/0 for ZZ and 1/1 for ZW. The ```autosome_count``` API argument and ```--autosome-count``` CLI option define the numbered autosomes and default to 22.
 ### Subclone Table (*Optional*)
-The identified subclonal peaks and their relative sizes for the sample. GRITIC filters candidate peaks using the configurable maximum CCF and minimum normalized-fraction thresholds described below.
+The identified subclonal peaks and their relative sizes for the sample. GRITIC filters candidate peaks using configurable lower and upper CCF bounds and the minimum normalized-fraction threshold described below.
 
 This table requires the column names ```Subclone_CCF``` (the cancer cell fraction of the subclone) & ```Subclone_Fraction``` (the fraction of total SNVs present in the subclone). A ```Cluster``` column is also required as an index for the subclones. CCF and fraction values must be finite numeric (not boolean) values between 0 and 1 inclusive, and the fractions must sum to no more than 1; invalid prior values fail before filtering.
 
-By default, only subclones with ```Subclone_CCF <= 0.9``` and more than 10% of the surviving subclonal mutation fraction are included; the thresholds are configurable with ```--max-subclone-ccf``` and ```--min-subclone-fraction```. If no subclones remain, GRITIC uses its clonal-only model as if no subclone table was supplied. If there are more than two subclones, GRITIC reformats the sample to have two: the subclone with the largest CCF is unmodified and the remaining clones are grouped together.
+By default, only subclones with ```0.01 <= Subclone_CCF <= 0.9``` and more than 10% of the surviving subclonal mutation fraction are included. Both CCF boundaries are inclusive. The thresholds are configurable with ```--min-subclone-ccf```, ```--max-subclone-ccf```, and ```--min-subclone-fraction```; the minimum CCF must be greater than 0 and cannot exceed the maximum. If no subclones remain, GRITIC uses its clonal-only model as if no subclone table was supplied. If there are more than two subclones, GRITIC reformats the sample to have two: the subclone with the largest CCF is unmodified and the remaining clones are grouped together.
 
 GRITIC always derives ```N_SNVs``` from the retained mutation count and each retained/combined ```Subclone_Fraction```, overwriting an input ```N_SNVs``` column. ```Subclone_Fraction``` contributes to the clonal/subclonal mixture prior used during route sampling, while ```Subclone_CCF``` determines the expected VAF of each subclone state.
 
@@ -157,7 +165,7 @@ In WGD tumours, the number of gains that arise independently of the WGD will var
 
 Two summary tables are produced for every run that produces timing output, including non-WGD runs. The filename ending in ```_penalty_False.tsv``` summarizes draws using ```Probability``` from the route table. The filename ending in ```_penalty_True.tsv``` summarizes a second set of draws using ```Penalized_Probability```. No command-line option is required to produce either result.
 
-The gain-draw and route-ledger data frames used to calculate these summaries are internal. GRITIC no longer writes the legacy ```_posterior_timing_table_penalty_<True|False>.tsv``` or ```_posterior_route_draw_table_penalty_<True|False>.tsv``` files. Raw route-conditional timing samples remain available in the timing dictionaries.
+The gain-draw and route-ledger data frames used to calculate these summaries are internal. GRITIC no longer writes the legacy ```_posterior_timing_table_penalty_<True|False>.tsv``` or ```_posterior_route_draw_table_penalty_<True|False>.tsv``` files. Raw route-conditional timing samples remain available in the timing stores.
 
 ### _route_table.tsv
 This table contains exactly one row for each possible route of each timed segment. Its first three columns and key are ```(Sample_ID, Segment_ID, Route)```. It stores both the ordinary ```Probability``` and post-hoc ```Penalized_Probability```, average event and loss counts, route density and runtime, and the segment and WGD metadata. Routes with no independently timeable gains are retained here. Its ```WGD_Timing``` interval fields exactly repeat the configured sample-level WGD summary written to the calling-info JSON.
@@ -197,7 +205,7 @@ Every output row contains these mutation identity, mapping, and provenance colum
 
 ```Mutation_ID``` and ```Position``` are retained only as provenance after ```GRITIC_Mutation_ID``` is generated. Neither is a downstream mutation key; downstream mutation referencing always uses ```GRITIC_Mutation_ID```.
 
-SNV multiplicity probabilities are given by the ```Prob_Mult_``` columns. ```Alt_Count_Correction_Mult_``` and ```Alt_Count_Correction_Subclone_``` columns estimate the probability that a mutation at the modelled segment coverage and multiplicity would satisfy the configured minimum alternate-read threshold. GRITIC uses these probabilities to correct for alternate-read ascertainment; the separate minimum-total-coverage filter is not included in this correction.
+SNV multiplicity probabilities are given by the ```Prob_Mult_``` columns. ```Alt_Count_Correction_Mult_``` and ```Alt_Count_Correction_Subclone_``` columns contain the exact probability that a Poisson alternate-read count, whose mean is the selected segment coverage multiplied by the modelled VAF, satisfies the configured minimum alternate-read threshold. GRITIC uses these probabilities to correct for alternate-read ascertainment; the separate minimum-total-coverage filter is not included in this correction.
 
 ### _subclone_table.tsv
 The retained and normalized subclone inputs with the fixed columns ```Cluster```, ```Subclone_CCF```, ```Subclone_Fraction```, and ```N_SNVs```. This file is always written. If no subclone table was supplied, or no candidate survived filtering, it contains the header and zero rows.
@@ -206,16 +214,22 @@ The retained and normalized subclone inputs with the fixed columns ```Cluster```
 Binary tree plots for the gain timings for each route for a given segment. Each plot has two binary trees corresponding to each parental allele. Blue nodes represent independent gains and show the configured tree-gain interval from the same 1,000 route-conditional samples, 90% HPD by default. Yellow WGD nodes exactly repeat the configured final sample-level WGD interval used in the JSON and route table. Red nodes are the final alleles present at sampling.
 
 ### _timing_dicts
-Python dictionary objects containing the stored gain timing and multiplicity posterior samples for each route for each gained segment. Not necessary for most use cases. Can be read using the ```pickle``` and ```bz2``` modules in python. For example:
+Compressed timing stores containing the gain-timing and multiplicity posterior samples for every route of each gained segment. These stores are not necessary for most use cases. Each logical store is a required pair:
+
+- ```SEGMENT_ID_timing_dict.npz``` contains the numeric tables in linear order as ```table_000000```, ```table_000001```, and so on. It is a compressed NumPy archive and never contains pickled or object-dtype arrays.
+- ```SEGMENT_ID_timing_dict.manifest.json``` maps the original nested hierarchy onto those table indexes. It also records the format version, archive filename and SHA-256, and each table's dtype and shape.
+
+Pooled WGD stores use the same pair with a ```WGD_minor_cn_N``` identifier in place of ```SEGMENT_ID```. Both members of a pair are required. Load a store through GRITIC so the pair and manifest are validated and the original dictionary hierarchy is reconstructed:
+
 ```
-import pickle
-import bz2
+from gritic.timingio import load_timing_archive
 
-with bz2.BZ2File('SAMPLE_ID_timing_dicts/1-0-200_timing_dict.bz2', 'rb') as f:
-    timing_dict = pickle.load(f)
+timing_dict = load_timing_archive(
+    'SAMPLE_ID_timing_dicts/1-0-200_timing_dict.npz'
+)
 
 ```
 
-The keys of each dict correspond to the routes for the sample. Within each route there are ```Timing``` and ```Mult``` keys. The ```Timing``` entry gives raw stored timing distributions for independent gains indexed by the corresponding structural node in the tree; it does not store a chronological ```Gain_Index```. A WGD timing entry is also given if applicable. No credible interval is applied to timing dictionaries: consumers choose their own interval width and method from the stored samples.
+The reconstructed dictionary keys correspond to the routes for the sample. Within each route there are ```Timing``` and ```Mult``` keys. The ```Timing``` entry gives raw stored timing distributions for independent gains indexed by the corresponding structural node in the tree; it does not store a chronological ```Gain_Index```. A WGD timing entry is also given if applicable. No credible interval is applied to timing stores: consumers choose their own interval width and method from the stored samples.
 
 The ```Mult``` entry gives the multiplicity proportions corresponding to each timing sample. It is a N_SamplesxN_Multiplicities numpy array. Across the columns, the multiplicities are orderred from 1 to the major copy number of the segment, followed by the subclonal multiplicity probabilities.

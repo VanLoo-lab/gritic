@@ -1,5 +1,3 @@
-import bz2
-import pickle
 import warnings
 from collections.abc import Mapping
 from numbers import Integral, Real
@@ -20,6 +18,7 @@ from gritic.tableschemas import (
     SUMMARY_COLUMNS,
     SUMMARY_VALUE_COLUMNS,
 )
+from gritic.timingio import get_timing_archive_paths, load_timing_archive
 
 NON_PARSIMONY_PENALTY_COEFFICIENT = 2.7
 
@@ -278,11 +277,6 @@ def _validate_gain_timing_table(gain_timing_table, route_table, sample_id):
         )
 
 
-def load_timing_from_dict(segment_path):
-    with bz2.BZ2File(segment_path, 'rb') as input_file:
-        return pickle.load(input_file)
-
-
 def _validate_timing_array(array, segment_id, route, label):
     if not isinstance(array, np.ndarray):
         raise ValueError(
@@ -532,15 +526,25 @@ def get_sample_posterior_tables(
             (gain_timing_table['Sample_ID'] == str(sample_id))
             & (gain_timing_table['Segment_ID'] == segment_id)
         ]
-        timing_dict_path = (
-            timing_dict_dir / f'{segment_id}_timing_dict.bz2'
+        timing_archive_path, timing_manifest_path = get_timing_archive_paths(
+            timing_dict_dir,
+            segment_id,
         )
-        if not timing_dict_path.is_file():
+        missing_timing_paths = [
+            path
+            for path in (timing_archive_path, timing_manifest_path)
+            if not path.is_file()
+        ]
+        if missing_timing_paths:
             raise FileNotFoundError(
-                f'Missing timing dictionary for segment {segment_id}: '
-                f'{timing_dict_path}'
+                f'Incomplete timing archive pair for segment {segment_id}; '
+                'missing: '
+                + ', '.join(map(str, missing_timing_paths))
             )
-        timing_dict = load_timing_from_dict(timing_dict_path)
+        timing_dict = load_timing_archive(
+            timing_archive_path,
+            timing_manifest_path,
+        )
 
         gain_frame, route_frame = produce_timing_segment_tables(
             segment_route_table,

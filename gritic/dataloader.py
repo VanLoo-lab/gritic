@@ -1164,8 +1164,17 @@ def assign_cn_to_snv(
     snv_table.loc[:,'Total_CN'] = snv_table['Major_CN'] + snv_table['Minor_CN']
     return snv_table
 
-def get_valid_subclones(subclone_table,max_ccf=0.9,min_fraction=0.1):
-    subclone_table = subclone_table[subclone_table['Subclone_CCF'] <= max_ccf].copy()
+def get_valid_subclones(
+    subclone_table,
+    min_ccf=0.01,
+    max_ccf=0.9,
+    min_fraction=0.1,
+):
+    retained_ccf = (
+        (subclone_table['Subclone_CCF'] >= min_ccf)
+        & (subclone_table['Subclone_CCF'] <= max_ccf)
+    )
+    subclone_table = subclone_table[retained_ccf].copy()
     subclone_fraction_norm = subclone_table['Subclone_Fraction']/subclone_table['Subclone_Fraction'].sum()
     subclone_table = subclone_table[subclone_fraction_norm > min_fraction]
     return subclone_table.reset_index(drop=True).copy()
