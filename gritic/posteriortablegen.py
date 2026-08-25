@@ -8,86 +8,20 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from gritic.dataloader import validate_pascal_snake_case_columns
-
+from gritic.intervaltools import DEFAULT_TIMING_INTERVALS, get_interval_bounds
+from gritic.tableschemas import (
+    GAIN_DRAW_COLUMNS,
+    GAIN_TIMING_TABLE_COLUMNS,
+    ROUTE_DRAW_COLUMNS,
+    ROUTE_KEY_COLUMNS,
+    ROUTE_TABLE_COLUMNS,
+    SEGMENT_KEY_COLUMNS,
+    SEGMENT_METADATA_COLUMNS,
+    SUMMARY_COLUMNS,
+    SUMMARY_VALUE_COLUMNS,
+)
 
 NON_PARSIMONY_PENALTY_COEFFICIENT = 2.7
-
-ROUTE_KEY_COLUMNS = ['Sample_ID', 'Segment_ID', 'Route']
-SEGMENT_KEY_COLUMNS = ['Sample_ID', 'Segment_ID']
-SEGMENT_METADATA_COLUMNS = [
-    'Sample_ID',
-    'Segment_ID',
-    'Chromosome',
-    'Segment_Start',
-    'Segment_End',
-    'Major_CN',
-    'Minor_CN',
-    'Total_CN',
-    'N_Mutations',
-    'Mutation_Rate',
-    'WGD_Status',
-]
-ROUTE_TABLE_COLUMNS = [
-    'Sample_ID',
-    'Segment_ID',
-    'Chromosome',
-    'Segment_Start',
-    'Segment_End',
-    'Major_CN',
-    'Minor_CN',
-    'Total_CN',
-    'N_Mutations',
-    'Mutation_Rate',
-    'Route',
-    'Probability',
-    'Average_N_Events',
-    'Average_Pre_WGD_Losses',
-    'Average_Post_WGD_Losses',
-    'Time',
-    'Density',
-    'WGD_Status',
-    'WGD_Timing',
-    'WGD_Timing_CI_Low',
-    'WGD_Timing_CI_High',
-]
-GAIN_TIMING_TABLE_COLUMNS = [
-    'Sample_ID',
-    'Segment_ID',
-    'Route',
-    'Node',
-    'Node_Phasing',
-    'Timing',
-    'Timing_CI_Low',
-    'Timing_CI_High',
-]
-GAIN_DRAW_COLUMNS = SEGMENT_METADATA_COLUMNS + [
-    'Posterior_Sample_Index',
-    'Route',
-    'Node',
-    'Node_Phasing',
-    'Gain_Timing',
-    'WGD_Timing',
-    'Gain_Index',
-]
-ROUTE_DRAW_COLUMNS = SEGMENT_METADATA_COLUMNS + [
-    'Posterior_Sample_Index',
-    'Route',
-    'WGD_Timing',
-]
-SUMMARY_VALUE_COLUMNS = [
-    'Gain_Index',
-    'Proportion',
-    'Timing_Median',
-    'Timing_Low_CI',
-    'Timing_High_CI',
-    'Pre_WGD_Probability',
-    'Post_WGD_Probability',
-    'WGD_Timing_Median',
-    'WGD_Timing_Low_CI',
-    'WGD_Timing_High_CI',
-]
-SUMMARY_COLUMNS = SEGMENT_METADATA_COLUMNS + SUMMARY_VALUE_COLUMNS
 
 _SEGMENT_CONSTANT_COLUMNS = SEGMENT_METADATA_COLUMNS + [
     'WGD_Timing',
@@ -146,8 +80,8 @@ def _validate_route_rows(route_table):
         )
 
 
-def apply_non_parsimony_penalty(route_table):
-    """Return a route table with one post-hoc penalty per route."""
+def add_penalized_probability(route_table):
+    """Return a route table with normalized post-hoc route probabilities."""
     required_columns = ROUTE_KEY_COLUMNS + [
         'Average_N_Events',
         'Probability',
@@ -164,6 +98,7 @@ def apply_non_parsimony_penalty(route_table):
         penalized_table['Average_N_Events'],
         errors='coerce',
     )
+    penalized_table['Penalized_Probability'] = np.nan
 
     if (penalized_table['Probability'] < 0).any():
         raise ValueError('Route probabilities must be non-negative')
@@ -190,7 +125,10 @@ def apply_non_parsimony_penalty(route_table):
             and probabilities.sum() > 0
         )
         if not valid_segment:
-            penalized_table.loc[segment_indexes, 'Probability'] = np.nan
+            penalized_table.loc[
+                segment_indexes,
+                'Penalized_Probability',
+            ] = np.nan
             continue
 
         with np.errstate(divide='ignore'):
@@ -200,18 +138,25 @@ def apply_non_parsimony_penalty(route_table):
             )
         finite_weights = np.isfinite(log_weights)
         if not finite_weights.any():
-            penalized_table.loc[segment_indexes, 'Probability'] = np.nan
+            penalized_table.loc[
+                segment_indexes,
+                'Penalized_Probability',
+            ] = np.nan
             continue
 
         log_weights -= np.max(log_weights[finite_weights])
         weights = np.exp(log_weights)
         normalizer = weights.sum()
         if not np.isfinite(normalizer) or normalizer <= 0:
-            penalized_table.loc[segment_indexes, 'Probability'] = np.nan
+            penalized_table.loc[
+                segment_indexes,
+                'Penalized_Probability',
+            ] = np.nan
             continue
-        penalized_table.loc[segment_indexes, 'Probability'] = (
-            weights / normalizer
-        )
+        penalized_table.loc[
+            segment_indexes,
+            'Penalized_Probability',
+        ] = weights / normalizer
 
     return penalized_table
 
@@ -231,10 +176,6 @@ def _read_table(path, table_name):
         )
     except pd.errors.EmptyDataError as error:
         raise ValueError(f'The {table_name} has no header') from error
-    validate_pascal_snake_case_columns(
-        table.columns,
-        table_name.capitalize(),
-    )
     return table
 
 
@@ -251,15 +192,16 @@ def _validate_route_table(route_table, sample_id):
             f"Sample_ID values: {', '.join(unexpected_sample_ids)}"
         )
 
-    route_table['Probability'] = pd.to_numeric(
-        route_table['Probability'],
-        errors='coerce',
-    )
+    for probability_column in ('Probability', 'Penalized_Probability'):
+        route_table[probability_column] = pd.to_numeric(
+            route_table[probability_column],
+            errors='coerce',
+        )
     route_table['Average_N_Events'] = pd.to_numeric(
         route_table['Average_N_Events'],
         errors='coerce',
     )
-    if (route_table['Probability'] < 0).any():
+    if (route_table[['Probability', 'Penalized_Probability']] < 0).any().any():
         raise ValueError('Route probabilities must be non-negative')
     if (route_table['Average_N_Events'] < 0).any():
         raise ValueError('Average_N_Events values must be non-negative')
@@ -447,8 +389,13 @@ def _validate_segment_timing_dict(
                 )
 
 
-def _normalized_route_probabilities(segment_route_table):
-    probabilities = segment_route_table['Probability'].to_numpy(dtype=float)
+def _normalized_route_probabilities(
+    segment_route_table,
+    probability_column='Probability',
+):
+    probabilities = segment_route_table[probability_column].to_numpy(
+        dtype=float,
+    )
     normalizer = probabilities.sum()
     if (
         not np.isfinite(probabilities).all()
@@ -465,6 +412,7 @@ def produce_timing_segment_tables(
     timing_dict,
     segment_id,
     n_samples=100,
+    probability_column='Probability',
 ):
     """Draw routes once per posterior sample and timings jointly per route."""
     _validate_segment_timing_dict(
@@ -473,7 +421,10 @@ def produce_timing_segment_tables(
         timing_dict,
         segment_id,
     )
-    probabilities = _normalized_route_probabilities(segment_route_table)
+    probabilities = _normalized_route_probabilities(
+        segment_route_table,
+        probability_column,
+    )
     if probabilities is None:
         return None, None
 
@@ -528,7 +479,7 @@ def produce_timing_segment_tables(
                 'Node_Phasing': node_phasing[node],
                 'Gain_Timing': gain_timings[timing_position],
                 'WGD_Timing': wgd_timing,
-                'Gain_Index': gain_index,
+                'Gain_Index': gain_index + 1,
             })
 
     return (
@@ -566,8 +517,9 @@ def get_sample_posterior_tables(
     )
     _validate_route_table(route_table, sample_id)
     _validate_gain_timing_table(gain_timing_table, route_table, sample_id)
-    if apply_penalty:
-        route_table = apply_non_parsimony_penalty(route_table)
+    probability_column = (
+        'Penalized_Probability' if apply_penalty else 'Probability'
+    )
 
     timing_dict_dir = Path(input_dir) / f'{sample_id}_timing_dicts'
     gain_frames = []
@@ -596,6 +548,7 @@ def get_sample_posterior_tables(
             timing_dict,
             segment_id,
             n_samples=n_posterior_samples,
+            probability_column=probability_column,
         )
         if gain_frame is None:
             warnings.warn(
@@ -656,6 +609,19 @@ def _validate_draw_tables(gain_draw_table, route_draw_table):
             'and Posterior_Sample_Index'
         )
 
+    if gain_draw_table.empty:
+        return
+
+    invalid_gain_indexes = gain_draw_table['Gain_Index'].map(
+        lambda value: (
+            isinstance(value, (bool, np.bool_))
+            or not isinstance(value, Integral)
+            or value < 1
+        )
+    )
+    if invalid_gain_indexes.any():
+        raise ValueError('Gain_Index values must be positive integers')
+
     duplicate_gains = gain_draw_table.duplicated(
         subset=draw_key_columns + ['Gain_Index'],
         keep=False,
@@ -666,8 +632,6 @@ def _validate_draw_tables(gain_draw_table, route_draw_table):
             'Posterior_Sample_Index, and Gain_Index'
         )
 
-    if gain_draw_table.empty:
-        return
     _validate_identifiers(
         gain_draw_table,
         SEGMENT_KEY_COLUMNS + ['Route'],
@@ -692,6 +656,7 @@ def _validate_draw_tables(gain_draw_table, route_draw_table):
 def get_segment_posterior_table_summary(
     segment_gain_draw_table,
     segment_route_draw_table,
+    interval=DEFAULT_TIMING_INTERVALS.posterior_summary,
 ):
     """Summarize one segment using every route draw as the denominator."""
     _validate_draw_tables(
@@ -711,6 +676,10 @@ def get_segment_posterior_table_summary(
         sort=True,
     ):
         gain_timings = gain_index_table['Gain_Timing'].to_numpy(dtype=float)
+        timing_low_ci, timing_high_ci = get_interval_bounds(
+            gain_timings,
+            interval,
+        )
         proportion = (
             gain_index_table['Posterior_Sample_Index'].nunique() / n_samples
         )
@@ -724,17 +693,19 @@ def get_segment_posterior_table_summary(
             post_wgd_probability = np.nan
         else:
             wgd_timing_median = np.median(wgd_timings)
-            wgd_timing_low_ci = np.percentile(wgd_timings, 2.5)
-            wgd_timing_high_ci = np.percentile(wgd_timings, 97.5)
+            wgd_timing_low_ci, wgd_timing_high_ci = get_interval_bounds(
+                wgd_timings,
+                interval,
+            )
             pre_wgd_probability = np.mean(wgd_timings > gain_timings)
             post_wgd_probability = 1 - pre_wgd_probability
 
         summary_rows.append({
-            'Gain_Index': gain_index + 1,
+            'Gain_Index': gain_index,
             'Proportion': proportion,
             'Timing_Median': np.median(gain_timings),
-            'Timing_Low_CI': np.percentile(gain_timings, 2.5),
-            'Timing_High_CI': np.percentile(gain_timings, 97.5),
+            'Timing_Low_CI': timing_low_ci,
+            'Timing_High_CI': timing_high_ci,
             'Pre_WGD_Probability': pre_wgd_probability,
             'Post_WGD_Probability': post_wgd_probability,
             'WGD_Timing_Median': wgd_timing_median,
@@ -748,6 +719,7 @@ def get_sample_posterior_table_summary(
     gain_draw_table,
     route_draw_table,
     min_proportion_threshold=0.8,
+    interval=DEFAULT_TIMING_INTERVALS.posterior_summary,
 ):
     """Summarize gain draws with route-ledger draw counts as denominators."""
     if (
@@ -786,6 +758,7 @@ def get_sample_posterior_table_summary(
         segment_summary = get_segment_posterior_table_summary(
             segment_gain_draw_table,
             segment_route_draw_table,
+            interval=interval,
         )
         if segment_summary.empty:
             continue

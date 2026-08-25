@@ -1,6 +1,7 @@
 import os
 import bz2
 import gzip
+import json
 import logging
 import pickle
 from numbers import Integral
@@ -18,7 +19,16 @@ from scipy.optimize import nnls
 from scipy.linalg import null_space
 
 from gritic.sampletools import Segment, get_major_cn_mode, validate_sample_id
-from gritic.dataloader import validate_pascal_snake_case_columns
+from gritic import dataloader
+from gritic.intervaltools import (
+    DEFAULT_TIMING_INTERVALS,
+    TimingIntervalConfig,
+    get_interval_bounds,
+)
+from gritic.tableschemas import (
+    GAIN_TIMING_TABLE_COLUMNS,
+    ROUTE_TABLE_COLUMNS,
+)
 
 from sklearn.neighbors import NearestNeighbors
 
@@ -40,42 +50,8 @@ logger = logging.getLogger(__name__)
 
 MIN_WGD_MUTATIONS = 10
 NUMPY_CACHE_VERSION = 1
-
-
-ROUTE_TABLE_COLUMNS = [
-    'Sample_ID',
-    'Segment_ID',
-    'Chromosome',
-    'Segment_Start',
-    'Segment_End',
-    'Major_CN',
-    'Minor_CN',
-    'Total_CN',
-    'N_Mutations',
-    'Mutation_Rate',
-    'Route',
-    'Probability',
-    'Average_N_Events',
-    'Average_Pre_WGD_Losses',
-    'Average_Post_WGD_Losses',
-    'Time',
-    'Density',
-    'WGD_Status',
-    'WGD_Timing',
-    'WGD_Timing_CI_Low',
-    'WGD_Timing_CI_High',
-]
-
-GAIN_TIMING_TABLE_COLUMNS = [
-    'Sample_ID',
-    'Segment_ID',
-    'Route',
-    'Node',
-    'Node_Phasing',
-    'Timing',
-    'Timing_CI_Low',
-    'Timing_CI_High',
-]
+ROUTE_CONDITIONAL_SAMPLE_COUNT = 1000
+COMBINED_WGD_SAMPLE_COUNT = 500
 
 
 class Route:
@@ -124,7 +100,14 @@ class Route:
         return np.array(cumulative_timing)
         
     
-    def get_weighted_arrays(self,cumulative_timing,wgd_timing_store,mult_store,weights,n_samples=1000):
+    def get_weighted_arrays(
+        self,
+        cumulative_timing,
+        wgd_timing_store,
+        mult_store,
+        weights,
+        n_samples=ROUTE_CONDITIONAL_SAMPLE_COUNT,
+    ):
         #allow some tolerance
         if np.isnan(weights).any():
             cumulative_timing = np.ones_like(cumulative_timing)[:,:n_samples]*np.nan
@@ -441,7 +424,11 @@ class RouteClassifier:
 
         return pd.DataFrame(route_table_data)
 
-    def get_timing_table(self):
+    def get_timing_table(
+        self,
+        interval=DEFAULT_TIMING_INTERVALS.route_gain,
+        rounding_digits=3,
+    ):
         timing_table_data = {
             'Route': [],
             'Node': [],
@@ -453,20 +440,24 @@ class RouteClassifier:
         output_routes = self._get_output_routes()
         for route, _ in output_routes:
             for node in route.route_tree.timeable_nodes:
-                node_timing = route.get_node_timing(node)
+                node_timing = np.asarray(route.get_node_timing(node))
+                timing_ci_low, timing_ci_high = get_interval_bounds(
+                    node_timing,
+                    interval,
+                )
                 timing_table_data['Route'].append(route.short_id)
                 timing_table_data['Node'].append(node)
                 timing_table_data['Node_Phasing'].append(
                     route.route_tree.node_attributes[node]['Phasing']
                 )
                 timing_table_data['Timing'].append(
-                    np.abs(np.round(np.percentile(node_timing, 50), 3))
+                    np.round(np.median(node_timing), rounding_digits)
                 )
                 timing_table_data['Timing_CI_Low'].append(
-                    np.abs(np.round(np.percentile(node_timing, 2.5), 3))
+                    np.round(timing_ci_low, rounding_digits)
                 )
                 timing_table_data['Timing_CI_High'].append(
-                    np.abs(np.round(np.percentile(node_timing, 97.5), 3))
+                    np.round(timing_ci_high, rounding_digits)
                 )
 
         timing_table = pd.DataFrame(timing_table_data)
@@ -515,25 +506,42 @@ class RouteClassifier:
             timing_dict[route.short_id] = route_samples
         return timing_dict
 
-    def get_timing_tree_labels(self,route,wgd_info,ci:float=90.0,rounding_digits:int=3):
+    def get_timing_tree_labels(
+        self,
+        route,
+        wgd_info,
+        gain_interval=DEFAULT_TIMING_INTERVALS.tree_gain,
+        rounding_digits=3,
+    ):
         node_labels = {}
         for node in route.route_tree.non_phased_node_order:
             if node in route.route_tree.timeable_nodes:
-                timing_dist = route.get_node_timing(node)
-                timing = np.abs(np.round(np.median(timing_dist),rounding_digits))
-
-                ci_low_percentile = (100-ci)/2
-                ci_high_percentile = 100- ci_low_percentile
-                timing_ci_low = np.abs(np.round(np.percentile(timing_dist,ci_low_percentile),rounding_digits))
-                timing_ci_high = np.abs(np.round(np.percentile(timing_dist,ci_high_percentile),rounding_digits))
+                timing_dist = np.asarray(route.get_node_timing(node))
+                timing = np.round(np.median(timing_dist), rounding_digits)
+                timing_ci_low, timing_ci_high = get_interval_bounds(
+                    timing_dist,
+                    gain_interval,
+                )
+                timing_ci_low = np.round(timing_ci_low, rounding_digits)
+                timing_ci_high = np.round(timing_ci_high, rounding_digits)
                 node_labels[node] = f"{timing} - [{timing_ci_low},{timing_ci_high}]"
             elif node in route.route_tree.wgd_nodes:
-                node_labels[node]= f"{wgd_info['Timing']} - [{wgd_info['CI_Low']},{wgd_info['CI_High']}]"
+                node_labels[node] = (
+                    f"{wgd_info['WGD_Timing']} - "
+                    f"[{wgd_info['WGD_Timing_CI_Low']},"
+                    f"{wgd_info['WGD_Timing_CI_High']}]"
+                )
             else:
                 node_labels[node] = ''
         return node_labels
     
-    def plot_trees(self,plot_output_dir,seg_title,wgd_info):
+    def plot_trees(
+        self,
+        plot_output_dir,
+        seg_title,
+        wgd_info,
+        gain_interval=DEFAULT_TIMING_INTERVALS.tree_gain,
+    ):
         os.makedirs(plot_output_dir,exist_ok=True)
 
         if len(self.route_probabilities.keys())==0:
@@ -549,16 +557,20 @@ class RouteClassifier:
             if route_id==best_route_id:
                 plot_title = f"{plot_title} - (Best Fit)"
 
-            node_labels = self.get_timing_tree_labels(route,wgd_info)
+            node_labels = self.get_timing_tree_labels(
+                route,
+                wgd_info,
+                gain_interval=gain_interval,
+            )
             plotting_tree = route.route_tree.main_tree.copy()
             nx.set_node_attributes(plotting_tree,node_labels,'Label')
             
             treetools.plot_tree(plotting_tree,plot_title,output_path=route_output_path)
 def add_wgd_info_to_route_table(route_table,wgd_info,wgd_status:bool):
     route_table = route_table.copy()
-    route_table['WGD_Timing'] = wgd_info['Timing']
-    route_table['WGD_Timing_CI_Low'] = wgd_info['CI_Low']
-    route_table['WGD_Timing_CI_High'] = wgd_info['CI_High']
+    route_table['WGD_Timing'] = wgd_info['WGD_Timing']
+    route_table['WGD_Timing_CI_Low'] = wgd_info['WGD_Timing_CI_Low']
+    route_table['WGD_Timing_CI_High'] = wgd_info['WGD_Timing_CI_High']
     route_table['WGD_Status'] = wgd_status
     return route_table
 
@@ -581,11 +593,7 @@ def _append_table(table, table_path, columns):
 
 
 def _write_tsv(table, table_path):
-    """Write one public TSV after enforcing its column-name convention."""
-    validate_pascal_snake_case_columns(
-        table.columns,
-        f'Output table {pathlib.Path(table_path).name}',
-    )
+    """Write a public TSV."""
     table.to_csv(table_path, sep='\t', index=False)
 
 
@@ -614,20 +622,37 @@ def write_timing_dict(timing_dict,dict_dir,segment_id):
         pickle.dump(timing_dict,out_file)
     
 
-def get_wgd_info(wgd_timing_distribution,ci:float=90.0,rounding_digits:int=3):
+def get_wgd_info(
+    wgd_timing_distribution,
+    interval=DEFAULT_TIMING_INTERVALS.sample_wgd,
+    rounding_digits=3,
+):
     if wgd_timing_distribution is None:
         wgd_timing = np.nan
         wgd_timing_ci_high = np.nan
         wgd_timing_ci_low = np.nan
     else:
-        wgd_timing = np.round(np.median(wgd_timing_distribution),rounding_digits)
-
-        ci_low_percentile = (100.0-ci)/2
-        ci_high_percentile = 100.0- ci_low_percentile
-
-        wgd_timing_ci_high = np.round(np.percentile(wgd_timing_distribution,ci_high_percentile),rounding_digits)
-        wgd_timing_ci_low= np.round(np.percentile(wgd_timing_distribution,ci_low_percentile),rounding_digits)
-    return {'Timing':wgd_timing,'CI_High':wgd_timing_ci_high,'CI_Low':wgd_timing_ci_low}
+        wgd_timing = np.round(
+            np.median(wgd_timing_distribution),
+            rounding_digits,
+        )
+        wgd_timing_ci_low, wgd_timing_ci_high = get_interval_bounds(
+            wgd_timing_distribution,
+            interval,
+        )
+        wgd_timing_ci_low = np.round(
+            wgd_timing_ci_low,
+            rounding_digits,
+        )
+        wgd_timing_ci_high = np.round(
+            wgd_timing_ci_high,
+            rounding_digits,
+        )
+    return {
+        'WGD_Timing': wgd_timing,
+        'WGD_Timing_CI_Low': wgd_timing_ci_low,
+        'WGD_Timing_CI_High': wgd_timing_ci_high,
+    }
 
 
 def get_potential_wgd_segments(
@@ -641,7 +666,11 @@ def get_potential_wgd_segments(
             potential_wgd_segments.append(segment)
     return potential_wgd_segments
 
-def get_combined_distribution(distributions,n_samples=500,eps=1e-300):
+def get_combined_distribution(
+    distributions,
+    n_samples=COMBINED_WGD_SAMPLE_COUNT,
+    eps=1e-300,
+):
     bins = np.linspace(0,1,201)
     bin_mid_points = (bins[1:]+bins[:(bins.size-1)])/2
     binned_distributions = []
@@ -660,7 +689,13 @@ def get_combined_distribution(distributions,n_samples=500,eps=1e-300):
     combined_distribution_samples = np.random.choice(bin_mid_points,p=combined_distribution,size=n_samples,replace=True)
     return combined_distribution_samples
 
-def time_wgd_major_cn_2(sample,output_dir,mult_store_dir,timing_dict_dir):
+def time_wgd_major_cn_2(
+    sample,
+    output_dir,
+    mult_store_dir,
+    timing_dict_dir,
+    interval_config=DEFAULT_TIMING_INTERVALS,
+):
 
     wgd_timing_table_path = output_dir/f"{sample.sample_id}_gain_timing_table_wgd_segments.tsv"
     potential_wgd_segments = get_potential_wgd_segments(sample)
@@ -690,7 +725,9 @@ def time_wgd_major_cn_2(sample,output_dir,mult_store_dir,timing_dict_dir):
         mult_probabilities.minor_cn = segment.minor_cn
 
         wgd_route_table = classifier.get_route_table()
-        wgd_timing_table = classifier.get_timing_table()
+        wgd_timing_table = classifier.get_timing_table(
+            interval=interval_config.route_gain,
+        )
         wgd_timing_table = pd.merge(
             wgd_route_table,
             wgd_timing_table,
@@ -707,10 +744,12 @@ def time_wgd_major_cn_2(sample,output_dir,mult_store_dir,timing_dict_dir):
         
         classifier_route = list(classifier.routes.values())[0]
         segment_timing = classifier_route.get_node_timing(0)
-        if np.isnan(segment_timing).any():
+        if not np.isfinite(segment_timing).all():
             continue
-        segment_timing_ci_low = np.percentile(segment_timing,10/2)
-        segment_timing_ci_high = np.percentile(segment_timing,100-10/2)
+        segment_timing_ci_low, segment_timing_ci_high = get_interval_bounds(
+            segment_timing,
+            interval_config.wgd_overlap,
+        )
         
         segment_ci_store[segment.segment_id] = (segment_timing_ci_low,segment_timing_ci_high)
         segment_width_store[segment.segment_id] = segment.width
@@ -869,22 +908,56 @@ def get_timeable_segments(
     return complex_segments
 
 
-def write_wgd_calling_info(wgd_timing_distribution,overlap_proportion,best_overlap_timing,major_cn_mode,wgd_status,output_dir,sample_id):
-    wgd_info = get_wgd_info(wgd_timing_distribution)
-    wgd_info['Major_CN_Mode'] = major_cn_mode
-    wgd_info['Overlap_Proportion'] = overlap_proportion
-    wgd_info['WGD_Status'] = wgd_status
-    wgd_info['Best_Overlap_Timing'] = best_overlap_timing
-    wgd_info = pd.DataFrame(wgd_info,index=[0])
+def _json_scalar(value):
+    if isinstance(value, np.generic):
+        value = value.item()
+    if (
+        value is None
+        or pd.isna(value)
+        or (isinstance(value, float) and not np.isfinite(value))
+    ):
+        return None
+    return value
 
-    _write_tsv(
-        wgd_info,
-        output_dir/f"{sample_id}_wgd_calling_info.tsv",
-    )
 
-def process_segments(segments,wgd_timing_distribution,output_dir,mult_store_dir,timing_dict_dir,sample_id,wgd_status,plot_trees):
+def write_wgd_calling_info(
+    wgd_info,
+    overlap_proportion,
+    best_overlap_timing,
+    major_cn_mode,
+    wgd_status,
+    output_dir,
+    sample_id,
+):
+    calling_info = {
+        **wgd_info,
+        'Major_CN_Mode': major_cn_mode,
+        'Overlap_Proportion': overlap_proportion,
+        'WGD_Status': wgd_status,
+        'Best_Overlap_Timing': best_overlap_timing,
+    }
+    calling_info = {
+        key: _json_scalar(value)
+        for key, value in calling_info.items()
+    }
+    output_path = output_dir / f'{sample_id}_wgd_calling_info.json'
+    with output_path.open('w', encoding='utf-8') as output_file:
+        json.dump(calling_info, output_file, indent=2, allow_nan=False)
+        output_file.write('\n')
 
-    wgd_info = get_wgd_info(wgd_timing_distribution)
+
+def process_segments(
+    segments,
+    wgd_timing_distribution,
+    output_dir,
+    mult_store_dir,
+    timing_dict_dir,
+    sample_id,
+    wgd_status,
+    plot_trees,
+    wgd_info,
+    interval_config=DEFAULT_TIMING_INTERVALS,
+):
 
     route_table_path = output_dir/f"{sample_id}_route_table.tsv"
     timing_table_path = output_dir/f"{sample_id}_gain_timing_table.tsv"
@@ -904,7 +977,9 @@ def process_segments(segments,wgd_timing_distribution,output_dir,mult_store_dir,
             classifier.fit_routes(mult_probabilities,segment.subclone_table,wgd_timing_distribution)
 
             segment_route_table = classifier.get_route_table()
-            segment_timing_table = classifier.get_timing_table()
+            segment_timing_table = classifier.get_timing_table(
+                interval=interval_config.route_gain,
+            )
             timing_dict= classifier.get_timing_dict()
             write_timing_dict(timing_dict,timing_dict_dir,segment.segment_id)
 
@@ -917,6 +992,11 @@ def process_segments(segments,wgd_timing_distribution,output_dir,mult_store_dir,
                 wgd_status,
             )
             segment_route_table['Sample_ID'] = sample_id
+            segment_route_table = (
+                posteriortablegen.add_penalized_probability(
+                    segment_route_table
+                )
+            )
 
             segment_timing_table['Segment_ID'] = segment.segment_id
             segment_timing_table['Sample_ID'] = sample_id
@@ -926,7 +1006,12 @@ def process_segments(segments,wgd_timing_distribution,output_dir,mult_store_dir,
 
             if plot_trees:
                 plot_output_dir = f"{output_dir}/{sample_id}_tree_plots/{segment.segment_id}"
-                classifier.plot_trees(plot_output_dir,str(segment),wgd_info)
+                classifier.plot_trees(
+                    plot_output_dir,
+                    str(segment),
+                    wgd_info,
+                    gain_interval=interval_config.tree_gain,
+                )
         shutil.rmtree(cn_dir)
 
 def _validate_wgd_count(wgd_count):
@@ -945,7 +1030,10 @@ def process_sample(
     plot_trees=False,
     min_wgd_overlap=0.6,
     wgd_count=None,
+    interval_config=DEFAULT_TIMING_INTERVALS,
 ):
+    if not isinstance(interval_config, TimingIntervalConfig):
+        raise TypeError('interval_config must be a TimingIntervalConfig')
     wgd_count = _validate_wgd_count(wgd_count)
     validate_sample_id(sample.sample_id)
     major_cn_mode = get_major_cn_mode(sample)
@@ -979,8 +1067,11 @@ def process_sample(
     
     sample_subclone_table = sample.get_subclone_table()
     sample_subclone_table_path = output_dir/f"{sample.sample_id}_subclone_table.tsv"
-    if sample_subclone_table is not None:
-        _write_tsv(sample_subclone_table, sample_subclone_table_path)
+    if sample_subclone_table is None:
+        sample_subclone_table = pd.DataFrame(
+            columns=dataloader.SUBCLONE_OUTPUT_COLUMNS,
+        )
+    _write_tsv(sample_subclone_table, sample_subclone_table_path)
     
     mult_store_dir = output_dir/f"{sample.sample_id}_mult_stores_temp"
  
@@ -1000,7 +1091,13 @@ def process_sample(
 
         
         if wgd_count == 1:
-            wgd_timing_distribution,non_overlapping_segment_ids,overlap_proportion,best_overlap_timing= time_wgd_major_cn_2(sample,output_dir,mult_store_dir,timing_dict_dir)
+            wgd_timing_distribution,non_overlapping_segment_ids,overlap_proportion,best_overlap_timing= time_wgd_major_cn_2(
+                sample,
+                output_dir,
+                mult_store_dir,
+                timing_dict_dir,
+                interval_config=interval_config,
+            )
             wgd_status = True
         else:
             wgd_status = False
@@ -1016,7 +1113,13 @@ def process_sample(
             best_overlap_timing = np.nan
             overlap_proportion = np.nan
         elif major_cn_mode ==2:
-            wgd_timing_distribution,non_overlapping_segment_ids,overlap_proportion,best_overlap_timing= time_wgd_major_cn_2(sample,output_dir,mult_store_dir,timing_dict_dir)
+            wgd_timing_distribution,non_overlapping_segment_ids,overlap_proportion,best_overlap_timing= time_wgd_major_cn_2(
+                sample,
+                output_dir,
+                mult_store_dir,
+                timing_dict_dir,
+                interval_config=interval_config,
+            )
             if overlap_proportion < min_wgd_overlap:
                 warnings.warn(
                     'The major CN mode is 2, but the overlap proportion is '
@@ -1033,7 +1136,19 @@ def process_sample(
             else:
                 wgd_status = True
 
-    write_wgd_calling_info(wgd_timing_distribution,overlap_proportion,best_overlap_timing,major_cn_mode,wgd_status,output_dir,sample.sample_id)
+    wgd_info = get_wgd_info(
+        wgd_timing_distribution,
+        interval=interval_config.sample_wgd,
+    )
+    write_wgd_calling_info(
+        wgd_info,
+        overlap_proportion,
+        best_overlap_timing,
+        major_cn_mode,
+        wgd_status,
+        output_dir,
+        sample.sample_id,
+    )
     timeable_complex_segments = get_timeable_segments(
         sample,
         wgd_status=wgd_status,
@@ -1054,6 +1169,8 @@ def process_sample(
         sample.sample_id,
         wgd_status,
         plot_trees=plot_trees,
+        wgd_info=wgd_info,
+        interval_config=interval_config,
     )
 
     if os.path.exists(route_table_path):
@@ -1073,18 +1190,12 @@ def process_sample(
                 posteriortablegen.get_sample_posterior_table_summary(
                     sample_posterior_table,
                     sample_posterior_route_draw_table,
+                    interval=interval_config.posterior_summary,
                 )
             )
 
-            posterior_table_path = output_dir/f"{sample.sample_id}_posterior_timing_table_penalty_{apply_penalty}.tsv"
-            posterior_route_draw_table_path = output_dir/f"{sample.sample_id}_posterior_route_draw_table_penalty_{apply_penalty}.tsv"
             posterior_table_summary_path = output_dir/f"{sample.sample_id}_posterior_timing_table_summary_penalty_{apply_penalty}.tsv"
 
-            _write_tsv(sample_posterior_table, posterior_table_path)
-            _write_tsv(
-                sample_posterior_route_draw_table,
-                posterior_route_draw_table_path,
-            )
             _write_tsv(
                 sample_posterior_table_summary,
                 posterior_table_summary_path,

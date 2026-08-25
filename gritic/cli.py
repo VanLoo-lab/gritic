@@ -5,7 +5,7 @@ from contextlib import contextmanager
 
 import pandas as pd
 
-from gritic import dataloader, gritictimer, sampletools
+from gritic import dataloader, gritictimer, intervaltools, sampletools
 
 
 @contextmanager
@@ -65,8 +65,73 @@ def unit_interval_number(value):
     return parsed_value
 
 
+def interval_width(value):
+    try:
+        parsed_value = float(value)
+        return intervaltools.validate_interval_width(parsed_value)
+    except (TypeError, ValueError) as error:
+        raise argparse.ArgumentTypeError(
+            'must be a finite percentage greater than 0 and at most 100'
+        ) from error
+
+
+def _add_interval_arguments(
+    parser,
+    option_name,
+    destination,
+    default_interval,
+    description,
+):
+    parser.add_argument(
+        f'--{option_name}-interval-width',
+        dest=f'{destination}_interval_width',
+        type=interval_width,
+        default=default_interval.width,
+        metavar='PERCENT',
+        help=(
+            f'{description} interval width as a percentage '
+            f'(default: {default_interval.width:g}).'
+        ),
+    )
+    parser.add_argument(
+        f'--{option_name}-interval-method',
+        dest=f'{destination}_interval_method',
+        choices=intervaltools.INTERVAL_METHODS,
+        default=default_interval.method,
+        help=(
+            f'{description} interval method; HPD is the shortest contiguous '
+            'empirical interval (default: hpd).'
+        ),
+    )
+
+
+def build_interval_config(args):
+    return intervaltools.TimingIntervalConfig(
+        route_gain=intervaltools.IntervalSpec(
+            args.route_gain_interval_width,
+            args.route_gain_interval_method,
+        ),
+        tree_gain=intervaltools.IntervalSpec(
+            args.tree_gain_interval_width,
+            args.tree_gain_interval_method,
+        ),
+        wgd_overlap=intervaltools.IntervalSpec(
+            args.wgd_overlap_interval_width,
+            args.wgd_overlap_interval_method,
+        ),
+        sample_wgd=intervaltools.IntervalSpec(
+            args.wgd_timing_interval_width,
+            args.wgd_timing_interval_method,
+        ),
+        posterior_summary=intervaltools.IntervalSpec(
+            args.posterior_summary_interval_width,
+            args.posterior_summary_interval_method,
+        ),
+    )
+
+
 def load_subclone_table(subclone_table_path):
-    subclone_table = pd.read_csv(
+    return pd.read_csv(
         subclone_table_path,
         sep='\t',
         dtype={
@@ -75,20 +140,14 @@ def load_subclone_table(subclone_table_path):
             'Subclone_Fraction': float,
         },
     )
-    dataloader.validate_pascal_snake_case_columns(
-        subclone_table.columns,
-        'Subclone table',
-    )
-    return subclone_table
 
 
 def build_parser():
     parser = argparse.ArgumentParser(
         allow_abbrev=False,
         description=(
-            'GRITIC input TSV column names are case-sensitive and must use '
-            'Pascal_Snake_Case; established acronyms such as ID, CN, SNV, '
-            'WGD, CCF, CI, GRITIC, ICGC, and SBS remain uppercase.'
+            'Time copy-number gains from mutation, copy-number, and optional '
+            'subclone tables.'
         ),
     )
     parser.add_argument(
@@ -250,11 +309,48 @@ def build_parser():
             'eligible for WGD inference (default: 22).'
         ),
     )
+    defaults = intervaltools.DEFAULT_TIMING_INTERVALS
+    _add_interval_arguments(
+        parser,
+        'route-gain',
+        'route_gain',
+        defaults.route_gain,
+        'Route-conditional gain-table and WGD-candidate display',
+    )
+    _add_interval_arguments(
+        parser,
+        'tree-gain',
+        'tree_gain',
+        defaults.tree_gain,
+        'Blue gain-node tree label',
+    )
+    _add_interval_arguments(
+        parser,
+        'wgd-overlap',
+        'wgd_overlap',
+        defaults.wgd_overlap,
+        'Hidden WGD-candidate overlap; changing this can change WGD inference',
+    )
+    _add_interval_arguments(
+        parser,
+        'wgd-timing',
+        'wgd_timing',
+        defaults.sample_wgd,
+        'Final sample-level WGD timing',
+    )
+    _add_interval_arguments(
+        parser,
+        'posterior-summary',
+        'posterior_summary',
+        defaults.posterior_summary,
+        'Route-marginalized posterior summary',
+    )
     return parser
 
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    interval_config = build_interval_config(args)
 
     copy_number_table, mutation_table = dataloader.load_input_tables(
         args.copy_number_table,
@@ -292,6 +388,7 @@ def main(argv=None):
             args.output,
             plot_trees=args.plot_trees,
             wgd_count=args.wgd_count,
+            interval_config=interval_config,
         )
 
 
