@@ -24,6 +24,11 @@ This command has five required arguments.
 
 
 There are also a number of optional arguments.
+
+All probability-, proportion-, quantile-, and interval-width inputs use the
+unit interval from 0 to 1; parameters whose semantics exclude zero state that
+restriction explicitly.
+
 - ```--subclone-table``` A path to the subclone table for the sample. If not provided it is assumed every SNV is clonal.
 - ```--subclone-prior {corrected,uncorrected}``` Select the subclone-proportion prior through an interface added after publication. ```corrected``` (the default) inverse-detection-adjusts clone proportions per segment and is an implementation extension not described in the publication. ```uncorrected``` reproduces the publication/thesis sample-wide prior.
 - ```--wgd-count {0,1}``` Override GRITIC's inferred whole-genome-duplication count. Counts below 0 or above 1 are rejected because GRITIC currently supports at most one WGD. If omitted, GRITIC infers the count.
@@ -35,20 +40,21 @@ There are also a number of optional arguments.
 - ```--merge-adjacent-segments``` Merge coordinate-adjacent copy-number segments having identical ```Major_CN``` and ```Minor_CN```. This is disabled by default.
 - ```--min-mutation-alt-count``` Minimum ```Tumor_Alt_Count``` needed to retain a mutation. The default is 3.
 - ```--min-mutation-coverage``` Minimum ```Tumor_Ref_Count + Tumor_Alt_Count``` needed to retain a mutation. The default is 10.
-- ```--coverage-vaf-percentile``` Observed-SNV VAF percentile used to select mutations for the mean-coverage estimate in the exact Poisson-thinning detection correction. The default is 90, the historical code value. This high-VAF coverage heuristic differs from the publication/thesis method, which averages detection power over every SNV's observed depth in the segment. It affects the likelihood correction in both subclone-prior modes and the prior correction only in ```corrected``` mode.
+- ```--coverage-vaf-quantile``` Observed-SNV VAF quantile used to select mutations for the mean-coverage estimate in the exact Poisson-thinning detection correction. It is expressed on the unit interval and defaults to 0.9, the unit-interval form of the historical 90th-percentile code value. This replaces ```--coverage-vaf-percentile```; the former option and percentage-scaled values are not accepted. This high-VAF coverage heuristic differs from the publication/thesis method, which averages detection power over every SNV's observed depth in the segment. It affects the likelihood correction in both subclone-prior modes and the prior correction only in ```corrected``` mode.
 - ```--min-subclone-ccf``` Minimum ```Subclone_CCF``` retained as a subclone, inclusive. It must be greater than 0 and no greater than ```--max-subclone-ccf```. The default is 0.01.
 - ```--max-subclone-ccf``` Maximum ```Subclone_CCF``` retained as a subclone, inclusive. It must be no lower than ```--min-subclone-ccf```. The default is 0.9.
 - ```--min-subclone-fraction``` A subclone's normalized share of the surviving subclonal mutation fractions must be strictly greater than this threshold. The default is 0.1.
+- ```--clip-subclone-ccf``` Clip finite ```Subclone_CCF``` values outside the interval from 0 to 1 to the nearest boundary before validation and filtering. This is disabled by default; non-numeric and non-finite values remain errors. With the default CCF filters, values clipped to either boundary are subsequently excluded.
 
 With the corrected prior, each route-and-WGD-context cache is separated by segment. With the uncorrected publication/thesis prior, each route-and-WGD-context cache is shared across all segments in the sample. The likelihood's detection correction is calculated per segment in both modes; changing this option changes only the subclone-proportion prior and its cache scope.
 
-Posterior intervals use the shortest contiguous empirical HPD interval by default. Each interval family has a ```--...-interval-width``` option expressed as a percentage and a matching ```--...-interval-method {hpd,equal-tailed}``` option:
+Posterior intervals use the shortest contiguous empirical HPD interval by default. Each interval family has a ```--...-interval-width``` option expressed as a proportion greater than 0 and at most 1, and a matching ```--...-interval-method {hpd,equal-tailed}``` option. Percentage-scaled widths such as 90 or 95 are rejected rather than converted:
 
-- ```--route-gain-interval-*``` controls the route-conditional gain bounds in both gain timing tables (default: 95%).
-- ```--tree-gain-interval-*``` controls blue gain-node labels in tree PDFs (default: 90%).
-- ```--wgd-overlap-interval-*``` controls the hidden candidate-segment bounds used for WGD overlap and can therefore change WGD inference (default: 90%).
-- ```--wgd-timing-interval-*``` controls the final sample-level WGD bounds reused by the JSON, route table, and yellow tree nodes (default: 90%).
-- ```--posterior-summary-interval-*``` controls both gain and gain-conditioned WGD bounds in posterior summaries (default: 95%).
+- ```--route-gain-interval-*``` controls the route-conditional gain bounds in both gain timing tables (default width: 0.95, or 95%).
+- ```--tree-gain-interval-*``` controls blue gain-node labels in tree PDFs (default width: 0.9, or 90%).
+- ```--wgd-overlap-interval-*``` controls the hidden candidate-segment bounds used for WGD overlap and can therefore change WGD inference (default width: 0.9, or 90%).
+- ```--wgd-timing-interval-*``` controls the final sample-level WGD bounds reused by the JSON, route table, and yellow tree nodes (default width: 0.9, or 90%).
+- ```--posterior-summary-interval-*``` controls both gain and gain-conditioned WGD bounds in posterior summaries (default width: 0.95, or 95%).
 
 Here HPD means the narrowest contiguous interval containing at least the requested fraction of the empirical draws. The output schemas contain one low/high pair, so multimodal posteriors are represented by one contiguous interval rather than a disjoint highest-density set.
 
@@ -91,10 +97,11 @@ sample = sampletools.Sample(
     merge_cn=False,
     min_mutation_alt_count=3,
     min_mutation_coverage=10,
-    coverage_vaf_percentile=90,
+    coverage_vaf_quantile=0.9,
     min_subclone_ccf=0.01,
     max_subclone_ccf=0.9,
     min_subclone_fraction=0.1,
+    clip_subclone_ccf=False,
     autosome_count=22,
     drop_unmatched_chromosomes=False,
 )
@@ -102,14 +109,15 @@ gritictimer.process_sample(
     sample,
     output_dir='examples/output',
     plot_trees=True,
+    min_wgd_overlap=0.6,
     wgd_count=1,
     subclone_prior='corrected',
     interval_config=intervaltools.TimingIntervalConfig(
-        route_gain=intervaltools.IntervalSpec(95),
-        tree_gain=intervaltools.IntervalSpec(90),
-        wgd_overlap=intervaltools.IntervalSpec(90),
-        sample_wgd=intervaltools.IntervalSpec(90),
-        posterior_summary=intervaltools.IntervalSpec(95),
+        route_gain=intervaltools.IntervalSpec(0.95),
+        tree_gain=intervaltools.IntervalSpec(0.9),
+        wgd_overlap=intervaltools.IntervalSpec(0.9),
+        sample_wgd=intervaltools.IntervalSpec(0.9),
+        posterior_summary=intervaltools.IntervalSpec(0.95),
     ),
 )
 ```
@@ -144,7 +152,7 @@ When sample sex is not supplied, an exact Y chromosome label implies ```XY``` an
 ### Subclone Table (*Optional*)
 The identified subclonal peaks and their relative sizes for the sample. GRITIC filters candidate peaks using configurable lower and upper CCF bounds and the minimum normalized-fraction threshold described below.
 
-This table requires the column names ```Subclone_CCF``` (the cancer cell fraction of the subclone) & ```Subclone_Fraction``` (the fraction of total SNVs present in the subclone). A ```Cluster``` column is also required as an index for the subclones. CCF and fraction values must be finite numeric (not boolean) values between 0 and 1 inclusive, and the fractions must sum to no more than 1; invalid prior values fail before filtering.
+This table requires the column names ```Subclone_CCF``` (the cancer cell fraction of the subclone) & ```Subclone_Fraction``` (the fraction of total SNVs present in the subclone). A ```Cluster``` column is also required as an index for the subclones. CCF and fraction values must be finite numeric (not boolean) values between 0 and 1 inclusive, and the fractions must sum to no more than 1. By default, invalid prior values fail before filtering. Supplying ```--clip-subclone-ccf``` (or ```clip_subclone_ccf=True``` through the API) instead clips finite out-of-range CCF values to 0 or 1 before the configured CCF filters run; it does not relax validation of non-finite CCFs or any ```Subclone_Fraction``` value.
 
 By default, only subclones with ```0.01 <= Subclone_CCF <= 0.9``` and more than 10% of the surviving subclonal mutation fraction are included. Both CCF boundaries are inclusive. The thresholds are configurable with ```--min-subclone-ccf```, ```--max-subclone-ccf```, and ```--min-subclone-fraction```; the minimum CCF must be greater than 0 and cannot exceed the maximum. If no subclones remain, GRITIC uses its clonal-only model as if no subclone table was supplied. If there are more than two subclones, GRITIC reformats the sample to have two: the subclone with the largest CCF is unmodified and the remaining clones are grouped together.
 

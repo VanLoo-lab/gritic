@@ -4,7 +4,7 @@ import hashlib
 import json
 import logging
 import sys
-from numbers import Integral
+from numbers import Integral, Real
 
 import warnings
 
@@ -1167,7 +1167,7 @@ def _time_combined_wgd_segment(
     sample_purity,
     apply_reads_correction,
     min_mutation_alt_count,
-    coverage_vaf_percentile,
+    coverage_vaf_quantile,
     mult_store_dir,
     timing_dict_dir,
     subclone_prior,
@@ -1185,7 +1185,7 @@ def _time_combined_wgd_segment(
         sex=None,
         apply_reads_correction=apply_reads_correction,
         min_mutation_alt_count=min_mutation_alt_count,
-        coverage_vaf_percentile=coverage_vaf_percentile,
+        coverage_vaf_quantile=coverage_vaf_quantile,
     )
     segment_cache_identity = get_pooled_wgd_cache_identity(
         minor_cn,
@@ -1258,15 +1258,15 @@ def get_combined_segment_timing_cn_2(
             'alternate-read count'
         )
     min_mutation_alt_count = min_mutation_alt_counts.pop()
-    coverage_vaf_percentiles = {
-        segment.coverage_vaf_percentile
+    coverage_vaf_quantiles = {
+        segment.coverage_vaf_quantile
         for segment in overlapping_segments
     }
-    if len(coverage_vaf_percentiles) != 1:
+    if len(coverage_vaf_quantiles) != 1:
         raise ValueError(
-            'Combined WGD segments must use one coverage VAF percentile'
+            'Combined WGD segments must use one coverage VAF quantile'
         )
-    coverage_vaf_percentile = coverage_vaf_percentiles.pop()
+    coverage_vaf_quantile = coverage_vaf_quantiles.pop()
     apply_reads_correction_values = {
         segment.apply_reads_correction
         for segment in overlapping_segments
@@ -1301,7 +1301,7 @@ def get_combined_segment_timing_cn_2(
                 sample_purity,
                 apply_reads_correction,
                 min_mutation_alt_count,
-                coverage_vaf_percentile,
+                coverage_vaf_quantile,
                 mult_store_dir,
                 timing_dict_dir,
                 subclone_prior,
@@ -1552,6 +1552,19 @@ def _validate_wgd_count(wgd_count):
     return int(wgd_count)
 
 
+def _validate_min_wgd_overlap(min_wgd_overlap):
+    if (
+        isinstance(min_wgd_overlap, (bool, np.bool_))
+        or not isinstance(min_wgd_overlap, Real)
+        or not np.isfinite(min_wgd_overlap)
+        or not 0 <= min_wgd_overlap <= 1
+    ):
+        raise ValueError(
+            'min_wgd_overlap must be a finite number between 0 and 1'
+        )
+    return float(min_wgd_overlap)
+
+
 def _process_sample_with_mult_store(
     sample,
     output_dir,
@@ -1710,6 +1723,7 @@ def process_sample(
         raise TypeError('interval_config must be a TimingIntervalConfig')
     subclone_prior = validate_subclone_prior(subclone_prior)
     wgd_count = _validate_wgd_count(wgd_count)
+    min_wgd_overlap = _validate_min_wgd_overlap(min_wgd_overlap)
     validate_sample_id(sample.sample_id)
     major_cn_mode = get_major_cn_mode(sample)
     if major_cn_mode not in (1, 2):

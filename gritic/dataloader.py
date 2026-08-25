@@ -588,8 +588,10 @@ def validate_copy_number_values(copy_number_table):
     return copy_number_table
 
 
-def validate_subclone_values(subclone_table):
+def validate_subclone_values(subclone_table, *, clip_subclone_ccf=False):
     """Validate and canonicalize the subclone table used as a mixture prior."""
+    if not isinstance(clip_subclone_ccf, (bool, np.bool_)):
+        raise ValueError('clip_subclone_ccf must be a boolean')
     missing_columns = [
         column for column in SUBCLONE_REQUIRED_COLUMNS
         if column not in subclone_table.columns
@@ -601,25 +603,35 @@ def validate_subclone_values(subclone_table):
         )
 
     subclone_table = subclone_table.copy()
+    parsed_columns = {}
+
+    def parse_float(value):
+        try:
+            return float(value)
+        except (TypeError, ValueError, OverflowError):
+            return np.nan
+
     for column in ('Subclone_CCF', 'Subclone_Fraction'):
         boolean_values = subclone_table[column].map(
             lambda value: isinstance(value, (bool, np.bool_))
         )
-        numeric_values = pd.to_numeric(
-            subclone_table[column],
-            errors='coerce',
-        )
-        valid_values = (
+        numeric_values = subclone_table[column].map(parse_float)
+        valid_numeric_values = (
             ~boolean_values
             & numeric_values.notna()
             & np.isfinite(numeric_values)
-            & numeric_values.between(0, 1)
         )
+        valid_values = valid_numeric_values
+        if column != 'Subclone_CCF' or not clip_subclone_ccf:
+            valid_values &= numeric_values.between(0, 1)
         if not valid_values.all():
             raise ValueError(
                 f'{column} must contain finite values between 0 and 1'
             )
-        subclone_table[column] = numeric_values.astype(float)
+        parsed_columns[column] = numeric_values.astype(float)
+
+    for column, numeric_values in parsed_columns.items():
+        subclone_table[column] = numeric_values
 
     total_subclone_fraction = subclone_table['Subclone_Fraction'].sum()
     if total_subclone_fraction > 1:
@@ -628,6 +640,25 @@ def validate_subclone_values(subclone_table):
                 'Subclone_Fraction values must sum to no more than 1'
             )
         subclone_table['Subclone_Fraction'] /= total_subclone_fraction
+
+    if clip_subclone_ccf:
+        below_lower_bound = subclone_table['Subclone_CCF'] < 0
+        above_upper_bound = subclone_table['Subclone_CCF'] > 1
+        clipped_count = int(
+            below_lower_bound.sum() + above_upper_bound.sum()
+        )
+        if clipped_count:
+            value_label = 'value' if clipped_count == 1 else 'values'
+            warnings.warn(
+                f'Clipping {clipped_count} Subclone_CCF {value_label} '
+                f'to [0, 1] ({int(below_lower_bound.sum())} below 0; '
+                f'{int(above_upper_bound.sum())} above 1).',
+                UserWarning,
+                stacklevel=2,
+            )
+            subclone_table['Subclone_CCF'] = (
+                subclone_table['Subclone_CCF'].clip(lower=0, upper=1)
+            )
     return subclone_table
 
 
@@ -1181,7 +1212,11 @@ def get_valid_subclones(
 def filter_excess_subclones(subclone_table):
     if subclone_table is None or len(subclone_table.index)==1:
         return subclone_table
-    subclone_table = subclone_table.sort_values(by=['Subclone_CCF'],ascending=False).copy()
+    subclone_table = subclone_table.sort_values(
+        by=['Subclone_CCF'],
+        ascending=False,
+        kind='mergesort',
+    ).copy()
 
     top_clone = subclone_table.iloc[0:1]
     

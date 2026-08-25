@@ -1,6 +1,7 @@
 import networkx as nx
 import itertools
 import hashlib
+import warnings
 import numpy as np
 #problem posed  https://leetcode.com/problems/all-possible-full-binary-trees/
 #code from https://www.youtube.com/watch?v=nZtrZPTTCAo
@@ -86,7 +87,20 @@ def get_tree_hash(tree):
     hashes = []
     for nodes in connected_nodes:
         sub_tree = tree.subgraph(nodes)
-        tree_hash = nx.weisfeiler_lehman_graph_hash(sub_tree,node_attr='WGD_Symbol')
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                'ignore',
+                message=(
+                    r'^The hashes produced for directed graphs changed in '
+                    r'version v3\.5 due to a bugfix to track in and out edges '
+                    r'separately \(see documentation\)\.$'
+                ),
+                category=UserWarning,
+            )
+            tree_hash = nx.weisfeiler_lehman_graph_hash(
+                sub_tree,
+                node_attr='WGD_Symbol',
+            )
         hashes.append(tree_hash)
     joint_hash = '-'.join(sorted(hashes))
     final_hash = hashlib.md5(joint_hash.encode('utf-8')).hexdigest()

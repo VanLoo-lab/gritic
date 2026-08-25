@@ -75,13 +75,13 @@ def minimum_subclone_ccf(value):
         ) from error
 
 
-def percentile(value):
+def quantile(value):
     try:
         parsed_value = float(value)
-        return sampletools.validate_coverage_vaf_percentile(parsed_value)
+        return sampletools.validate_coverage_vaf_quantile(parsed_value)
     except (TypeError, ValueError) as error:
         raise argparse.ArgumentTypeError(
-            'must be a finite number between 0 and 100'
+            'must be a finite number between 0 and 1'
         ) from error
 
 
@@ -91,7 +91,7 @@ def interval_width(value):
         return intervaltools.validate_interval_width(parsed_value)
     except (TypeError, ValueError) as error:
         raise argparse.ArgumentTypeError(
-            'must be a finite percentage greater than 0 and at most 100'
+            'must be a finite proportion greater than 0 and at most 1'
         ) from error
 
 
@@ -107,9 +107,10 @@ def _add_interval_arguments(
         dest=f'{destination}_interval_width',
         type=interval_width,
         default=default_interval.width,
-        metavar='PERCENT',
+        metavar='PROPORTION',
         help=(
-            f'{description} interval width as a percentage '
+            f'{description} interval width as a proportion greater than 0 '
+            'and at most 1 '
             f'(default: {default_interval.width:g}).'
         ),
     )
@@ -156,8 +157,6 @@ def load_subclone_table(subclone_table_path):
         sep='\t',
         dtype={
             'Cluster': str,
-            'Subclone_CCF': float,
-            'Subclone_Fraction': float,
         },
     )
 
@@ -268,17 +267,19 @@ def build_parser():
         ),
     )
     parser.add_argument(
-        '--coverage-vaf-percentile',
-        type=percentile,
-        default=sampletools.DEFAULT_COVERAGE_VAF_PERCENTILE,
-        metavar='PERCENTILE',
+        '--coverage-vaf-quantile',
+        type=quantile,
+        default=sampletools.DEFAULT_COVERAGE_VAF_QUANTILE,
+        metavar='QUANTILE',
         help=(
-            'Observed-SNV VAF percentile used to select mutations for the '
+            'Observed-SNV VAF quantile between 0 and 1 used to select '
+            'mutations for the '
             'mean-coverage estimate in the exact Poisson-thinning detection '
-            'correction (default: 90). '
+            'correction (default: 0.9). '
             'This high-VAF coverage heuristic differs from the publication/'
             'thesis method, which averages detection power over every SNV\'s '
-            'observed depth in the segment; 90 is the historical code value. '
+            'observed depth in the segment; 0.9 is the unit-interval form of '
+            'the historical code value (the 90th percentile). '
             'It affects the likelihood correction in both subclone-prior modes '
             'and the prior correction only in corrected mode.'
         ),
@@ -309,6 +310,15 @@ def build_parser():
             'Minimum normalized share of subclonal mutations required to '
             'retain a subclone; retention is strictly above this threshold '
             '(default: 0.1).'
+        ),
+    )
+    parser.add_argument(
+        '--clip-subclone-ccf',
+        action='store_true',
+        help=(
+            'Clip finite Subclone_CCF values outside [0, 1] to the nearest '
+            'boundary before validation and filtering. Non-numeric and '
+            'non-finite values remain errors. Disabled by default.'
         ),
     )
     parser.add_argument(
@@ -442,10 +452,11 @@ def main(argv=None):
         merge_cn=args.merge_adjacent_segments,
         min_mutation_alt_count=args.min_mutation_alt_count,
         min_mutation_coverage=args.min_mutation_coverage,
-        coverage_vaf_percentile=args.coverage_vaf_percentile,
+        coverage_vaf_quantile=args.coverage_vaf_quantile,
         min_subclone_ccf=args.min_subclone_ccf,
         max_subclone_ccf=args.max_subclone_ccf,
         min_subclone_fraction=args.min_subclone_fraction,
+        clip_subclone_ccf=args.clip_subclone_ccf,
         autosome_count=args.autosome_count,
         drop_unmatched_snvs=args.drop_unmatched_snvs,
         drop_unmatched_chromosomes=args.drop_unmatched_chromosomes,

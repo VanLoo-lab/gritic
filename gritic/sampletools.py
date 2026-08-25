@@ -14,7 +14,7 @@ import gritic.dataloader as dataloader
 
 DEFAULT_MIN_MUTATION_ALT_COUNT = 3
 DEFAULT_MIN_MUTATION_COVERAGE = 10
-DEFAULT_COVERAGE_VAF_PERCENTILE = 90.0
+DEFAULT_COVERAGE_VAF_QUANTILE = 0.9
 DEFAULT_MIN_SUBCLONE_CCF = 0.01
 DEFAULT_MAX_SUBCLONE_CCF = 0.9
 DEFAULT_MIN_SUBCLONE_FRACTION = 0.1
@@ -84,16 +84,16 @@ def validate_min_subclone_ccf(value):
     return float(value)
 
 
-def validate_coverage_vaf_percentile(value):
-    """Return a finite VAF percentile in the NumPy-supported ``[0, 100]``."""
+def validate_coverage_vaf_quantile(value):
+    """Return a finite VAF quantile in the NumPy-supported ``[0, 1]``."""
     if (
         isinstance(value, bool)
         or not isinstance(value, Real)
         or not np.isfinite(value)
-        or not 0 <= value <= 100
+        or not 0 <= value <= 1
     ):
         raise ValueError(
-            'coverage_vaf_percentile must be a finite number between 0 and 100'
+            'coverage_vaf_quantile must be a finite number between 0 and 1'
         )
     return float(value)
 
@@ -366,12 +366,13 @@ class Sample:
         drop_unmatched_chromosomes=False,
         min_mutation_alt_count=DEFAULT_MIN_MUTATION_ALT_COUNT,
         min_mutation_coverage=DEFAULT_MIN_MUTATION_COVERAGE,
-        coverage_vaf_percentile=DEFAULT_COVERAGE_VAF_PERCENTILE,
+        coverage_vaf_quantile=DEFAULT_COVERAGE_VAF_QUANTILE,
         min_subclone_ccf=DEFAULT_MIN_SUBCLONE_CCF,
         max_subclone_ccf=DEFAULT_MAX_SUBCLONE_CCF,
         min_subclone_fraction=DEFAULT_MIN_SUBCLONE_FRACTION,
         autosome_count=DEFAULT_AUTOSOME_COUNT,
         *,
+        clip_subclone_ccf=False,
         _validation_token=None,
     ):
 
@@ -394,8 +395,8 @@ class Sample:
             min_mutation_coverage,
             'min_mutation_coverage',
         )
-        self.coverage_vaf_percentile = validate_coverage_vaf_percentile(
-            coverage_vaf_percentile
+        self.coverage_vaf_quantile = validate_coverage_vaf_quantile(
+            coverage_vaf_quantile
         )
         self.min_subclone_ccf = validate_min_subclone_ccf(
             min_subclone_ccf,
@@ -413,6 +414,9 @@ class Sample:
             min_subclone_fraction,
             'min_subclone_fraction',
         )
+        if not isinstance(clip_subclone_ccf, (bool, np.bool_)):
+            raise ValueError('clip_subclone_ccf must be a boolean')
+        self.clip_subclone_ccf = bool(clip_subclone_ccf)
         if (
             _validation_token is not None
             and _validation_token is not _VALIDATED_INPUT_TABLES
@@ -608,7 +612,10 @@ class Sample:
         if subclone_table is None:
             return None
         
-        subclone_table = dataloader.validate_subclone_values(subclone_table)
+        subclone_table = dataloader.validate_subclone_values(
+            subclone_table,
+            clip_subclone_ccf=self.clip_subclone_ccf,
+        )
         subclone_table = dataloader.get_valid_subclones(
             subclone_table,
             min_ccf=self.min_subclone_ccf,
@@ -715,7 +722,7 @@ class Sample:
                     self.sex,
                     apply_reads_correction=self.apply_reads_correction,
                     min_mutation_alt_count=self.min_mutation_alt_count,
-                    coverage_vaf_percentile=self.coverage_vaf_percentile,
+                    coverage_vaf_quantile=self.coverage_vaf_quantile,
                     _validated=_validated,
                 )
                 segments.append(segment)
@@ -744,7 +751,7 @@ class Segment:
         sex,
         apply_reads_correction=True,
         min_mutation_alt_count=DEFAULT_MIN_MUTATION_ALT_COUNT,
-        coverage_vaf_percentile=DEFAULT_COVERAGE_VAF_PERCENTILE,
+        coverage_vaf_quantile=DEFAULT_COVERAGE_VAF_QUANTILE,
         *,
         _validated=False,
     ):
@@ -771,8 +778,8 @@ class Segment:
             min_mutation_alt_count,
             'min_mutation_alt_count',
         )
-        self.coverage_vaf_percentile = validate_coverage_vaf_percentile(
-            coverage_vaf_percentile
+        self.coverage_vaf_quantile = validate_coverage_vaf_quantile(
+            coverage_vaf_quantile
         )
         self.sample_clone_fractions = self.get_sample_clone_fractions()
         self.n_subclones = self.get_n_subclones()
@@ -884,7 +891,7 @@ class Segment:
         
         vaf = self.mutation_table["Tumor_Alt_Count"] / (self.mutation_table["Tumor_Alt_Count"] + self.mutation_table["Tumor_Ref_Count"])
         highest_vaf_m_table = self.mutation_table[
-            vaf > np.percentile(vaf, self.coverage_vaf_percentile) - 0.01
+            vaf > np.quantile(vaf, self.coverage_vaf_quantile) - 0.01
         ]
         highest_vaf_average_coverage = np.average(highest_vaf_m_table['Tumor_Alt_Count']+highest_vaf_m_table['Tumor_Ref_Count'])
         
