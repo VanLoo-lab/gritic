@@ -139,6 +139,13 @@ GRITIC supports two segment-assignment modes:
 
 In supplied-ID mode, every copy number row must have a ```Segment_ID``` that is not null, empty, or whitespace-only, and copy number ```Segment_ID``` values must be unique within the copy number table. Every mutation row must also have a ```Segment_ID``` that is not null, empty, or whitespace-only. By default, every mutation ```Segment_ID``` must be present in the copy number table, and ```Chromosome``` must match the corresponding copy number row. In position-assignment mode, every mutation must fall inside a copy-number segment on the same chromosome. If ```--drop-unmatched-snvs``` is supplied, either kind of unmatched mutation is instead dropped with one count warning. Missing or blank supplied IDs and chromosome mismatches remain errors.
 
+GRITIC does not model mutations in zero-copy ```0+0``` segments. In supplied-ID
+mode, mutations assigned to such otherwise valid input segments are dropped with
+one aggregated warning reporting the affected mutation count, segment count, and
+source ```Segment_ID``` values. This is independent of
+```--drop-unmatched-snvs``` because those IDs are matched rather than unknown.
+If no mutations remain after this removal, GRITIC raises an error.
+
 The selected ```Mutation_ID``` or canonical integer ```Position``` value must be unique within its source segment. An explicit ```Mutation_ID``` column takes precedence for every row; GRITIC does not fall back to ```Position``` for blank values in that column. The same selected value may be reused in different source segments, including source segments that GRITIC subsequently merges.
 
 Programmatic callers enable the same behavior with ```drop_unmatched_snvs=True``` in ```sampletools.Sample```. When using ```dataloader.load_input_tables``` with supplied segment IDs, pass the same value there as well so unmatched IDs are permitted and removed during loading; the command-line interface forwards it to both stages. The separate ```drop_unmatched_chromosomes=True``` API argument corresponds to ```--drop-unmatched-chromosomes``` and filters invalid chromosome rows from both input tables before their numeric fields and segment relationships are validated.

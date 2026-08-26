@@ -538,6 +538,50 @@ class Sample:
                     self.supplied_segment_id_map
                 )
             )
+            zero_copy_mutations = mutation_table['Segment_ID'].isin(
+                self.zero_copy_segment_ids
+            )
+            zero_copy_mutation_count = int(zero_copy_mutations.sum())
+            if zero_copy_mutation_count:
+                zero_copy_segment_count = int(
+                    mutation_table.loc[
+                        zero_copy_mutations,
+                        'Segment_ID',
+                    ].nunique()
+                )
+                source_segment_ids = sorted(
+                    mutation_table.loc[
+                        zero_copy_mutations,
+                        'Source_Segment_ID',
+                    ].astype(str).unique()
+                )
+                snv_label = (
+                    'SNV' if zero_copy_mutation_count == 1 else 'SNVs'
+                )
+                segment_label = (
+                    'segment'
+                    if zero_copy_segment_count == 1
+                    else 'segments'
+                )
+                warnings.warn(
+                    f'Dropping {zero_copy_mutation_count} {snv_label} '
+                    f'assigned to {zero_copy_segment_count} zero-copy '
+                    '(Major_CN=0, Minor_CN=0) copy-number '
+                    f'{segment_label} because GRITIC does not model '
+                    'mutations in 0+0 segments. Source Segment_ID value(s): '
+                    + ', '.join(source_segment_ids)
+                    + '.',
+                    UserWarning,
+                    stacklevel=2,
+                )
+                mutation_table = mutation_table.loc[
+                    ~zero_copy_mutations
+                ].copy()
+                if mutation_table.empty:
+                    raise ValueError(
+                        'No mutations remain after dropping SNVs assigned to '
+                        'zero-copy (0+0) segments'
+                    )
 
         mutation_table = dataloader.assign_cn_to_snv(
             mutation_table,
@@ -606,6 +650,12 @@ class Sample:
                     cn_table['Segment_ID'],
                 ))
         cn_table['Total_CN'] = cn_table['Major_CN']+cn_table['Minor_CN']
+        self.zero_copy_segment_ids = frozenset(
+            cn_table.loc[
+                cn_table['Major_CN'].eq(0),
+                'Segment_ID',
+            ].astype(str)
+        )
         cn_table = cn_table[cn_table['Major_CN']>0]
         return cn_table
     def format_subclone_table(self,subclone_table):
