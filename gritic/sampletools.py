@@ -202,20 +202,28 @@ def get_major_cn_mode(sample):
         )
     return get_major_cn_mode_from_cn_table(cn_table, _validated=True)
 
-@njit(parallel=True)                           
+@njit(parallel=True, cache=True)
 def log_likelihood_numba_parallel(mult_array,mult_states):
-    log_likelihood_store = np.zeros(mult_states.shape[0])                                
+    log_likelihood_store = np.zeros(mult_states.shape[0])
     for i in prange(mult_states.shape[0]):
-        mult_state = mult_states[i]
-        mult_state = np.clip(mult_state,0.0,1.0)
-        log_likelihood = np.multiply(mult_state, mult_array)
-    
-        log_likelihood = np.sum(log_likelihood, axis=1)
-        log_likelihood = np.sum(np.log(log_likelihood + 2.2e-300))
+        log_likelihood = 0.0
+        for mutation_index in range(mult_array.shape[0]):
+            mutation_likelihood = 0.0
+            for multiplicity_index in range(mult_array.shape[1]):
+                state_probability = mult_states[i, multiplicity_index]
+                if state_probability < 0.0:
+                    state_probability = 0.0
+                elif state_probability > 1.0:
+                    state_probability = 1.0
+                mutation_likelihood += (
+                    state_probability
+                    * mult_array[mutation_index, multiplicity_index]
+                )
+            log_likelihood += np.log(mutation_likelihood + 2.2e-300)
         log_likelihood_store[i] = log_likelihood
     return log_likelihood_store
 
-@njit  
+@njit(cache=True)
 def evaluate_likelihood_array_numba(full_states,non_phased_array,reads_correction_array,tolerance=1e-8):
     
     full_states = np.multiply(full_states,reads_correction_array)

@@ -1,9 +1,7 @@
 import os
-import gzip
-import hashlib
 import json
 import logging
-import sys
+from dataclasses import dataclass
 from numbers import Integral, Real
 
 import warnings
@@ -39,7 +37,6 @@ from gritic.timingio import write_timing_archive
 from sklearn.neighbors import NearestNeighbors
 
 import time
-import shutil
 
 import gritic.distributiontools as distributiontools
 import gritic.treetools as treetools
@@ -56,7 +53,11 @@ logger = logging.getLogger(__name__)
 
 MIN_WGD_MUTATIONS = 10
 ROUTE_CONDITIONAL_SAMPLE_COUNT = 1000
+RAW_ROUTE_SAMPLE_COUNT = 10_000
 COMBINED_WGD_SAMPLE_COUNT = 500
+# Bound simultaneous per-segment posterior output while still sharing costly
+# route geometry across high-copy-number segment pairs.
+SHARED_FIT_OUTPUT_MEMORY_BUDGET = 1_900_000_000
 SUBCLONE_FRACTION_PRIOR_MODES = ('adjusted', 'supplied')
 DEFAULT_SUBCLONE_FRACTION_PRIOR = 'adjusted'
 DEFAULT_UNORDERED_BALANCED_ROUTE_PRIOR = False
@@ -149,195 +150,6 @@ def get_clone_share_prior_alpha(
     return 1.0 + prior_fractions
 
 
-def get_segment_cache_identity(segment_id):
-    return f'segment:{segment_id}'
-
-
-def get_pooled_wgd_cache_identity(minor_cn, source_segment_ids):
-    source_segment_ids = sorted(map(str, source_segment_ids))
-    context = json.dumps(
-        {
-            'kind': 'pooled_wgd',
-            'minor_cn': _json_scalar(minor_cn),
-            'source_segment_ids': source_segment_ids,
-        },
-        sort_keys=True,
-        separators=(',', ':'),
-    )
-    digest = hashlib.sha256(context.encode('utf-8')).hexdigest()
-    return f'pooled-wgd:{digest}'
-
-
-def get_subclone_fraction_prior_cache_namespace(
-    subclone_fraction_prior,
-    segment_cache_identity=None,
-):
-    subclone_fraction_prior = validate_subclone_fraction_prior(
-        subclone_fraction_prior
-    )
-    if subclone_fraction_prior == 'supplied':
-        return pathlib.Path('supplied')
-    if segment_cache_identity is None:
-        raise ValueError(
-            'segment_cache_identity is required for the adjusted '
-            'subclone-fraction prior'
-        )
-    identity = str(segment_cache_identity)
-    if not identity:
-        raise ValueError(
-            'segment_cache_identity must not be empty for the adjusted '
-            'subclone-fraction prior'
-        )
-    digest = hashlib.sha256(identity.encode('utf-8')).hexdigest()
-    return pathlib.Path('adjusted') / digest
-
-
-def get_cache_subclone_fraction_prior(
-    subclone_fraction_prior,
-    subclone_table,
-):
-    """Use the supplied-fraction cache when no fraction prior is sampled."""
-    subclone_fraction_prior = validate_subclone_fraction_prior(
-        subclone_fraction_prior
-    )
-    if subclone_table is None:
-        return 'supplied'
-    if isinstance(subclone_table, pd.DataFrame) and subclone_table.empty:
-        return 'supplied'
-    return subclone_fraction_prior
-
-
-def _remove_cache_directory_preserving_error(cache_dir):
-    """Remove a cache directory without masking an active exception."""
-    cache_dir = pathlib.Path(cache_dir)
-    if not cache_dir.is_dir():
-        return
-    active_exception = sys.exc_info()[0] is not None
-    try:
-        shutil.rmtree(cache_dir)
-    except OSError:
-        if not active_exception:
-            raise
-        logger.exception(
-            'Failed to remove cache directory %s while preserving the '
-            'active processing error',
-            cache_dir,
-        )
-
-
-def _remove_cache_file_preserving_error(cache_path):
-    """Remove a cache file without masking an active exception."""
-    cache_path = pathlib.Path(cache_path)
-    if not cache_path.is_file():
-        return
-    active_exception = sys.exc_info()[0] is not None
-    try:
-        cache_path.unlink()
-    except OSError:
-        if not active_exception:
-            raise
-        logger.exception(
-            'Failed to remove cache file %s while preserving the active '
-            'processing error',
-            cache_path,
-        )
-
-
-def remove_mult_store_cache_namespace(
-    mult_store_dir,
-    subclone_fraction_prior,
-    segment_cache_identity=None,
-):
-    """Remove one resolved cache namespace, if it exists."""
-    if mult_store_dir is None:
-        return
-    namespace = get_subclone_fraction_prior_cache_namespace(
-        subclone_fraction_prior,
-        segment_cache_identity,
-    )
-    cache_dir = pathlib.Path(mult_store_dir, namespace)
-    _remove_cache_directory_preserving_error(cache_dir)
-
-    adjusted_root = pathlib.Path(mult_store_dir, 'adjusted')
-    if adjusted_root.is_dir():
-        try:
-            adjusted_root.rmdir()
-        except OSError:
-            pass
-
-
-def remove_mult_store_route_caches(
-    mult_store_dir,
-    subclone_fraction_prior,
-    route_ids,
-    wgd_status,
-    wgd_timing_distribution,
-    segment_cache_identity=None,
-):
-    """Remove cached arrays for exact routes in one WGD context."""
-    if mult_store_dir is None:
-        return
-    namespace = get_subclone_fraction_prior_cache_namespace(
-        subclone_fraction_prior,
-        segment_cache_identity,
-    )
-    cache_dir = pathlib.Path(mult_store_dir, namespace)
-    cache_prefixes = (
-        'mult_store',
-        'timing_store',
-        'wgd_timing_store',
-        'density_store',
-    )
-    for route_id in route_ids:
-        cache_key = get_mult_store_cache_key(
-            route_id,
-            wgd_status,
-            wgd_timing_distribution,
-        )
-        for cache_prefix in cache_prefixes:
-            _remove_cache_file_preserving_error(
-                cache_dir/f'{cache_prefix}_{cache_key}.npy.gz'
-            )
-    if cache_dir.is_dir():
-        try:
-            cache_dir.rmdir()
-        except OSError:
-            pass
-
-
-def get_wgd_context_digest(wgd_status, wgd_timing_distribution):
-    """Digest the explicit WGD status and exact timing distribution."""
-    if not isinstance(wgd_status, (bool, np.bool_)):
-        raise ValueError('wgd_status must be a boolean')
-
-    hasher = hashlib.sha256()
-    hasher.update(f'wgd-status:{int(wgd_status)}\0'.encode('ascii'))
-    if wgd_timing_distribution is None:
-        hasher.update(b'no-wgd-timing-distribution')
-        return hasher.hexdigest()
-
-    distribution = np.ascontiguousarray(
-        np.asarray(wgd_timing_distribution, dtype='<f8')
-    )
-    hasher.update(b'wgd-timing-distribution\0')
-    hasher.update(json.dumps(distribution.shape).encode('ascii'))
-    hasher.update(b'\0')
-    hasher.update(distribution.tobytes())
-    return hasher.hexdigest()
-
-
-def get_mult_store_cache_key(
-    route_id,
-    wgd_status,
-    wgd_timing_distribution,
-):
-    """Identify a full route within its explicit WGD sampling context."""
-    return (
-        f'{route_id}_wgd_'
-        f'{get_wgd_context_digest(wgd_status, wgd_timing_distribution)}'
-    )
-
-
 def _get_mirror_node_map(source_tree, target_tree):
     """Map source nodes onto the target after exchanging allele identities."""
     allele_attribute = treetools.ALLELE_ATTRIBUTE
@@ -373,46 +185,33 @@ def _get_mirror_node_map(source_tree, target_tree):
     return node_map
 
 
+@dataclass(frozen=True)
+class ProposalGeometry:
+    """Likelihood-independent route proposals shared by matching segments."""
+
+    mult_store: np.ndarray
+    timing_store: np.ndarray
+    wgd_timing_store: np.ndarray
+    density: np.ndarray
+
+
 class Route:
-    def __init__(
-        self,
-        route_id,
-        tree,
-        major_cn,
-        minor_cn,
-        wgd_status,
-        mult_store_dir,
-        cache_namespace,
-    ):
+    def __init__(self, route_id, route_tree):
         self.route_id = route_id
         self.short_id = route_id[:9]
-        self.route_tree = RouteTree(tree,major_cn,minor_cn,wgd_status)
-        
-        self.major_cn = major_cn
-        self.minor_cn = minor_cn
+        self.route_tree = route_tree
+
+        self.major_cn = route_tree.major_cn
+        self.minor_cn = route_tree.minor_cn
         self.total_cn = self.major_cn + self.minor_cn
+        self.wgd_status = route_tree.wgd_status
 
-        self.wgd_status = wgd_status
-        self.mult_store_dir = mult_store_dir
-        self.cache_namespace = cache_namespace
-        self.mirror_route_id = None
-        if major_cn == minor_cn and minor_cn > 0:
-            self.mirror_route_id = treetools.get_mirror_tree_hash(tree)
-        self.ll_store = None
-        self.node_timing = None
-        self.wgd_timing_store = None
-        self.n_events_store = None
-        self.mult_store = None
-        self.raw_samples = None
-        self.unphased_mirror_source = None
-        self.density = None
-        self.density_high = None
-
-        self.run_time = np.nan
+        self.mirror_route_id = route_tree.mirror_route_id
+        self.reset_fit()
 
     def reset_fit(self):
-        """Clear likelihood-dependent state before fitting new mutation data."""
-        self.ll_store = None
+        """Clear likelihood-dependent state before fitting mutation data."""
+        self.log_evidence = None
         self.node_timing = None
         self.wgd_timing_store = None
         self.n_events_store = None
@@ -423,30 +222,34 @@ class Route:
         self.density_high = None
         self.run_time = np.nan
 
-    
-    def get_average_events(self,event_type):
+    def get_average_events(self, event_type):
         if self.n_events_store is None:
             return np.nan
         return np.mean(self.n_events_store[event_type])
 
-    
-    def get_node_timing(self,node):
+    def get_node_timing(self, node):
         if self.node_timing is None:
             return np.nan
-        return self.node_timing[self.route_tree.non_phased_node_order.index(node),:]
-    
-    def get_cumulative_timing(self,timing_periods):
-        cumulative_timing = []
-        for i,node in enumerate(self.route_tree.non_phased_node_order):
+        node_index = self.route_tree.non_phased_node_order.index(node)
+        return self.node_timing[node_index, :]
 
+    def get_cumulative_timing(self, timing_periods):
+        cumulative_timing = []
+        node_order = self.route_tree.non_phased_node_order
+        node_positions = {
+            node: position for position, node in enumerate(node_order)
+        }
+        for node in node_order:
             predecessor = self.route_tree.node_attributes[node]['Predecessor']
+            node_period = timing_periods[:, node_positions[node]]
             if predecessor is None:
-                cumulative_timing.append(timing_periods[:,i])
+                cumulative_timing.append(node_period)
             else:
-                cumulative_timing.append(cumulative_timing[self.route_tree.non_phased_node_order.index(predecessor)]+timing_periods[:,i])
-        return np.array(cumulative_timing)
-        
-    
+                cumulative_timing.append(
+                    cumulative_timing[node_positions[predecessor]] + node_period
+                )
+        return np.asarray(cumulative_timing)
+
     def get_weighted_arrays(
         self,
         cumulative_timing,
@@ -455,192 +258,227 @@ class Route:
         weights,
         n_samples=ROUTE_CONDITIONAL_SAMPLE_COUNT,
     ):
-        #allow some tolerance
         if np.isnan(weights).any():
-            cumulative_timing = np.ones_like(cumulative_timing)[:,:n_samples]*np.nan
-            wgd_timing_store = np.ones_like(wgd_timing_store)[:n_samples]*np.nan
-            mult_store = np.ones_like(mult_store)[:n_samples,:]*np.nan
-            return cumulative_timing,wgd_timing_store,mult_store
-        assert (weights >-1e-80).all()
-        weights = np.clip(weights,0,1)
-        weights = weights/np.sum(weights)
-        #weighted_sample = np.random.choice(np.arange(cumulative_timing.shape[1]),size=cumulative_timing.shape[1],replace=True,p=weights)
-        weighted_sample = np.random.choice(np.arange(cumulative_timing.shape[1]),size=n_samples,replace=True,p=weights)
-        return np.array(cumulative_timing)[:,weighted_sample],wgd_timing_store[weighted_sample],mult_store[weighted_sample]
-    
-    def sample_mults(self,wgd_timing,n_samples):
-        constraints_matrix,constraints_sum = self.route_tree.get_combined_constraints(wgd_timing)
-        
+            cumulative_timing = (
+                np.ones_like(cumulative_timing)[:, :n_samples] * np.nan
+            )
+            wgd_timing_store = (
+                np.ones_like(wgd_timing_store)[:n_samples] * np.nan
+            )
+            mult_store = np.ones_like(mult_store)[:n_samples, :] * np.nan
+            return cumulative_timing, wgd_timing_store, mult_store
+        assert (weights > -1e-80).all()
+        weights = np.clip(weights, 0, 1)
+        weights = weights / np.sum(weights)
+        weighted_sample = np.random.choice(
+            np.arange(cumulative_timing.shape[1]),
+            size=n_samples,
+            replace=True,
+            p=weights,
+        )
+        return (
+            np.asarray(cumulative_timing)[:, weighted_sample],
+            wgd_timing_store[weighted_sample],
+            mult_store[weighted_sample],
+        )
+
+    def sample_mults(self, wgd_timing, n_samples):
+        constraints_matrix, constraints_sum = (
+            self.route_tree.get_combined_constraints(wgd_timing)
+        )
         start_sol = nnls(constraints_matrix, constraints_sum)[0]
         constraints_null = null_space(constraints_matrix)
-        
-        solutions = hitandrun.hit_and_run(constraints_null,start_sol,n_samples=n_samples)
+        solutions = hitandrun.hit_and_run(
+            constraints_null,
+            start_sol,
+            n_samples=n_samples,
+        )
 
         timing = self.get_cumulative_timing(solutions)
-        
-        mult = np.matmul(solutions,self.route_tree.timing_matrix)
-        
-        unphased_mult_sum = np.tile(np.sum(mult[:,:self.major_cn],axis=1),(self.major_cn,1)).T
-        major_cn_mult_sum = np.tile(np.sum(mult[:,self.major_cn:2*self.major_cn],axis=1),(self.major_cn,1)).T
-        minor_cn_mult_sum = np.tile(np.sum(mult[:,2*self.major_cn:],axis=1),(self.minor_cn,1)).T
-        combined_mult_sum = np.concatenate([unphased_mult_sum,major_cn_mult_sum,minor_cn_mult_sum],axis=1)
-        mult = mult/combined_mult_sum
-    
-        return mult,timing
+        mult = np.matmul(solutions, self.route_tree.timing_matrix)
 
-    
-    def get_n_events_estimate(self,node_timing,wgd_timing,n_samples = 300):
-        n_events_estimate = {'N_Events':[],'Pre_WGD_Losses':[],'Post_WGD_Losses':[]}
-        for _ in range(n_samples):
-            random_index = np.random.choice(node_timing.shape[1])
-            n_events,pre_wgd_losses,post_wgd_losses = self.route_tree.get_n_events(node_timing[:,random_index],wgd_timing[random_index])
-            n_events_estimate['N_Events'].append(n_events)
-            n_events_estimate['Pre_WGD_Losses'].append(pre_wgd_losses)
-            n_events_estimate['Post_WGD_Losses'].append(post_wgd_losses)
+        unphased_sum = np.sum(mult[:, :self.major_cn], axis=1)[:, None]
+        major_sum = np.sum(
+            mult[:, self.major_cn:2 * self.major_cn],
+            axis=1,
+        )[:, None]
+        minor_sum = np.sum(
+            mult[:, 2 * self.major_cn:],
+            axis=1,
+        )[:, None]
+        combined_mult_sum = np.concatenate(
+            [
+                np.repeat(unphased_sum, self.major_cn, axis=1),
+                np.repeat(major_sum, self.major_cn, axis=1),
+                np.repeat(minor_sum, self.minor_cn, axis=1),
+            ],
+            axis=1,
+        )
+        return mult / combined_mult_sum, timing
 
-        return n_events_estimate 
-    
+    def get_n_events_estimate(
+        self,
+        node_timing,
+        wgd_timing,
+        n_samples=300,
+    ):
+        random_indices = np.random.choice(
+            node_timing.shape[1],
+            size=n_samples,
+        )
+        event_arrays = self.route_tree.get_n_events_batch(
+            node_timing[:, random_indices],
+            wgd_timing[random_indices],
+        )
+        return {
+            event_type: values.tolist()
+            for event_type, values in zip(
+                ('N_Events', 'Pre_WGD_Losses', 'Post_WGD_Losses'),
+                event_arrays,
+            )
+        }
 
     @staticmethod
-    def simulate_clone_share(alpha,n_samples):
-        dirichlet_sample = np.random.dirichlet(alpha,size=n_samples)
-        return dirichlet_sample
-    def get_density_estimate(self,samples,n_test_points=1000,radius=0.05):
-        nn_finder = NearestNeighbors(radius=radius,p=1)
-        nn_finder.fit(samples)
-        random_mult_indicies = np.random.choice(samples.shape[0],size=n_test_points,replace=False)
-        nearest_neighbors = nn_finder.radius_neighbors(samples[random_mult_indicies,:],return_distance=False)
-        nn_size = np.array([x.size-1 for x in nearest_neighbors])
-        return np.mean(nn_size>0.1),np.mean(nn_size>2.1)
-    
-    def run_mult_sampling(self,alpha,n_subclones,wgd_timing_distribution,samples_per_run=500,max_samples=5e5,density_cut_off=0.9):
-        timing_store = []
-        wgd_timing_store= []
-        mult_store =[]
+    def simulate_clone_share(alpha, n_samples):
+        return np.random.dirichlet(alpha, size=n_samples)
 
-        start_sampling_time = time.perf_counter()
+    def get_density_estimate(
+        self,
+        samples,
+        n_test_points=1000,
+        radius=0.05,
+    ):
+        nn_finder = NearestNeighbors(radius=radius, p=1)
+        nn_finder.fit(samples)
+        n_test_points = min(n_test_points, samples.shape[0])
+        random_mult_indices = np.random.choice(
+            samples.shape[0],
+            size=n_test_points,
+            replace=False,
+        )
+        nearest_neighbors = nn_finder.radius_neighbors(
+            samples[random_mult_indices, :],
+            return_distance=False,
+        )
+        nn_size = np.asarray([neighbors.size - 1 for neighbors in nearest_neighbors])
+        return np.mean(nn_size > 0.1), np.mean(nn_size > 2.1)
+
+    def run_geometry_sampling(
+        self,
+        wgd_timing_distribution,
+        samples_per_run=500,
+        max_samples=500_000,
+        density_cut_off=0.9,
+    ):
+        """Sample route geometry without segment-specific clone fractions.
+
+        The density diagnostic covers only hit-and-run timing coordinates.
+        Clone shares are independent Dirichlet draws, so they do not require a
+        Markov-chain mixing diagnostic and can be generated per segment later.
+        """
+        timing_batches = []
+        mult_batches = []
+        wgd_timing_batches = []
+        density = np.array([np.nan, np.nan])
+
+        sampling_started = time.perf_counter()
         next_eval_time = None
-        eval_count =0
-        
-        while True:
+        eval_count = 0
+        sample_count = 0
+
+        while sample_count < max_samples:
             if self.wgd_status:
                 wgd_timing = np.random.choice(wgd_timing_distribution)
             else:
-                wgd_timing =np.nan
-            mults,timing = self.sample_mults(wgd_timing,samples_per_run)
-           
-            timing_store.append(timing)
-
-            if n_subclones >0 :
-                clone_share = self.simulate_clone_share(alpha,timing.shape[1])
-                clonal_share = clone_share[:,0].reshape(-1,1)
-                subclone_mults = clone_share[:,1:]
-                
-                mults = np.concatenate([mults*clonal_share,subclone_mults],axis=1)
-            mult_store.append(mults)
-
-
-            wgd_timing_store.extend([wgd_timing]*timing.shape[1])
-            if eval_count==100 or (next_eval_time is not None and time.perf_counter()>next_eval_time):
-                
-                timing_test = np.concatenate(timing_store,axis=1)
-                timing_test = np.transpose(timing_test)
-         
-                if n_subclones >0:
-                    subclone_mults = np.concatenate(mult_store,axis=0)[:,-n_subclones:]
-                    timing_test = np.concatenate([timing_test,subclone_mults],axis=1)
-                sampling_time = time.perf_counter()-start_sampling_time
-                
-                start_density_time = time.perf_counter()
-                density,density_high = self.get_density_estimate(timing_test)
-                density_time = time.perf_counter()-start_density_time
-                if eval_count >50:
-                    next_eval_time = time.perf_counter()+min(max(density_time*5,sampling_time),30.0)
-                else:
-                    next_eval_time = time.perf_counter()+1.0
-                
-                start_sampling_time = time.perf_counter()
-                if density >= density_cut_off:
-                    break
-            eval_count+=1
-            if eval_count*samples_per_run > max_samples:
-                density,density_high = self.get_density_estimate(timing_test)
-                break
-            
-        timing_store =np.concatenate(timing_store,axis=1)
-        mult_store = np.concatenate(mult_store,axis=0)
-        
-        wgd_timing_store = np.array(wgd_timing_store)
-
-        return mult_store,timing_store,wgd_timing_store,np.array([density,density_high])
-
-    def save_gz_numpy(self,path,array):
-        with gzip.open(path,'wb') as f:
-            np.save(f,array)
-    def load_gz_numpy(self,path):
-        with gzip.open(path,'rb') as f:
-            return np.load(f)
-
-    def _get_mult_store_cache_paths(
-        self,
-        route_id,
-        wgd_timing_distribution,
-    ):
-        cache_dir = pathlib.Path(
-            self.mult_store_dir,
-            self.cache_namespace,
-        )
-        cache_key = get_mult_store_cache_key(
-            route_id,
-            self.wgd_status,
-            wgd_timing_distribution,
-        )
-        cache_suffix = f'{cache_key}.npy.gz'
-        return {
-            'Mult': cache_dir / f'mult_store_{cache_suffix}',
-            'Timing': cache_dir / f'timing_store_{cache_suffix}',
-            'WGD_Timing': cache_dir / f'wgd_timing_store_{cache_suffix}',
-            'Density': cache_dir / f'density_store_{cache_suffix}',
-        }
-
-    def _load_mult_store_cache(self, cache_paths):
-        return (
-            self.load_gz_numpy(cache_paths['Mult']),
-            self.load_gz_numpy(cache_paths['Timing']),
-            self.load_gz_numpy(cache_paths['WGD_Timing']),
-            self.load_gz_numpy(cache_paths['Density']),
-        )
-
-    @staticmethod
-    def _mult_store_cache_exists(cache_paths, route_id):
-        existing_paths = {
-            label: path.is_file()
-            for label, path in cache_paths.items()
-        }
-        if any(existing_paths.values()) and not all(existing_paths.values()):
-            missing = [
-                label
-                for label, exists in existing_paths.items()
-                if not exists
-            ]
-            raise FileNotFoundError(
-                f'Incomplete proposal cache for route {route_id}; missing: '
-                + ', '.join(missing)
+                wgd_timing = np.nan
+            mults, timing = self.sample_mults(wgd_timing, samples_per_run)
+            timing_batches.append(timing)
+            mult_batches.append(mults)
+            wgd_timing_batches.append(
+                np.full(timing.shape[1], wgd_timing, dtype=float)
             )
-        return all(existing_paths.values())
+            sample_count += timing.shape[1]
 
-    def _save_mult_store_cache(
+            should_evaluate = (
+                eval_count == 100
+                or (
+                    next_eval_time is not None
+                    and time.perf_counter() > next_eval_time
+                )
+                or sample_count >= max_samples
+            )
+            if should_evaluate:
+                timing_test = np.concatenate(timing_batches, axis=1).T
+                sampling_time = time.perf_counter() - sampling_started
+                density_started = time.perf_counter()
+                density = np.asarray(self.get_density_estimate(timing_test))
+                density_time = time.perf_counter() - density_started
+                del timing_test
+                if eval_count > 50:
+                    next_eval_time = time.perf_counter() + min(
+                        max(density_time * 5, sampling_time),
+                        30.0,
+                    )
+                else:
+                    next_eval_time = time.perf_counter() + 1.0
+                sampling_started = time.perf_counter()
+                if density[0] >= density_cut_off:
+                    break
+            eval_count += 1
+
+        return ProposalGeometry(
+            mult_store=np.concatenate(mult_batches, axis=0),
+            timing_store=np.concatenate(timing_batches, axis=1),
+            wgd_timing_store=np.concatenate(wgd_timing_batches),
+            density=density,
+        )
+
+    def materialize_mult_store(
         self,
-        cache_paths,
-        mult_store,
-        timing_store,
-        wgd_timing_store,
-        density,
+        geometry,
+        alpha,
+        n_subclones,
+        clone_share=None,
     ):
-        self.save_gz_numpy(cache_paths['Mult'], mult_store)
-        self.save_gz_numpy(cache_paths['Timing'], timing_store)
-        self.save_gz_numpy(cache_paths['WGD_Timing'], wgd_timing_store)
-        self.save_gz_numpy(cache_paths['Density'], density)
+        expected_columns = 2 * self.major_cn + self.minor_cn
+        base_mult_store = np.asarray(geometry.mult_store)
+        if (
+            base_mult_store.ndim != 2
+            or base_mult_store.shape[1] != expected_columns
+        ):
+            raise ValueError(
+                'Proposal geometry has an unexpected number of multiplicity '
+                'columns'
+            )
+        if n_subclones == 0:
+            if clone_share is not None:
+                raise ValueError(
+                    'clone_share must be omitted when there are no subclones'
+                )
+            return base_mult_store
+        if alpha is None or len(alpha) != n_subclones + 1:
+            raise ValueError(
+                'Clone-share prior must have one clonal and one value per '
+                'subclone'
+            )
+        if clone_share is None:
+            clone_share = self.simulate_clone_share(
+                alpha,
+                base_mult_store.shape[0],
+            )
+        clone_share = np.asarray(clone_share)
+        expected_shape = (base_mult_store.shape[0], n_subclones + 1)
+        if clone_share.shape != expected_shape:
+            raise ValueError(
+                f'clone_share must have shape {expected_shape}'
+            )
+        return np.concatenate(
+            [
+                base_mult_store * clone_share[:, :1],
+                clone_share[:, 1:],
+            ],
+            axis=1,
+        )
 
     def _validate_mirror_route(self, mirror_route):
         if mirror_route is None:
@@ -653,7 +491,9 @@ class Route:
                 'mirror route ID'
             )
         if mirror_route.mirror_route_id != self.route_id:
-            raise ValueError('Balanced route mirror relationships must be reciprocal')
+            raise ValueError(
+                'Balanced route mirror relationships must be reciprocal'
+            )
         return mirror_route is not self
 
     def _transform_mirror_timing_store(self, source_store, mirror_route):
@@ -678,17 +518,12 @@ class Route:
         )
         for source_position, source_node in enumerate(source_order):
             target_node = node_map[source_node]
-            transformed_store[target_positions[target_node], :] = source_store[
-                source_position,
-                :,
-            ]
+            transformed_store[target_positions[target_node], :] = (
+                source_store[source_position, :]
+            )
         return transformed_store
 
-    def _transform_mirror_mult_store(
-        self,
-        source_store,
-        n_subclones,
-    ):
+    def _transform_mirror_mult_store(self, source_store, n_subclones):
         source_store = np.asarray(source_store)
         if self.major_cn != self.minor_cn or self.minor_cn <= 0:
             raise ValueError(
@@ -706,101 +541,60 @@ class Route:
         minor_start = 2 * self.major_cn
         subclone_start = 3 * self.major_cn
         transformed_store[:, major_start:minor_start] = source_store[
-            :,
-            minor_start:subclone_start,
+            :, minor_start:subclone_start
         ]
         transformed_store[:, minor_start:subclone_start] = source_store[
-            :,
-            major_start:minor_start,
+            :, major_start:minor_start
         ]
         return transformed_store
 
-    def _transform_mirror_proposal_store(
+    def transform_mirror_geometry(self, mirror_route, geometry):
+        if not self._validate_mirror_route(mirror_route):
+            raise ValueError('A distinct mirror route is required')
+        return ProposalGeometry(
+            mult_store=self._transform_mirror_mult_store(
+                geometry.mult_store,
+                n_subclones=0,
+            ),
+            timing_store=self._transform_mirror_timing_store(
+                geometry.timing_store,
+                mirror_route,
+            ),
+            wgd_timing_store=np.asarray(
+                geometry.wgd_timing_store
+            ).copy(),
+            density=np.asarray(geometry.density).copy(),
+        )
+
+    def get_raw_samples_store(
         self,
-        mirror_route,
         mult_store,
         timing_store,
         wgd_timing_store,
-        density,
-        n_subclones,
+        ll_store,
+        n_samples=RAW_ROUTE_SAMPLE_COUNT,
     ):
-        return (
-            self._transform_mirror_mult_store(mult_store, n_subclones),
-            self._transform_mirror_timing_store(timing_store, mirror_route),
-            np.asarray(wgd_timing_store).copy(),
-            np.asarray(density).copy(),
+        random_indexes = np.random.randint(
+            0,
+            mult_store.shape[0],
+            size=n_samples,
         )
-    
-    def get_mult_store(
-        self,
-        alpha,
-        n_subclones,
-        wgd_timing_distribution,
-        mirror_route=None,
-    ):
-        if self.mult_store_dir is not None:
-            cache_dir = pathlib.Path(
-                self.mult_store_dir,
-                self.cache_namespace,
+        raw_samples_store = {
+            'Timing': {},
+            'Mult': mult_store[random_indexes, :].copy(),
+            'WGD_Timing': wgd_timing_store[random_indexes].copy(),
+            'LL': ll_store[random_indexes].copy(),
+        }
+        node_positions = {
+            node: position
+            for position, node in enumerate(
+                self.route_tree.non_phased_node_order
             )
-            os.makedirs(cache_dir,exist_ok=True)
-            cache_paths = self._get_mult_store_cache_paths(
-                self.route_id,
-                wgd_timing_distribution,
-            )
-
-            if self._mult_store_cache_exists(
-                cache_paths,
-                self.route_id,
-            ):
-                return self._load_mult_store_cache(cache_paths)
-
-            if self._validate_mirror_route(mirror_route):
-                mirror_cache_paths = self._get_mult_store_cache_paths(
-                    mirror_route.route_id,
-                    wgd_timing_distribution,
-                )
-                if self._mult_store_cache_exists(
-                    mirror_cache_paths,
-                    mirror_route.route_id,
-                ):
-                    mirror_store = self._load_mult_store_cache(
-                        mirror_cache_paths
-                    )
-                    transformed_store = self._transform_mirror_proposal_store(
-                        mirror_route,
-                        *mirror_store,
-                        n_subclones,
-                    )
-                    self._save_mult_store_cache(
-                        cache_paths,
-                        *transformed_store,
-                    )
-                    return transformed_store
-        mult_store,timing_store,wgd_timing_store,density = self.run_mult_sampling(alpha,n_subclones,wgd_timing_distribution)
-        
-        if self.mult_store_dir is not None:
-            self._save_mult_store_cache(
-                cache_paths,
-                mult_store,
-                timing_store,
-                wgd_timing_store,
-                density,
-            )
-        
-        return mult_store,timing_store,wgd_timing_store,density
-
-    def get_raw_samples_store(self,mult_store,timing_store,wgd_timing_store,ll_store,n_samples=10000):
-        
-        random_indexes = np.random.randint(0,mult_store.shape[0],size=n_samples)
-        
-        raw_samples_store = {'Timing':{},'Mult':[],'WGD_Timing':[],'LL':[]}
+        }
         for node in self.route_tree.timeable_nodes:
-            node_timing = timing_store[self.route_tree.non_phased_node_order.index(node),random_indexes].copy()
-            raw_samples_store['Timing'][node] = node_timing
-        raw_samples_store['Mult'] = mult_store[random_indexes,:].copy()
-        raw_samples_store['WGD_Timing'] = wgd_timing_store[random_indexes].copy()
-        raw_samples_store['LL'] = ll_store[random_indexes].copy()
+            raw_samples_store['Timing'][node] = timing_store[
+                node_positions[node], random_indexes
+            ].copy()
         return raw_samples_store
 
     @staticmethod
@@ -815,7 +609,7 @@ class Route:
         if not self._validate_mirror_route(mirror_route):
             raise ValueError('A distinct fitted mirror route is required')
         required_attributes = (
-            'll_store',
+            'log_evidence',
             'node_timing',
             'wgd_timing_store',
             'mult_store',
@@ -835,7 +629,7 @@ class Route:
                 + ', '.join(missing_attributes)
             )
 
-        self.ll_store = mirror_route.ll_store
+        self.log_evidence = mirror_route.log_evidence
         self.node_timing = self._transform_mirror_timing_store(
             mirror_route.node_timing,
             mirror_route,
@@ -874,7 +668,7 @@ class Route:
             ).copy(),
             'LL': source_raw_samples['LL'],
         }
-    
+
     def run_sampling(
         self,
         mult_probabilities,
@@ -882,37 +676,34 @@ class Route:
         wgd_timing_distribution,
         subclone_fraction_prior=DEFAULT_SUBCLONE_FRACTION_PRIOR,
         mirror_route=None,
+        proposal_geometry=None,
+        clone_share=None,
+        shared_geometry_time=0.0,
     ):
-
-        run_time = time.perf_counter()
+        run_started = time.perf_counter()
         self.unphased_mirror_source = None
 
         subclone_fraction_prior = validate_subclone_fraction_prior(
             subclone_fraction_prior
         )
         n_subclones = (
-            0
-            if subclone_table is None
-            else len(subclone_table.index)
+            0 if subclone_table is None else len(subclone_table.index)
         )
         if (
             not self._contains_phased_mutations(mult_probabilities)
             and mirror_route is not None
             and mirror_route is not self
-            and mirror_route.ll_store is not None
+            and mirror_route.log_evidence is not None
         ):
-            self._reuse_fitted_unphased_mirror(
-                mirror_route,
-                n_subclones,
+            self._reuse_fitted_unphased_mirror(mirror_route, n_subclones)
+            self.run_time = (
+                time.perf_counter() - run_started + shared_geometry_time
             )
-            self.run_time = time.perf_counter() - run_time
-            return
+            return clone_share
 
         alpha = None
         if n_subclones > 0:
-            sample_clone_fractions = get_sample_clone_fractions(
-                subclone_table
-            )
+            sample_clone_fractions = get_sample_clone_fractions(subclone_table)
             subclonal_correction_array = None
             if subclone_fraction_prior == 'adjusted':
                 subclonal_correction_array = (
@@ -926,30 +717,58 @@ class Route:
                 subclone_fraction_prior,
             )
 
-        mult_store,timing_store,wgd_timing_store,density = self.get_mult_store(
+        if proposal_geometry is None:
+            proposal_geometry = self.run_geometry_sampling(
+                wgd_timing_distribution
+            )
+        if n_subclones > 0 and clone_share is None:
+            clone_share = self.simulate_clone_share(
+                alpha,
+                proposal_geometry.mult_store.shape[0],
+            )
+        mult_store = self.materialize_mult_store(
+            proposal_geometry,
             alpha,
             n_subclones,
-            wgd_timing_distribution,
-            mirror_route=mirror_route,
+            clone_share=clone_share,
         )
+        timing_store = proposal_geometry.timing_store
+        wgd_timing_store = proposal_geometry.wgd_timing_store
 
         ll_store = mult_probabilities.evaluate_likelihood_array(mult_store)
-        self.raw_samples = self.get_raw_samples_store(mult_store,timing_store,wgd_timing_store,ll_store)
-        
-        
-        weights = np.exp(ll_store-np.max(ll_store))
-        node_timing,wgd_timing_store,mult_store= self.get_weighted_arrays(timing_store,wgd_timing_store,mult_store,weights)
-        
-        self.n_events_store = self.get_n_events_estimate(node_timing,wgd_timing_store)
+        if ll_store.size == 0:
+            raise ValueError('A route fit must contain at least one proposal')
+        self.log_evidence = logsumexp(ll_store) - np.log(ll_store.size)
+        self.raw_samples = self.get_raw_samples_store(
+            mult_store,
+            timing_store,
+            wgd_timing_store,
+            ll_store,
+        )
 
-        #self.get_n_events_estimate_full(node_timing,wgd_timing_store)
-        self.ll_store = ll_store
+        weights = np.exp(ll_store - np.max(ll_store))
+        node_timing, wgd_timing_store, mult_store = (
+            self.get_weighted_arrays(
+                timing_store,
+                wgd_timing_store,
+                mult_store,
+                weights,
+            )
+        )
+        self.n_events_store = self.get_n_events_estimate(
+            node_timing,
+            wgd_timing_store,
+        )
+
         self.node_timing = node_timing
-        self.wgd_timing_store = np.array(wgd_timing_store)
+        self.wgd_timing_store = np.asarray(wgd_timing_store)
         self.mult_store = mult_store
-        self.run_time = time.perf_counter()-run_time
-        self.density = density[0]
-        self.density_high = density[1]
+        self.run_time = (
+            time.perf_counter() - run_started + shared_geometry_time
+        )
+        self.density = proposal_geometry.density[0]
+        self.density_high = proposal_geometry.density[1]
+        return clone_share
 
 
 class RouteClassifier:
@@ -959,27 +778,38 @@ class RouteClassifier:
         minor_cn,
         wgd_status,
         wgd_trees_status,
-        mult_store_dir,
         *,
         subclone_fraction_prior=DEFAULT_SUBCLONE_FRACTION_PRIOR,
-        segment_cache_identity=None,
         unordered_balanced_route_prior=DEFAULT_UNORDERED_BALANCED_ROUTE_PRIOR,
+        route_trees=None,
     ):
         self.major_cn = major_cn
         self.minor_cn = minor_cn
         self.wgd_status = wgd_status
-        self.mult_store_dir = mult_store_dir
         self.subclone_fraction_prior = validate_subclone_fraction_prior(
             subclone_fraction_prior
         )
-        self.segment_cache_identity = segment_cache_identity
         self.unordered_balanced_route_prior = (
             validate_unordered_balanced_route_prior(
                 unordered_balanced_route_prior
             )
         )
-        self.cache_namespace = None
-        self.routes = self.generate_routes(wgd_trees_status)
+        if route_trees is None:
+            route_trees = self.generate_route_trees(wgd_trees_status)
+        for route_tree in route_trees.values():
+            if (
+                route_tree.major_cn != self.major_cn
+                or route_tree.minor_cn != self.minor_cn
+                or route_tree.wgd_status != self.wgd_status
+            ):
+                raise ValueError(
+                    'Shared route trees must match the classifier copy-number '
+                    'state and WGD status'
+                )
+        self.routes = {
+            route_id: Route(route_id, route_tree)
+            for route_id, route_tree in route_trees.items()
+        }
 
         self.route_probabilities = {}
 
@@ -991,21 +821,29 @@ class RouteClassifier:
             best_timing.append(best_route.get_node_timing(node))
         return np.array(best_timing)
     
-    def generate_routes(self,wgd_trees_status):
-        possible_routes = {}
-        possible_trees = treetools.get_nx_trees(self.major_cn,self.minor_cn,self.wgd_status,wgd_trees_status)
-        for tree_id,tree in possible_trees.items():
-            route = Route(
-                tree_id,
+    def generate_route_trees(self, wgd_trees_status):
+        possible_trees = treetools.get_nx_trees(
+            self.major_cn,
+            self.minor_cn,
+            self.wgd_status,
+            wgd_trees_status,
+        )
+        route_trees = {
+            tree_id: RouteTree(
                 tree,
                 self.major_cn,
                 self.minor_cn,
                 self.wgd_status,
-                self.mult_store_dir,
-                self.cache_namespace,
             )
-            possible_routes[tree_id] = route
-        return possible_routes
+            for tree_id, tree in possible_trees.items()
+        }
+        for route_tree in route_trees.values():
+            route_tree.mirror_route_id = None
+            if self.major_cn == self.minor_cn and self.minor_cn > 0:
+                route_tree.mirror_route_id = treetools.get_mirror_tree_hash(
+                    route_tree.main_tree
+                )
+        return route_trees
 
     def get_route_prior_weight(self, route):
         """Return the optional unordered-model prior weight for a route."""
@@ -1017,75 +855,31 @@ class RouteClassifier:
             return 1.0
         return 0.5
  
-    def fit_routes(self,mult_probabilities,subclone_table,wgd_timing_distribution):
+    def _prepare_fit(self):
         self.route_probabilities = {}
         for route in self.routes.values():
             route.reset_fit()
 
-        self.cache_subclone_fraction_prior = (
-            get_cache_subclone_fraction_prior(
-                self.subclone_fraction_prior,
-                subclone_table,
-            )
-        )
-        if getattr(self, 'mult_store_dir', None) is not None:
-            self.cache_namespace = get_subclone_fraction_prior_cache_namespace(
-                self.cache_subclone_fraction_prior,
-                self.segment_cache_identity,
-            )
-            for route in self.routes.values():
-                route.cache_namespace = self.cache_namespace
-
-        route_ll_store = []
-        route_ids = list(sorted(self.routes.keys()))
-        for route_id in route_ids:
-            route = self.routes[route_id]
-            mirror_route = None
-            if route.mirror_route_id is not None:
-                if route.mirror_route_id not in self.routes:
-                    raise ValueError(
-                        'Every balanced ordered route must have its mirror in '
-                        'the route classifier'
-                    )
-                mirror_route = self.routes[route.mirror_route_id]
-            route.run_sampling(
-                mult_probabilities,
-                subclone_table,
-                wgd_timing_distribution,
-                self.subclone_fraction_prior,
-                mirror_route=mirror_route,
-            )
-            route_ll_store.append(route.ll_store)
-
-        #helps keep the exponentiation under control
-        max_point = np.max([
-            np.max(route_ll)
-            for route_ll in route_ll_store
+    def _finalize_fit(self):
+        route_ids = sorted(self.routes)
+        log_scores = np.asarray([
+            self.routes[route_id].log_evidence
+            + np.log(self.get_route_prior_weight(self.routes[route_id]))
+            for route_id in route_ids
         ])
-        likelihood_store =[]
-        likelihood_by_ll_store = {}
-        
-        for route_ll in route_ll_store:
-            store_identity = id(route_ll)
-            if store_identity not in likelihood_by_ll_store:
-                route_likelihoods = np.exp(route_ll-max_point)
-                likelihood_by_ll_store[store_identity] = np.average(
-                    route_likelihoods
-                )
-            average_likelihood = likelihood_by_ll_store[store_identity]
-            likelihood_store.append(average_likelihood)
-        
-        likelihood_store = np.asarray(likelihood_store)
-        if self.unordered_balanced_route_prior:
-            route_prior_weights = np.array([
-                self.get_route_prior_weight(self.routes[route_id])
-                for route_id in route_ids
-            ])
-            likelihood_store = likelihood_store * route_prior_weights
-        likelihood_store = likelihood_store / np.sum(likelihood_store)
+        probabilities = np.exp(log_scores - logsumexp(log_scores))
+        self.route_probabilities = dict(zip(route_ids, probabilities))
 
-        for i,route_id in enumerate(route_ids):
-            self.route_probabilities[route_id] = likelihood_store[i]
+    def fit_routes(
+        self,
+        mult_probabilities,
+        subclone_table,
+        wgd_timing_distribution,
+    ):
+        fit_route_classifiers(
+            [(self, mult_probabilities, subclone_table)],
+            wgd_timing_distribution,
+        )
 
     def _get_output_routes(self):
         if len(self.route_probabilities) == 0:
@@ -1319,6 +1113,146 @@ class RouteClassifier:
             nx.set_node_attributes(plotting_tree,node_labels,'Label')
             
             treetools.plot_tree(plotting_tree,plot_title,output_path=route_output_path)
+
+
+def fit_route_classifiers(classifier_jobs, wgd_timing_distribution):
+    """Fit equal-geometry classifiers while retaining one route store at a time.
+
+    Each job is ``(classifier, multiplicity_probabilities, subclone_table)``.
+    Route geometry is generated once per copy-number state, then segment-specific
+    clone fractions and likelihoods are applied independently.
+    """
+    classifier_jobs = list(classifier_jobs)
+    if not classifier_jobs:
+        return
+
+    reference_classifier = classifier_jobs[0][0]
+    reference_state = (
+        reference_classifier.major_cn,
+        reference_classifier.minor_cn,
+        reference_classifier.wgd_status,
+        tuple(sorted(reference_classifier.routes)),
+    )
+    for classifier, _, _ in classifier_jobs:
+        classifier_state = (
+            classifier.major_cn,
+            classifier.minor_cn,
+            classifier.wgd_status,
+            tuple(sorted(classifier.routes)),
+        )
+        if classifier_state != reference_state:
+            raise ValueError(
+                'Shared route geometry requires matching copy-number state, '
+                'WGD status, and route IDs'
+            )
+        classifier._prepare_fit()
+
+    route_ids = reference_state[-1]
+    processed_route_ids = set()
+    n_classifiers = len(classifier_jobs)
+
+    for source_route_id in route_ids:
+        if source_route_id in processed_route_ids:
+            continue
+        source_reference = reference_classifier.routes[source_route_id]
+        mirror_route_id = source_reference.mirror_route_id
+        if (
+            mirror_route_id is not None
+            and mirror_route_id not in reference_classifier.routes
+        ):
+            raise ValueError(
+                'Every balanced ordered route must have its mirror in the '
+                'route classifier'
+            )
+
+        geometry_started = time.perf_counter()
+        source_geometry = source_reference.run_geometry_sampling(
+            wgd_timing_distribution
+        )
+        shared_geometry_time = (
+            time.perf_counter() - geometry_started
+        ) / n_classifiers
+
+        has_distinct_mirror = mirror_route_id not in (None, source_route_id)
+        target_geometry = None
+        target_geometry_time = 0.0
+        if has_distinct_mirror:
+            target_reference = reference_classifier.routes[mirror_route_id]
+            if target_reference.mirror_route_id != source_route_id:
+                raise ValueError(
+                    'Balanced route mirror relationships must be reciprocal'
+                )
+            needs_mirror_geometry = any(
+                Route._contains_phased_mutations(mult_probabilities)
+                for _, mult_probabilities, _ in classifier_jobs
+            )
+            if needs_mirror_geometry:
+                transform_started = time.perf_counter()
+                target_geometry = target_reference.transform_mirror_geometry(
+                    source_reference,
+                    source_geometry,
+                )
+                target_geometry_time = (
+                    time.perf_counter() - transform_started
+                ) / n_classifiers
+
+        for classifier, mult_probabilities, subclone_table in classifier_jobs:
+            source_route = classifier.routes[source_route_id]
+            clone_share = source_route.run_sampling(
+                mult_probabilities,
+                subclone_table,
+                wgd_timing_distribution,
+                classifier.subclone_fraction_prior,
+                proposal_geometry=source_geometry,
+                shared_geometry_time=shared_geometry_time,
+            )
+            if has_distinct_mirror:
+                classifier.routes[mirror_route_id].run_sampling(
+                    mult_probabilities,
+                    subclone_table,
+                    wgd_timing_distribution,
+                    classifier.subclone_fraction_prior,
+                    mirror_route=source_route,
+                    proposal_geometry=target_geometry,
+                    clone_share=clone_share,
+                    shared_geometry_time=target_geometry_time,
+                )
+            del clone_share
+        processed_route_ids.add(source_route_id)
+        if has_distinct_mirror:
+            processed_route_ids.add(mirror_route_id)
+        del source_geometry, target_geometry
+
+    for classifier, _, _ in classifier_jobs:
+        classifier._finalize_fit()
+
+
+def estimate_classifier_output_bytes(route_trees, n_subclones):
+    """Estimate retained numeric posterior bytes for one fitted classifier."""
+    total_bytes = 0
+    for route_tree in route_trees.values():
+        mult_columns = (
+            2 * route_tree.major_cn
+            + route_tree.minor_cn
+            + n_subclones
+        )
+        raw_values = RAW_ROUTE_SAMPLE_COUNT * (
+            len(route_tree.timeable_nodes)
+            + mult_columns
+            + 2  # WGD timing and raw likelihood
+        )
+        conditional_values = ROUTE_CONDITIONAL_SAMPLE_COUNT * (
+            len(route_tree.non_phased_node_order)
+            + mult_columns
+            + 1  # WGD timing
+        )
+        event_values = 3 * 300
+        total_bytes += 8 * (
+            raw_values + conditional_values + event_values
+        )
+    return total_bytes
+
+
 def add_wgd_info_to_route_table(route_table,wgd_info,wgd_status:bool):
     route_table = route_table.copy()
     route_table['WGD_Timing'] = wgd_info['WGD_Timing']
@@ -1478,72 +1412,29 @@ def _get_wgd_timing_model(segment):
     return pseudo_minor_cn, wgd_mult_probabilities
 
 
-def _time_wgd_segment(
-    segment,
-    mult_store_dir,
-    interval_config,
-    subclone_fraction_prior,
-    unordered_balanced_route_prior,
-):
-    segment_cache_identity = get_segment_cache_identity(
-        getattr(segment, 'segment_id', str(segment))
+def _get_wgd_segment_result(segment, classifier, interval_config):
+    wgd_route_table = classifier.get_route_table()
+    wgd_timing_table = classifier.get_timing_table(
+        interval=interval_config.route_gain,
     )
-    subclone_table = getattr(segment, 'subclone_table', None)
-    cache_subclone_fraction_prior = get_cache_subclone_fraction_prior(
-        subclone_fraction_prior,
-        subclone_table,
+    wgd_timing_table = pd.merge(
+        wgd_route_table,
+        wgd_timing_table,
+        on='Route',
+        how='inner',
+        validate='one_to_many',
     )
-    try:
-        pseudo_minor_cn, mult_probabilities = _get_wgd_timing_model(
-            segment
-        )
-        classifier = RouteClassifier(
-            segment.major_cn,
-            pseudo_minor_cn,
-            False,
-            'No_WGD',
-            mult_store_dir,
-            subclone_fraction_prior=subclone_fraction_prior,
-            segment_cache_identity=segment_cache_identity,
-            unordered_balanced_route_prior=unordered_balanced_route_prior,
-        )
+    for key, val in segment.get_info_dict().items():
+        wgd_timing_table[key] = val
 
-        classifier.fit_routes(
-            mult_probabilities,
-            subclone_table,
-            None,
-        )
-
-        wgd_route_table = classifier.get_route_table()
-        wgd_timing_table = classifier.get_timing_table(
-            interval=interval_config.route_gain,
-        )
-        wgd_timing_table = pd.merge(
-            wgd_route_table,
-            wgd_timing_table,
-            on='Route',
-            how='inner',
-            validate='one_to_many',
-        )
-        for key, val in segment.get_info_dict().items():
-            wgd_timing_table[key] = val
-
-        classifier_route = list(classifier.routes.values())[0]
-        segment_timing = classifier_route.get_node_timing(0)
-        return wgd_timing_table, segment_timing
-    finally:
-        if cache_subclone_fraction_prior == 'adjusted':
-            remove_mult_store_cache_namespace(
-                mult_store_dir,
-                cache_subclone_fraction_prior,
-                segment_cache_identity,
-            )
+    classifier_route = list(classifier.routes.values())[0]
+    segment_timing = classifier_route.get_node_timing(0)
+    return wgd_timing_table, segment_timing
 
 
 def time_wgd_major_cn_2(
     sample,
     output_dir,
-    mult_store_dir,
     timing_dict_dir,
     interval_config=DEFAULT_TIMING_INTERVALS,
     subclone_fraction_prior=DEFAULT_SUBCLONE_FRACTION_PRIOR,
@@ -1568,17 +1459,60 @@ def time_wgd_major_cn_2(
  
     segment_ci_store = {}
     segment_width_store = {}
-    
+
+    jobs_by_pseudo_minor_cn = {}
+    for segment in potential_wgd_segments:
+        pseudo_minor_cn, mult_probabilities = _get_wgd_timing_model(segment)
+        state_jobs = jobs_by_pseudo_minor_cn.setdefault(
+            pseudo_minor_cn,
+            {'route_trees': None, 'records': []},
+        )
+        classifier = RouteClassifier(
+            segment.major_cn,
+            pseudo_minor_cn,
+            False,
+            'No_WGD',
+            subclone_fraction_prior=subclone_fraction_prior,
+            unordered_balanced_route_prior=unordered_balanced_route_prior,
+            route_trees=state_jobs['route_trees'],
+        )
+        if state_jobs['route_trees'] is None:
+            state_jobs['route_trees'] = {
+                route_id: route.route_tree
+                for route_id, route in classifier.routes.items()
+            }
+        state_jobs['records'].append((
+            segment,
+            classifier,
+            mult_probabilities,
+            getattr(segment, 'subclone_table', None),
+        ))
+
+    results_by_segment_id = {}
+    for state_jobs in jobs_by_pseudo_minor_cn.values():
+        fit_route_classifiers(
+            [
+                (classifier, mult_probabilities, subclone_table)
+                for (
+                    _,
+                    classifier,
+                    mult_probabilities,
+                    subclone_table,
+                ) in state_jobs['records']
+            ],
+            None,
+        )
+        for segment, classifier, _, _ in state_jobs['records']:
+            results_by_segment_id[id(segment)] = _get_wgd_segment_result(
+                segment,
+                classifier,
+                interval_config,
+            )
+
     wgd_timing_tables = []
     for segment in potential_wgd_segments:
         logger.info('Timing WGD segment: %s', segment)
-        wgd_timing_table, segment_timing = _time_wgd_segment(
-            segment,
-            mult_store_dir,
-            interval_config,
-            subclone_fraction_prior,
-            unordered_balanced_route_prior,
-        )
+        wgd_timing_table, segment_timing = results_by_segment_id[id(segment)]
         wgd_timing_tables.append(wgd_timing_table)
 
         if not np.isfinite(segment_timing).all():
@@ -1623,7 +1557,6 @@ def time_wgd_major_cn_2(
         overlapping_segments,
         sample.subclone_table,
         sample.purity,
-        mult_store_dir,
         timing_dict_dir,
         subclone_fraction_prior=subclone_fraction_prior,
         unordered_balanced_route_prior=unordered_balanced_route_prior,
@@ -1637,13 +1570,11 @@ def _time_combined_wgd_segment(
     minor_cn,
     mutation_table,
     combined_width,
-    source_segment_ids,
     subclone_table,
     sample_purity,
     apply_reads_correction,
     min_mutation_alt_count,
     coverage_vaf_quantile,
-    mult_store_dir,
     timing_dict_dir,
     subclone_fraction_prior,
     unordered_balanced_route_prior,
@@ -1663,48 +1594,28 @@ def _time_combined_wgd_segment(
         min_mutation_alt_count=min_mutation_alt_count,
         coverage_vaf_quantile=coverage_vaf_quantile,
     )
-    segment_cache_identity = get_pooled_wgd_cache_identity(
-        minor_cn,
-        source_segment_ids,
+    pseudo_minor_cn, mult_probabilities = _get_wgd_timing_model(new_seg)
+    classifier = RouteClassifier(
+        new_seg.major_cn,
+        pseudo_minor_cn,
+        False,
+        'No_WGD',
+        subclone_fraction_prior=subclone_fraction_prior,
+        unordered_balanced_route_prior=unordered_balanced_route_prior,
     )
-    cache_subclone_fraction_prior = get_cache_subclone_fraction_prior(
-        subclone_fraction_prior,
+    classifier.fit_routes(
+        mult_probabilities,
         new_seg.subclone_table,
+        None,
     )
-    try:
-        pseudo_minor_cn, mult_probabilities = _get_wgd_timing_model(
-            new_seg
-        )
-        classifier = RouteClassifier(
-            new_seg.major_cn,
-            pseudo_minor_cn,
-            False,
-            'No_WGD',
-            mult_store_dir,
-            subclone_fraction_prior=subclone_fraction_prior,
-            segment_cache_identity=segment_cache_identity,
-            unordered_balanced_route_prior=unordered_balanced_route_prior,
-        )
-        classifier.fit_routes(
-            mult_probabilities,
-            new_seg.subclone_table,
-            None,
-        )
 
-        timing_dict = classifier.get_timing_dict()
-        write_timing_archive(
-            timing_dict,
-            timing_dict_dir,
-            f'WGD_minor_cn_{minor_cn}',
-        )
-        return classifier.get_best_timing()[0]
-    finally:
-        if cache_subclone_fraction_prior == 'adjusted':
-            remove_mult_store_cache_namespace(
-                mult_store_dir,
-                cache_subclone_fraction_prior,
-                segment_cache_identity,
-            )
+    timing_dict = classifier.get_timing_dict()
+    write_timing_archive(
+        timing_dict,
+        timing_dict_dir,
+        f'WGD_minor_cn_{minor_cn}',
+    )
+    return classifier.get_best_timing()[0]
 
 
 
@@ -1712,7 +1623,6 @@ def get_combined_segment_timing_cn_2(
     overlapping_segments,
     subclone_table,
     sample_purity,
-    mult_store_dir,
     timing_dict_dir,
     subclone_fraction_prior=DEFAULT_SUBCLONE_FRACTION_PRIOR,
     unordered_balanced_route_prior=DEFAULT_UNORDERED_BALANCED_ROUTE_PRIOR,
@@ -1726,7 +1636,6 @@ def get_combined_segment_timing_cn_2(
 
     mutation_tables = []
     combined_width_by_minor_cn = {}
-    source_segment_ids_by_minor_cn = {}
     min_mutation_alt_counts = {
         segment.min_mutation_alt_count
         for segment in overlapping_segments
@@ -1761,10 +1670,6 @@ def get_combined_segment_timing_cn_2(
             combined_width_by_minor_cn.get(segment.minor_cn, 0)
             + int(segment.width)
         )
-        source_segment_ids_by_minor_cn.setdefault(
-            segment.minor_cn,
-            [],
-        ).append(getattr(segment, 'segment_id', str(segment)))
     combined_mutation_table = pd.concat(mutation_tables)
     assert len(combined_mutation_table['Major_CN'].unique()) ==1
     segment_timing_store = []
@@ -1775,13 +1680,11 @@ def get_combined_segment_timing_cn_2(
                 minor_cn,
                 minor_cn_mutation_table,
                 combined_width_by_minor_cn[minor_cn],
-                source_segment_ids_by_minor_cn[minor_cn],
                 subclone_table,
                 sample_purity,
                 apply_reads_correction,
                 min_mutation_alt_count,
                 coverage_vaf_quantile,
-                mult_store_dir,
                 timing_dict_dir,
                 subclone_fraction_prior,
                 unordered_balanced_route_prior,
@@ -1880,100 +1783,64 @@ def write_wgd_calling_info(
         output_file.write('\n')
 
 
-def _process_segment(
+def _write_segment_results(
     segment,
-    wgd_timing_distribution,
+    classifier,
     output_dir,
-    mult_store_dir,
     timing_dict_dir,
     sample_id,
     wgd_status,
     plot_trees,
     wgd_info,
     interval_config,
-    subclone_fraction_prior,
-    unordered_balanced_route_prior,
     route_table_path,
     timing_table_path,
 ):
-    segment_cache_identity = get_segment_cache_identity(
-        getattr(segment, 'segment_id', str(segment))
+    segment_route_table = classifier.get_route_table()
+    segment_timing_table = classifier.get_timing_table(
+        interval=interval_config.route_gain,
     )
-    subclone_table = getattr(segment, 'subclone_table', None)
-    cache_subclone_fraction_prior = get_cache_subclone_fraction_prior(
-        subclone_fraction_prior,
-        subclone_table,
+    timing_dict = classifier.get_timing_dict()
+    write_timing_archive(
+        timing_dict,
+        timing_dict_dir,
+        segment.segment_id,
     )
-    try:
-        classifier = RouteClassifier(
-            segment.major_cn,
-            segment.minor_cn,
-            wgd_status,
-            'Default',
-            mult_store_dir,
-            subclone_fraction_prior=subclone_fraction_prior,
-            segment_cache_identity=segment_cache_identity,
-            unordered_balanced_route_prior=unordered_balanced_route_prior,
-        )
-        classifier.fit_routes(
-            segment.multiplicity_probabilities,
-            subclone_table,
-            wgd_timing_distribution,
-        )
 
-        segment_route_table = classifier.get_route_table()
-        segment_timing_table = classifier.get_timing_table(
-            interval=interval_config.route_gain,
-        )
-        timing_dict = classifier.get_timing_dict()
-        write_timing_archive(
-            timing_dict,
-            timing_dict_dir,
-            segment.segment_id,
-        )
+    for key, val in segment.get_info_dict().items():
+        segment_route_table[key] = val
+    segment_route_table = add_wgd_info_to_route_table(
+        segment_route_table,
+        wgd_info,
+        wgd_status,
+    )
+    segment_route_table['Sample_ID'] = sample_id
+    segment_route_table = posteriortablegen.add_penalized_probability(
+        segment_route_table
+    )
 
-        for key, val in segment.get_info_dict().items():
-            segment_route_table[key] = val
-        segment_route_table = add_wgd_info_to_route_table(
-            segment_route_table,
+    segment_timing_table['Segment_ID'] = segment.segment_id
+    segment_timing_table['Sample_ID'] = sample_id
+
+    write_route_table(segment_route_table, route_table_path)
+    write_gain_timing_table(segment_timing_table, timing_table_path)
+
+    if plot_trees:
+        plot_output_dir = (
+            f'{output_dir}/{sample_id}_tree_plots/{segment.segment_id}'
+        )
+        classifier.plot_trees(
+            plot_output_dir,
+            str(segment),
             wgd_info,
-            wgd_status,
+            gain_interval=interval_config.tree_gain,
         )
-        segment_route_table['Sample_ID'] = sample_id
-        segment_route_table = posteriortablegen.add_penalized_probability(
-            segment_route_table
-        )
-
-        segment_timing_table['Segment_ID'] = segment.segment_id
-        segment_timing_table['Sample_ID'] = sample_id
-
-        write_route_table(segment_route_table, route_table_path)
-        write_gain_timing_table(segment_timing_table, timing_table_path)
-
-        if plot_trees:
-            plot_output_dir = (
-                f'{output_dir}/{sample_id}_tree_plots/{segment.segment_id}'
-            )
-            classifier.plot_trees(
-                plot_output_dir,
-                str(segment),
-                wgd_info,
-                gain_interval=interval_config.tree_gain,
-            )
-    finally:
-        if cache_subclone_fraction_prior == 'adjusted':
-            remove_mult_store_cache_namespace(
-                mult_store_dir,
-                cache_subclone_fraction_prior,
-                segment_cache_identity,
-            )
 
 
 def process_segments(
     segments,
     wgd_timing_distribution,
     output_dir,
-    mult_store_dir,
     timing_dict_dir,
     sample_id,
     wgd_status,
@@ -1996,40 +1863,101 @@ def process_segments(
     _initialize_table(route_table_path, ROUTE_TABLE_COLUMNS)
     _initialize_table(timing_table_path, GAIN_TIMING_TABLE_COLUMNS)
 
-    for cn_state in segments:
-        route_ids = tuple(treetools.get_nx_trees(
+    for cn_state, state_segments in segments.items():
+        state_segments = list(state_segments)
+        if not state_segments:
+            continue
+
+        prototype_classifier = RouteClassifier(
             cn_state[0],
             cn_state[1],
             wgd_status,
             'Default',
-        ))
-        try:
-            for segment in segments[cn_state]:
-                logger.info('Timing gained segment: %s', segment)
-                _process_segment(
+            subclone_fraction_prior=subclone_fraction_prior,
+            unordered_balanced_route_prior=unordered_balanced_route_prior,
+        )
+        route_trees = {
+            route_id: route.route_tree
+            for route_id, route in prototype_classifier.routes.items()
+        }
+        max_subclones = max(
+            0
+            if getattr(segment, 'subclone_table', None) is None
+            else len(segment.subclone_table.index)
+            for segment in state_segments
+        )
+        estimated_output_bytes = estimate_classifier_output_bytes(
+            route_trees,
+            max_subclones,
+        )
+        batch_size = max(
+            1,
+            SHARED_FIT_OUTPUT_MEMORY_BUDGET
+            // max(estimated_output_bytes, 1),
+        )
+        batch_size = min(len(state_segments), batch_size)
+        logger.info(
+            'Sharing route geometry for copy-number state %s across batches '
+            'of at most %d segments',
+            cn_state,
+            batch_size,
+        )
+
+        prototype_available = True
+        for batch_start in range(0, len(state_segments), batch_size):
+            segment_batch = state_segments[
+                batch_start:batch_start + batch_size
+            ]
+            classifier_jobs = []
+            for segment in segment_batch:
+                logger.info('Preparing gained segment: %s', segment)
+                if prototype_available:
+                    classifier = prototype_classifier
+                    prototype_classifier = None
+                    prototype_available = False
+                else:
+                    classifier = RouteClassifier(
+                        cn_state[0],
+                        cn_state[1],
+                        wgd_status,
+                        'Default',
+                        subclone_fraction_prior=subclone_fraction_prior,
+                        unordered_balanced_route_prior=(
+                            unordered_balanced_route_prior
+                        ),
+                        route_trees=route_trees,
+                    )
+                classifier_jobs.append((
+                    classifier,
+                    segment.multiplicity_probabilities,
+                    getattr(segment, 'subclone_table', None),
+                ))
+
+            fit_route_classifiers(
+                classifier_jobs,
+                wgd_timing_distribution,
+            )
+
+            for segment, (classifier, _, _) in zip(
+                segment_batch,
+                classifier_jobs,
+            ):
+                logger.info('Writing gained segment: %s', segment)
+                _write_segment_results(
                     segment,
-                    wgd_timing_distribution,
+                    classifier,
                     output_dir,
-                    mult_store_dir,
                     timing_dict_dir,
                     sample_id,
                     wgd_status,
                     plot_trees,
                     wgd_info,
                     interval_config,
-                    subclone_fraction_prior,
-                    unordered_balanced_route_prior,
                     route_table_path,
                     timing_table_path,
                 )
-        finally:
-            remove_mult_store_route_caches(
-                mult_store_dir,
-                'supplied',
-                route_ids,
-                wgd_status,
-                wgd_timing_distribution,
-            )
+            del classifier_jobs
+            del classifier
 
 def _validate_wgd_count(wgd_count):
     if wgd_count is None:
@@ -2054,11 +1982,10 @@ def _validate_min_wgd_overlap(min_wgd_overlap):
     return float(min_wgd_overlap)
 
 
-def _process_sample_with_mult_store(
+def _run_sample(
     sample,
     output_dir,
     timing_dict_dir,
-    mult_store_dir,
     plot_trees,
     min_wgd_overlap,
     wgd_count,
@@ -2088,7 +2015,6 @@ def _process_sample_with_mult_store(
             ) = time_wgd_major_cn_2(
                 sample,
                 output_dir,
-                mult_store_dir,
                 timing_dict_dir,
                 interval_config=interval_config,
                 subclone_fraction_prior=subclone_fraction_prior,
@@ -2116,7 +2042,6 @@ def _process_sample_with_mult_store(
         ) = time_wgd_major_cn_2(
             sample,
             output_dir,
-            mult_store_dir,
             timing_dict_dir,
             interval_config=interval_config,
             subclone_fraction_prior=subclone_fraction_prior,
@@ -2162,7 +2087,6 @@ def _process_sample_with_mult_store(
         timeable_complex_segments,
         wgd_timing_distribution,
         output_dir,
-        mult_store_dir,
         timing_dict_dir,
         sample.sample_id,
         wgd_status,
@@ -2261,22 +2185,15 @@ def process_sample(
         )
     _write_tsv(sample_subclone_table, sample_subclone_table_path)
 
-    mult_store_dir = output_dir/f"{sample.sample_id}_mult_stores_temp"
-
-    os.makedirs(mult_store_dir,exist_ok=True)
-    try:
-        _process_sample_with_mult_store(
-            sample,
-            output_dir,
-            timing_dict_dir,
-            mult_store_dir,
-            plot_trees,
-            min_wgd_overlap,
-            wgd_count,
-            interval_config,
-            subclone_fraction_prior,
-            unordered_balanced_route_prior,
-            major_cn_mode,
-        )
-    finally:
-        _remove_cache_directory_preserving_error(mult_store_dir)
+    _run_sample(
+        sample,
+        output_dir,
+        timing_dict_dir,
+        plot_trees,
+        min_wgd_overlap,
+        wgd_count,
+        interval_config,
+        subclone_fraction_prior,
+        unordered_balanced_route_prior,
+        major_cn_mode,
+    )

@@ -9,24 +9,24 @@ MAX_INITIAL_POSITION_ATTEMPTS = 50_000
 MIN_INITIAL_POSITION_DISTANCE = 1e-2
 
 
-@njit
+@njit(cache=True)
 def get_random_direction(dimension):
     x = np.random.normal(0,1,size=dimension)
     return x/np.linalg.norm(x)
 
 #enforcing non-negativity limits
-@njit
+@njit(cache=True)
 def get_direction_limit(direction,current_position):
     negative_direction = direction[direction<-1e-10]
     negative_position = current_position[direction<-1e-10]
     lower_limit = -np.max(np.divide(negative_position,negative_direction))
     return lower_limit
-@njit
+@njit(cache=True)
 def get_direction_range(direction,current_position):
     positive_limit = get_direction_limit(direction,current_position)
     negative_limit = -get_direction_limit(-direction,current_position)
     return negative_limit,positive_limit
-@njit
+@njit(cache=True)
 def get_new_position(current_position,null_dimension,A_null):
     direction_components = get_random_direction(null_dimension)
     direction = np.sum(np.multiply(direction_components,A_null),axis=1)
@@ -40,7 +40,7 @@ def get_new_position(current_position,null_dimension,A_null):
     new_position = np.clip(new_position,0.0,1.0)
     return new_position
 
-@njit
+@njit(cache=True)
 def run_chain(current_position,null_dimension,A_null,timing_state,burn_in=25,skips=5,n_samples=100):
     n_samples_actual = skips*n_samples+burn_in
     hit_and_run_store = np.zeros((n_samples_actual,timing_state.size))
@@ -52,7 +52,7 @@ def run_chain(current_position,null_dimension,A_null,timing_state,burn_in=25,ski
         current_position = new_position
     return hit_and_run_store[burn_in::skips]
 
-@njit()
+@njit(cache=True)
 def _hit_and_run(A_null,timing_state,n_samples=500,burn_in=25,skips=5):
  
     if A_null.shape[1] ==0:

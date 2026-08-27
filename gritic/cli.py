@@ -96,13 +96,13 @@ def interval_width(value):
 
 
 def _add_interval_arguments(
-    parser,
+    argument_group,
     option_name,
     destination,
     default_interval,
     description,
 ):
-    parser.add_argument(
+    argument_group.add_argument(
         f'--{option_name}-interval-width',
         dest=f'{destination}_interval_width',
         type=interval_width,
@@ -114,7 +114,7 @@ def _add_interval_arguments(
             f'(default: {default_interval.width:g}).'
         ),
     )
-    parser.add_argument(
+    argument_group.add_argument(
         f'--{option_name}-interval-method',
         dest=f'{destination}_interval_method',
         choices=intervaltools.INTERVAL_METHODS,
@@ -169,7 +169,23 @@ def build_parser():
             'subclone tables.'
         ),
     )
-    parser.add_argument(
+    required_arguments = parser.add_argument_group('Required run arguments')
+    genome_and_input_arguments = parser.add_argument_group(
+        'Genome and input handling'
+    )
+    mutation_arguments = parser.add_argument_group(
+        'Mutation filtering and detection correction'
+    )
+    subclone_arguments = parser.add_argument_group('Subclone handling')
+    inference_arguments = parser.add_argument_group(
+        'Inference model and WGD calling'
+    )
+    reported_interval_arguments = parser.add_argument_group(
+        'Reported timing intervals'
+    )
+    tree_plot_arguments = parser.add_argument_group('Tree plots')
+
+    required_arguments.add_argument(
         '--mutation-table',
         required=True,
         help=(
@@ -184,7 +200,7 @@ def build_parser():
             'GRITIC emits a sample-unique GRITIC_Mutation_ID.'
         ),
     )
-    parser.add_argument(
+    required_arguments.add_argument(
         '--copy-number-table',
         required=True,
         help=(
@@ -194,7 +210,7 @@ def build_parser():
             'or equal to Minor_CN.'
         ),
     )
-    parser.add_argument(
+    required_arguments.add_argument(
         '--purity',
         type=sampletools.validate_purity,
         required=True,
@@ -203,7 +219,7 @@ def build_parser():
             'caller; must be greater than 0 and at most 1.'
         ),
     )
-    parser.add_argument(
+    required_arguments.add_argument(
         '--sample-id',
         required=True,
         type=sampletools.validate_sample_id,
@@ -212,7 +228,7 @@ def build_parser():
             'output directory and filename prefixes.'
         ),
     )
-    parser.add_argument(
+    required_arguments.add_argument(
         '--output',
         required=True,
         help=(
@@ -220,26 +236,28 @@ def build_parser():
             'OUTPUT/SAMPLE_ID.'
         ),
     )
-    parser.add_argument(
-        '--drop-unmatched-snvs',
-        action='store_true',
+    genome_and_input_arguments.add_argument(
+        '--autosome-count',
+        type=positive_integer,
+        default=sampletools.DEFAULT_AUTOSOME_COUNT,
         help=(
-            'Drop mutations that cannot be matched to a copy-number segment, '
-            'whether matching by Segment_ID or Position, and emit one warning '
-            'with the number dropped. By default, unmatched mutations raise '
-            'an error.'
+            'Number of numbered autosomes in the organism. This defines the '
+            'accepted numbered chromosome labels and the chromosomes '
+            'eligible for WGD inference (default: 22).'
         ),
     )
-    parser.add_argument(
-        '--drop-unrecognized-phasing',
-        action='store_true',
+    genome_and_input_arguments.add_argument(
+        '--sample-sex',
+        default=None,
+        choices=('XX', 'XY', 'ZZ', 'ZW'),
         help=(
-            'Drop mutations whose non-missing Phasing value is not major or '
-            'minor, and warn with the number dropped. By default, '
-            'unrecognized phasing values raise an error.'
+            'Override the sample sex with XX, XY, ZZ, or ZW. If omitted, '
+            'GRITIC infers the sex-chromosome system and karyotype from X, Y, '
+            'Z, and W copy-number segments. XX accepts X, XY accepts X/Y, ZZ '
+            'accepts Z, and ZW accepts Z/W.'
         ),
     )
-    parser.add_argument(
+    genome_and_input_arguments.add_argument(
         '--drop-unmatched-chromosomes',
         action='store_true',
         help=(
@@ -249,7 +267,26 @@ def build_parser():
             'error.'
         ),
     )
-    parser.add_argument(
+    genome_and_input_arguments.add_argument(
+        '--drop-unmatched-snvs',
+        action='store_true',
+        help=(
+            'Drop mutations that cannot be matched to a copy-number segment, '
+            'whether matching by Segment_ID or Position, and emit one warning '
+            'with the number dropped. By default, unmatched mutations raise '
+            'an error.'
+        ),
+    )
+    genome_and_input_arguments.add_argument(
+        '--drop-unrecognized-phasing',
+        action='store_true',
+        help=(
+            'Drop mutations whose non-missing Phasing value is not major or '
+            'minor, and warn with the number dropped. By default, '
+            'unrecognized phasing values raise an error.'
+        ),
+    )
+    genome_and_input_arguments.add_argument(
         '--merge-adjacent-segments',
         action='store_true',
         help=(
@@ -257,7 +294,7 @@ def build_parser():
             'Minor_CN. Disabled by default.'
         ),
     )
-    parser.add_argument(
+    mutation_arguments.add_argument(
         '--min-mutation-alt-count',
         type=nonnegative_integer,
         default=sampletools.DEFAULT_MIN_MUTATION_ALT_COUNT,
@@ -266,7 +303,7 @@ def build_parser():
             '(default: 3).'
         ),
     )
-    parser.add_argument(
+    mutation_arguments.add_argument(
         '--min-mutation-coverage',
         type=nonnegative_integer,
         default=sampletools.DEFAULT_MIN_MUTATION_COVERAGE,
@@ -275,7 +312,7 @@ def build_parser():
             'mutation (default: 10).'
         ),
     )
-    parser.add_argument(
+    mutation_arguments.add_argument(
         '--coverage-vaf-quantile',
         type=quantile,
         default=sampletools.DEFAULT_COVERAGE_VAF_QUANTILE,
@@ -293,59 +330,7 @@ def build_parser():
             'prior modes and the prior adjustment only in adjusted mode.'
         ),
     )
-    parser.add_argument(
-        '--min-subclone-ccf',
-        type=minimum_subclone_ccf,
-        default=sampletools.DEFAULT_MIN_SUBCLONE_CCF,
-        help=(
-            'Minimum Subclone_CCF retained as a subclone, inclusive; it must '
-            'not exceed --max-subclone-ccf (default: 0.01).'
-        ),
-    )
-    parser.add_argument(
-        '--max-subclone-ccf',
-        type=unit_interval_number,
-        default=sampletools.DEFAULT_MAX_SUBCLONE_CCF,
-        help=(
-            'Maximum Subclone_CCF retained as a subclone, inclusive; it must '
-            'not be below --min-subclone-ccf (default: 0.9).'
-        ),
-    )
-    parser.add_argument(
-        '--min-subclone-fraction',
-        type=unit_interval_number,
-        default=sampletools.DEFAULT_MIN_SUBCLONE_FRACTION,
-        help=(
-            'Minimum normalized share of subclonal mutations required to '
-            'retain a subclone; retention is strictly above this threshold '
-            '(default: 0.1).'
-        ),
-    )
-    parser.add_argument(
-        '--clip-subclone-ccf',
-        action='store_true',
-        help=(
-            'Clip finite Subclone_CCF values outside [0, 1] to the nearest '
-            'boundary before validation and filtering. Non-numeric and '
-            'non-finite values remain errors. Disabled by default.'
-        ),
-    )
-    parser.add_argument(
-        '--wgd-count',
-        type=int,
-        choices=(0, 1),
-        default=None,
-        help=(
-            'Override the inferred whole-genome-duplication count with 0 or '
-            '1. By default, GRITIC infers the count.'
-        ),
-    )
-    parser.add_argument(
-        '--plot-trees',
-        action='store_true',
-        help='Plot copy number trees. Default is False.',
-    )
-    parser.add_argument(
+    subclone_arguments.add_argument(
         '--subclone-table',
         default=None,
         help=(
@@ -355,7 +340,44 @@ def build_parser():
             'to the subclone.'
         ),
     )
-    parser.add_argument(
+    subclone_arguments.add_argument(
+        '--clip-subclone-ccf',
+        action='store_true',
+        help=(
+            'Clip finite Subclone_CCF values outside [0, 1] to the nearest '
+            'boundary before validation and filtering. Non-numeric and '
+            'non-finite values remain errors. Disabled by default.'
+        ),
+    )
+    subclone_arguments.add_argument(
+        '--min-subclone-ccf',
+        type=minimum_subclone_ccf,
+        default=sampletools.DEFAULT_MIN_SUBCLONE_CCF,
+        help=(
+            'Minimum Subclone_CCF retained as a subclone, inclusive; it must '
+            'not exceed --max-subclone-ccf (default: 0.01).'
+        ),
+    )
+    subclone_arguments.add_argument(
+        '--max-subclone-ccf',
+        type=unit_interval_number,
+        default=sampletools.DEFAULT_MAX_SUBCLONE_CCF,
+        help=(
+            'Maximum Subclone_CCF retained as a subclone, inclusive; it must '
+            'not be below --min-subclone-ccf (default: 0.9).'
+        ),
+    )
+    subclone_arguments.add_argument(
+        '--min-subclone-fraction',
+        type=unit_interval_number,
+        default=sampletools.DEFAULT_MIN_SUBCLONE_FRACTION,
+        help=(
+            'Minimum normalized share of subclonal mutations required to '
+            'retain a subclone; retention is strictly above this threshold '
+            '(default: 0.1).'
+        ),
+    )
+    subclone_arguments.add_argument(
         '--subclone-fraction-prior',
         choices=gritictimer.SUBCLONE_FRACTION_PRIOR_MODES,
         default=gritictimer.DEFAULT_SUBCLONE_FRACTION_PRIOR,
@@ -370,7 +392,26 @@ def build_parser():
             'remains active per segment in both modes.'
         ),
     )
-    parser.add_argument(
+
+    inference_arguments.add_argument(
+        '--wgd-count',
+        type=int,
+        choices=(0, 1),
+        default=None,
+        help=(
+            'Override the inferred whole-genome-duplication count with 0 or '
+            '1. By default, GRITIC infers the count.'
+        ),
+    )
+    defaults = intervaltools.DEFAULT_TIMING_INTERVALS
+    _add_interval_arguments(
+        inference_arguments,
+        'wgd-overlap',
+        'wgd_overlap',
+        defaults.wgd_overlap,
+        'Hidden WGD-candidate overlap; changing this can change WGD inference',
+    )
+    inference_arguments.add_argument(
         '--unordered-balanced-route-prior',
         action='store_true',
         default=gritictimer.DEFAULT_UNORDERED_BALANCED_ROUTE_PRIOR,
@@ -383,62 +424,40 @@ def build_parser():
             'Disabled by default.'
         ),
     )
-    parser.add_argument(
-        '--sample-sex',
-        default=None,
-        choices=('XX', 'XY', 'ZZ', 'ZW'),
-        help=(
-            'Override the sample sex with XX, XY, ZZ, or ZW. If omitted, '
-            'GRITIC infers the sex-chromosome system and karyotype from X, Y, '
-            'Z, and W copy-number segments. XX accepts X, XY accepts X/Y, ZZ '
-            'accepts Z, and ZW accepts Z/W.'
-        ),
-    )
-    parser.add_argument(
-        '--autosome-count',
-        type=positive_integer,
-        default=sampletools.DEFAULT_AUTOSOME_COUNT,
-        help=(
-            'Number of numbered autosomes in the organism. This defines the '
-            'accepted numbered chromosome labels and the chromosomes '
-            'eligible for WGD inference (default: 22).'
-        ),
-    )
-    defaults = intervaltools.DEFAULT_TIMING_INTERVALS
+
     _add_interval_arguments(
-        parser,
+        reported_interval_arguments,
         'route-gain',
         'route_gain',
         defaults.route_gain,
         'Route-conditional gain-table and WGD-candidate display',
     )
     _add_interval_arguments(
-        parser,
-        'tree-gain',
-        'tree_gain',
-        defaults.tree_gain,
-        'Blue gain-node tree label',
-    )
-    _add_interval_arguments(
-        parser,
-        'wgd-overlap',
-        'wgd_overlap',
-        defaults.wgd_overlap,
-        'Hidden WGD-candidate overlap; changing this can change WGD inference',
-    )
-    _add_interval_arguments(
-        parser,
+        reported_interval_arguments,
         'wgd-timing',
         'wgd_timing',
         defaults.sample_wgd,
         'Final sample-level WGD timing',
     )
     _add_interval_arguments(
-        parser,
+        reported_interval_arguments,
         'posterior-summary',
         'posterior_summary',
         defaults.posterior_summary,
         'Route-marginalized posterior summary',
+    )
+
+    tree_plot_arguments.add_argument(
+        '--plot-trees',
+        action='store_true',
+        help='Plot copy number trees. Default is False.',
+    )
+    _add_interval_arguments(
+        tree_plot_arguments,
+        'tree-gain',
+        'tree_gain',
+        defaults.tree_gain,
+        'Blue gain-node tree label',
     )
     return parser
 

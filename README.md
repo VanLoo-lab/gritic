@@ -16,12 +16,14 @@ The easiest way to run GRITIC on a single sample is with the ```gritic``` comman
 gritic --help
 ```
 This command has five required arguments.
+
+### Required run arguments
+
 - ```--mutation-table``` A path to the SNV table for the sample.
 - ```--copy-number-table``` A path to the copy number table for the sample.
 - ```--purity``` The estimated cellular purity for the sample. It must be finite, greater than 0, and no greater than 1.
 - ```--sample-id``` Sample ID used as an output-directory component and filename prefix. It must be a cross-platform-safe filename component.
 - ```--output``` The directory for the output, GRITIC will then store all of the output at --output/SAMPLE_ID
-
 
 There are also a number of optional arguments.
 
@@ -29,36 +31,50 @@ All probability-, proportion-, quantile-, and interval-width inputs use the
 unit interval from 0 to 1; parameters whose semantics exclude zero state that
 restriction explicitly.
 
-- ```--subclone-table``` A path to the subclone table for the sample. If not provided it is assumed every SNV is clonal.
-- ```--subclone-fraction-prior {adjusted,supplied}``` Select how the supplied fractions of called/input SNVs assigned to each subclone are used in the mutation-share prior. ```adjusted``` (the default) divides the supplied clonal and subclonal mutation shares by their estimated detection probabilities separately for each copy-number segment and renormalizes them. ```supplied``` uses the fractions directly and reproduces the publication/thesis sample-wide prior. This option does not modify ```Subclone_CCF```, and the likelihood detection correction remains active per segment in both modes.
-- ```--unordered-balanced-route-prior``` Reproduce the former uniform prior over unordered allele-route pairs while retaining the current ordered route model. In a balanced ```N+N``` segment, an ordered route with different Major and Minor component histories receives half the prior weight of a route with identical component histories. Reciprocal orientations remain separate, so together they carry one prior unit. This is disabled by default.
-- ```--wgd-count {0,1}``` Override GRITIC's inferred whole-genome-duplication count. Counts below 0 or above 1 are rejected because GRITIC currently supports at most one WGD. If omitted, GRITIC infers the count.
-- ```--plot-trees``` Plot the route trees for each segment. This is an opt-in switch and is disabled by default.
-- ```--sample-sex``` Override the sample sex with ```XX```, ```XY```, ```ZZ```, or ```ZW```. If omitted, GRITIC infers the sex-chromosome system and karyotype from exact X, Y, Z, and W copy-number chromosome labels.
+### Genome and input handling
+
 - ```--autosome-count``` The number of numbered autosomes in the organism. This defines the accepted numbered chromosome labels and the chromosomes eligible for WGD inference. The default is 22.
+- ```--sample-sex``` Override the sample sex with ```XX```, ```XY```, ```ZZ```, or ```ZW```. If omitted, GRITIC infers the sex-chromosome system and karyotype from exact X, Y, Z, and W copy-number chromosome labels.
 - ```--drop-unmatched-chromosomes``` Drop copy-number and mutation rows whose chromosome is not one of the configured autosomes or present sex chromosomes, with warnings reporting the number of rows dropped. By default, any such chromosome is an error.
 - ```--drop-unmatched-snvs``` Drop mutation rows that cannot be associated with a copy-number segment by either supplied ```Segment_ID``` or genomic ```Position```, with one warning reporting the number dropped. By default, unmatched mutations raise an error.
 - ```--drop-unrecognized-phasing``` Drop mutation rows whose non-missing ```Phasing``` value is not ```major``` or ```minor```, with one warning reporting the number dropped. By default, unrecognized phasing labels raise an error.
 - ```--merge-adjacent-segments``` Merge coordinate-adjacent copy-number segments having identical ```Major_CN``` and ```Minor_CN```. This is disabled by default.
+
+### Mutation filtering and detection correction
+
 - ```--min-mutation-alt-count``` Minimum ```Tumor_Alt_Count``` needed to retain a mutation. The default is 3.
 - ```--min-mutation-coverage``` Minimum ```Tumor_Ref_Count + Tumor_Alt_Count``` needed to retain a mutation. The default is 10.
 - ```--coverage-vaf-quantile``` Observed-SNV VAF quantile used to select mutations for the mean-coverage estimate in the exact Poisson-thinning detection correction. It is expressed on the unit interval and defaults to 0.9, the unit-interval form of the historical 90th-percentile code value. This replaces ```--coverage-vaf-percentile```; the former option and percentage-scaled values are not accepted. This high-VAF coverage heuristic differs from the publication/thesis method, which averages detection power over every SNV's observed depth in the segment. It affects the likelihood correction in both subclone-fraction-prior modes and the prior adjustment only in ```adjusted``` mode.
+
+### Subclone handling
+
+- ```--subclone-table``` A path to the subclone table for the sample. If not provided it is assumed every SNV is clonal.
+- ```--clip-subclone-ccf``` Clip finite ```Subclone_CCF``` values outside the interval from 0 to 1 to the nearest boundary before validation and filtering. This is disabled by default; non-numeric and non-finite values remain errors. With the default CCF filters, values clipped to either boundary are subsequently excluded.
 - ```--min-subclone-ccf``` Minimum ```Subclone_CCF``` retained as a subclone, inclusive. It must be greater than 0 and no greater than ```--max-subclone-ccf```. The default is 0.01.
 - ```--max-subclone-ccf``` Maximum ```Subclone_CCF``` retained as a subclone, inclusive. It must be no lower than ```--min-subclone-ccf```. The default is 0.9.
 - ```--min-subclone-fraction``` A subclone's normalized share of the surviving subclonal mutation fractions must be strictly greater than this threshold. The default is 0.1.
-- ```--clip-subclone-ccf``` Clip finite ```Subclone_CCF``` values outside the interval from 0 to 1 to the nearest boundary before validation and filtering. This is disabled by default; non-numeric and non-finite values remain errors. With the default CCF filters, values clipped to either boundary are subsequently excluded.
+- ```--subclone-fraction-prior {adjusted,supplied}``` Select how the supplied fractions of called/input SNVs assigned to each subclone are used in the mutation-share prior. ```adjusted``` (the default) divides the supplied clonal and subclonal mutation shares by their estimated detection probabilities separately for each copy-number segment and renormalizes them. ```supplied``` uses the fractions directly and reproduces the publication/thesis sample-wide prior. This option does not modify ```Subclone_CCF```, and the likelihood detection correction remains active per segment in both modes.
 
-With the ```adjusted``` prior, each route-and-WGD-context cache is separated by segment. With the ```supplied``` publication/thesis prior, each route-and-WGD-context cache is shared across all segments in the sample. The likelihood's detection correction is calculated per segment in both modes; changing this option changes only the subclone-fraction prior and its cache scope.
+With the ```adjusted``` prior, clone-share draws use a separately corrected prior for each copy-number segment. With the ```supplied``` publication/thesis prior, they use the supplied sample-wide fractions directly. The likelihood's detection correction is calculated per segment in both modes. Route geometry is independent of either prior and is shared in memory across bounded batches of segments with the same copy-number and WGD state.
 
-Posterior intervals use the shortest contiguous empirical HPD interval by default. Each interval family has a ```--...-interval-width``` option expressed as a proportion greater than 0 and at most 1, and a matching ```--...-interval-method {hpd,equal-tailed}``` option. Percentage-scaled widths such as 90 or 95 are rejected rather than converted:
+Posterior intervals use the shortest contiguous empirical HPD interval by default. Each interval family has a ```--...-interval-width``` option expressed as a proportion greater than 0 and at most 1, and a matching ```--...-interval-method {hpd,equal-tailed}``` option. Percentage-scaled widths such as 90 or 95 are rejected rather than converted. Here HPD means the narrowest contiguous interval containing at least the requested fraction of the empirical draws. The output schemas contain one low/high pair, so multimodal posteriors are represented by one contiguous interval rather than a disjoint highest-density set.
 
-- ```--route-gain-interval-*``` controls the route-conditional gain bounds in both gain timing tables (default width: 0.95, or 95%).
-- ```--tree-gain-interval-*``` controls blue gain-node labels in tree PDFs (default width: 0.9, or 90%).
-- ```--wgd-overlap-interval-*``` controls the hidden candidate-segment bounds used for WGD overlap and can therefore change WGD inference (default width: 0.9, or 90%).
-- ```--wgd-timing-interval-*``` controls the final sample-level WGD bounds reused by the JSON, route table, and yellow tree nodes (default width: 0.9, or 90%).
-- ```--posterior-summary-interval-*``` controls both gain and gain-conditioned WGD bounds in posterior summaries (default width: 0.95, or 95%).
+### Inference model and WGD calling
 
-Here HPD means the narrowest contiguous interval containing at least the requested fraction of the empirical draws. The output schemas contain one low/high pair, so multimodal posteriors are represented by one contiguous interval rather than a disjoint highest-density set.
+- ```--wgd-count {0,1}``` Override GRITIC's inferred whole-genome-duplication count. Counts below 0 or above 1 are rejected because GRITIC currently supports at most one WGD. If omitted, GRITIC infers the count.
+- ```--wgd-overlap-interval-width```, ```--wgd-overlap-interval-method {hpd,equal-tailed}``` control the hidden candidate-segment bounds used for WGD overlap and can therefore change WGD inference (default width: 0.9, or 90%).
+- ```--unordered-balanced-route-prior``` Reproduce the former uniform prior over unordered allele-route pairs while retaining the current ordered route model. In a balanced ```N+N``` segment, an ordered route with different Major and Minor component histories receives half the prior weight of a route with identical component histories. Reciprocal orientations remain separate, so together they carry one prior unit. This is disabled by default.
+
+### Reported timing intervals
+
+- ```--route-gain-interval-width```, ```--route-gain-interval-method {hpd,equal-tailed}``` control the route-conditional gain bounds in both gain timing tables (default width: 0.95, or 95%).
+- ```--wgd-timing-interval-width```, ```--wgd-timing-interval-method {hpd,equal-tailed}``` control the final sample-level WGD bounds reused by the JSON, route table, and yellow tree nodes (default width: 0.9, or 90%).
+- ```--posterior-summary-interval-width```, ```--posterior-summary-interval-method {hpd,equal-tailed}``` control both gain and gain-conditioned WGD bounds in posterior summaries (default width: 0.95, or 95%).
+
+### Tree plots
+
+- ```--plot-trees``` Plot the route trees for each segment. This is an opt-in switch and is disabled by default.
+- ```--tree-gain-interval-width```, ```--tree-gain-interval-method {hpd,equal-tailed}``` control blue gain-node labels in tree PDFs (default width: 0.9, or 90%).
 
 Long option names use hyphens, not underscores. ```Sample_ID``` values are validated rather than sanitized: they cannot be empty, path components such as ```.``` or ```..```, contain path separators, Windows-forbidden filename characters, Unicode control/format/surrogate characters, end in a dot or space, use a reserved Windows device name, or make a derived GRITIC filename exceed the usual 255-unit component limits.
 
@@ -66,7 +82,7 @@ Long option names use hyphens, not underscores. ```Sample_ID``` values are valid
 A command to run GRITIC using the example data is:
 
 ```
-gritic --mutation-table examples/snv_table_example.tsv --subclone-table examples/subclone_table_example.tsv --copy-number-table examples/cn_table_example.tsv --purity 0.5 --wgd-count 1 --output examples/output --sample-id TEST_ID
+gritic --mutation-table examples/snv_table_example.tsv --copy-number-table examples/cn_table_example.tsv --purity 0.5 --sample-id TEST_ID --output examples/output --subclone-table examples/subclone_table_example.tsv --wgd-count 1
 ```
 
 GRITIC can also be run programmatically:
@@ -196,15 +212,15 @@ Two summary tables are produced for every run that produces timing output, inclu
 The gain-draw and route-ledger data frames used to calculate these summaries are internal. GRITIC no longer writes the legacy ```_posterior_timing_table_penalty_<True|False>.tsv``` or ```_posterior_route_draw_table_penalty_<True|False>.tsv``` files. Raw route-conditional timing samples remain available in the timing stores.
 
 ### _route_table.tsv
-This table contains exactly one row for each possible route of each timed segment. Its first three columns and key are ```(Sample_ID, Segment_ID, Route)```. It stores both the ordinary ```Probability``` and post-hoc ```Penalized_Probability```, average event and loss counts, route density and runtime, and the segment and WGD metadata. Routes with no independently timeable gains are retained here. Its ```WGD_Timing``` interval fields exactly repeat the configured sample-level WGD summary written to the calling-info JSON.
+This table contains exactly one row for each possible route of each timed segment. Its first three columns and key are ```(Sample_ID, Segment_ID, Route)```. It stores both the ordinary ```Probability``` and post-hoc ```Penalized_Probability```, average event and loss counts, timing-geometry proposal density and runtime, and the segment and WGD metadata. The density diagnostic covers the hit-and-run timing coordinates; independently sampled Dirichlet clone shares are not chain dimensions. Routes with no independently timeable gains are retained here. Its ```WGD_Timing``` interval fields exactly repeat the configured sample-level WGD summary written to the calling-info JSON.
 
 ```Route``` is an opaque, order-sensitive identity of the complete allele route: its internal identity is formed from the ```Major``` component followed by the ```Minor``` component, including their WGD annotations. An absent minor allele has one explicit empty-component identity. GRITIC does not recover allele identity from component size and does not sort the two component hashes. Consequently, all route identifiers deliberately differ from identifiers produced by the former unordered-hash implementation. A route table, gain timing table, timing store, and tree plots from an older run must not be mixed with current output; regenerate the complete sample output together.
 
 For an allele-balanced ```N+N``` state, GRITIC enumerates the full ordered Cartesian product of the single-allele histories. If histories ```A``` and ```B``` differ, both ```Major=A, Minor=B``` and ```Major=B, Minor=A``` are separate routes with separate identifiers; a diagonal ```A/A``` route occurs once. By default, each ordered route receives one equal prior unit before its marginal likelihood is normalized, equivalent to independently drawing the two allele histories from a uniform single-allele route prior while conditioning on the shared copy-number and WGD setting.
 
-With ```--unordered-balanced-route-prior```, a diagonal route retains prior weight 1 and each orientation of an off-diagonal pair receives weight 0.5 before evidence normalization. Thus ```A/B``` and ```B/A``` together carry the same one prior unit as ```A/A```, exactly reproducing the former uniform prior over unordered route pairs after expansion into the ordered state space. This option changes only route-level prior weights: it does not merge reciprocal routes, alter route-conditional timing samples, or restore the former one-sided handling of phased balanced routes. It is a no-op for unbalanced states and balanced states having only an identical-component route. Proposal caches are unchanged because they contain prior-independent route geometry rather than route probabilities.
+With ```--unordered-balanced-route-prior```, a diagonal route retains prior weight 1 and each orientation of an off-diagonal pair receives weight 0.5 before evidence normalization. Thus ```A/B``` and ```B/A``` together carry the same one prior unit as ```A/A```, exactly reproducing the former uniform prior over unordered route pairs after expansion into the ordered state space. This option changes only route-level prior weights: it does not merge reciprocal routes, alter route-conditional timing samples, or restore the former one-sided handling of phased balanced routes. It is a no-op for unbalanced states and balanced states having only an identical-component route. In-memory geometry sharing is unchanged because route geometry is independent of route probabilities.
 
-When a balanced segment contains no phased SNVs, the two orientations of an off-diagonal pair have exactly the same likelihood. GRITIC fits one orientation and constructs the other by explicitly exchanging its Major and Minor timing and multiplicity arrays; both ordered routes remain in the output and receive either one prior unit each by default or half a unit each under ```--unordered-balanced-route-prior```. With any phased SNV, GRITIC evaluates the likelihood and likelihood-weighted posterior separately for both orientations before applying the selected route prior. Its proposal cache first checks the ordered route's own key and can then explicitly check the reciprocal ordered mirror key and transform those proposal arrays; mirror reuse is never an accidental hash collision. WGD ```2+2``` timing is the deliberate exception: all SNVs are first treated as one representative allele and the model uses the single pseudo-```2+0``` route because the two homolog histories and timings are constrained to be identical.
+When a balanced segment contains no phased SNVs, the two orientations of an off-diagonal pair have exactly the same likelihood. GRITIC fits one orientation and constructs the other by explicitly exchanging its Major and Minor timing and multiplicity arrays; both ordered routes remain in the output and receive either one prior unit each by default or half a unit each under ```--unordered-balanced-route-prior```. With any phased SNV, GRITIC evaluates the likelihood and likelihood-weighted posterior separately for both orientations before applying the selected route prior. The orientations share one likelihood-independent in-memory geometry sample, with the reciprocal route produced by explicitly transforming those proposal arrays; segment-specific clone shares are then applied in memory and no temporary gzip proposal cache is written. WGD ```2+2``` timing is the deliberate exception: all SNVs are first treated as one representative allele and the model uses the single pseudo-```2+0``` route because the two homolog histories and timings are constrained to be identical.
 
 ```Penalized_Probability``` is calculated by multiplying each route's ordinary probability by ```exp(-2.7 * Average_N_Events)``` exactly once and renormalizing across routes within the segment. The original ```Probability``` remains unchanged, and each probability column sums to one within a valid segment. The number of independent gains does not alter either route-selection probability. Tree output and downstream mutation timing continue to use the ordinary probabilities. See [the publication](https://aacrjournals.org/cancerdiscovery/article/14/10/1810/748591/The-History-of-Chromosomal-Instability-in-Genome) for details of the penalty.
 
