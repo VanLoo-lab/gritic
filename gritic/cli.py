@@ -231,6 +231,15 @@ def build_parser():
         ),
     )
     parser.add_argument(
+        '--drop-unrecognized-phasing',
+        action='store_true',
+        help=(
+            'Drop mutations whose non-missing Phasing value is not major or '
+            'minor, and warn with the number dropped. By default, '
+            'unrecognized phasing values raise an error.'
+        ),
+    )
+    parser.add_argument(
         '--drop-unmatched-chromosomes',
         action='store_true',
         help=(
@@ -438,6 +447,7 @@ def main(argv=None):
         sex=args.sample_sex,
         autosome_count=args.autosome_count,
         drop_unmatched_chromosomes=args.drop_unmatched_chromosomes,
+        drop_unrecognized_phasing=args.drop_unrecognized_phasing,
     )
     subclone_table = (
         None
@@ -463,6 +473,7 @@ def main(argv=None):
         autosome_count=args.autosome_count,
         drop_unmatched_snvs=args.drop_unmatched_snvs,
         drop_unmatched_chromosomes=args.drop_unmatched_chromosomes,
+        drop_unrecognized_phasing=args.drop_unrecognized_phasing,
     )
     with _cli_progress_logging():
         gritictimer.process_sample(

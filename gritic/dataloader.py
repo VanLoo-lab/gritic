@@ -31,6 +31,8 @@ SUBCLONE_REQUIRED_COLUMNS = (
 )
 SUBCLONE_OUTPUT_COLUMNS = SUBCLONE_REQUIRED_COLUMNS + ('N_SNVs',)
 
+VALID_PHASING_LABELS = ('major', 'minor')
+
 VALID_SEX_KARYOTYPES = frozenset({'XX', 'XY', 'ZZ', 'ZW'})
 SEX_CHROMOSOME_PAIR = {
     'XX': ('X', 'Y'),
@@ -521,6 +523,61 @@ def validate_mutation_read_counts(mutation_table):
     return mutation_table
 
 
+def validate_or_drop_phasing_labels(
+    mutation_table,
+    *,
+    drop_unrecognized_phasing=False,
+):
+    """Canonicalize phasing, rejecting or dropping rows with bad labels."""
+    mutation_table = mutation_table.copy()
+    if 'Phasing' not in mutation_table.columns:
+        return mutation_table
+
+    phasing_labels = mutation_table['Phasing'].astype('string')
+    canonical_labels = phasing_labels.str.strip().str.lower()
+    recognized_labels = (
+        canonical_labels.isna()
+        | canonical_labels.isin(VALID_PHASING_LABELS)
+    )
+    unrecognized_labels = ~recognized_labels
+
+    mutation_table['Phasing'] = (
+        canonical_labels.astype(object).where(
+            canonical_labels.notna(),
+            np.nan,
+        )
+    )
+    if not unrecognized_labels.any():
+        return mutation_table
+
+    invalid_values = list(dict.fromkeys(
+        repr(value)
+        for value in phasing_labels.loc[unrecognized_labels].astype(str)
+    ))
+    invalid_description = ', '.join(invalid_values)
+    if not drop_unrecognized_phasing:
+        raise ValueError(
+            'Mutation table Phasing values must be major, minor, or missing; '
+            f'unrecognized value(s): {invalid_description}'
+        )
+
+    mutation_count = int(unrecognized_labels.sum())
+    mutation_label = 'mutation' if mutation_count == 1 else 'mutations'
+    warnings.warn(
+        f'Dropping {mutation_count} {mutation_label} with unrecognized '
+        f'Phasing value(s): {invalid_description}.',
+        UserWarning,
+        stacklevel=2,
+    )
+    mutation_table = mutation_table.loc[recognized_labels].copy()
+    if mutation_table.empty:
+        raise ValueError(
+            'No mutations remain after dropping mutations with unrecognized '
+            'Phasing values'
+        )
+    return mutation_table
+
+
 def validate_copy_number_values(copy_number_table):
     """Validate and canonicalize allele-specific copy numbers."""
     copy_number_table = copy_number_table.copy()
@@ -763,6 +820,7 @@ def load_input_tables(
     sex=None,
     autosome_count=22,
     drop_unmatched_chromosomes=False,
+    drop_unrecognized_phasing=False,
 ):
     """Load paired copy number and mutation tables using their joint schema."""
     validate_sex_karyotype(sex)
@@ -815,6 +873,10 @@ def load_input_tables(
         autosome_count,
         sex,
         drop_unmatched_chromosomes=drop_unmatched_chromosomes,
+    )
+    mutation_table = validate_or_drop_phasing_labels(
+        mutation_table,
+        drop_unrecognized_phasing=drop_unrecognized_phasing,
     )
     copy_number_table = validate_segment_coordinates(copy_number_table)
     copy_number_table = validate_non_overlapping_segments(copy_number_table)

@@ -373,6 +373,7 @@ class Sample:
         autosome_count=DEFAULT_AUTOSOME_COUNT,
         *,
         clip_subclone_ccf=False,
+        drop_unrecognized_phasing=False,
         _validation_token=None,
     ):
 
@@ -387,6 +388,7 @@ class Sample:
         self.apply_reads_correction = apply_reads_correction
         self.drop_unmatched_snvs = drop_unmatched_snvs
         self.drop_unmatched_chromosomes = drop_unmatched_chromosomes
+        self.drop_unrecognized_phasing = drop_unrecognized_phasing
         self.min_mutation_alt_count = _validate_non_negative_integer(
             min_mutation_alt_count,
             'min_mutation_alt_count',
@@ -455,6 +457,12 @@ class Sample:
                         self.drop_unmatched_chromosomes
                     ),
                 )
+            )
+            mutation_table = dataloader.validate_or_drop_phasing_labels(
+                mutation_table,
+                drop_unrecognized_phasing=(
+                    self.drop_unrecognized_phasing
+                ),
             )
             cn_table = dataloader.validate_segment_coordinates(cn_table)
             cn_table = dataloader.validate_non_overlapping_segments(cn_table)
@@ -991,11 +999,11 @@ class Segment:
         self.mutation_table = pd.concat((self.mutation_table,new_cols_table),axis=1)
         
         
-    def get_reads_correction_array(self,allele=None):
-        if allele == 'Minor':
-            clonal_multiplicities = np.arange(1,self.minor_cn+1)
+    def get_reads_correction_array(self, allele=None):
+        if allele == 'minor':
+            clonal_multiplicities = np.arange(1, self.minor_cn + 1)
         else:
-            clonal_multiplicities = np.arange(1,self.major_cn+1)
+            clonal_multiplicities = np.arange(1, self.major_cn + 1)
         mult_names = [
             f"Alt_Count_Correction_Mult_{mult}"
             for mult in clonal_multiplicities
@@ -1008,71 +1016,97 @@ class Segment:
         reads_correction = self.mutation_table[mult_names].to_numpy()
 
         if allele is None:
-            reads_correction= reads_correction[self.mutation_table['Phasing'].isna(),:]
-        elif allele =='All':
-            reads_correction = reads_correction
-        else:
-            reads_correction = reads_correction[self.mutation_table['Phasing']==allele,:]
+            reads_correction = reads_correction[
+                self.mutation_table['Phasing'].isna(),
+                :,
+            ]
+        elif allele != 'all':
+            reads_correction = reads_correction[
+                self.mutation_table['Phasing'] == allele,
+                :,
+            ]
         
-        if reads_correction.size ==0:
+        if reads_correction.size == 0:
             return None
 
         
         
         
-        reads_correction = np.average(reads_correction,axis=0)
+        reads_correction = np.average(reads_correction, axis=0)
         if not self.apply_reads_correction:
             reads_correction = np.ones_like(reads_correction)
         
         
         return reads_correction
     
-    def get_multiplicity_probabilities_array(self,allele=None):
+    def get_multiplicity_probabilities_array(self, allele=None):
 
-        if allele == 'Minor':
-            clonal_multiplicities = np.arange(1,self.minor_cn+1)
+        if allele == 'minor':
+            clonal_multiplicities = np.arange(1, self.minor_cn + 1)
         else:
-            clonal_multiplicities = np.arange(1,self.major_cn+1)
+            clonal_multiplicities = np.arange(1, self.major_cn + 1)
         
         mult_names = [f"Prob_Mult_{mult}" for mult in clonal_multiplicities]
         
-        mult_names.extend([f"Prob_Subclone_{subclone}" for subclone in range(self.n_subclones)])
+        mult_names.extend([
+            f"Prob_Subclone_{subclone}"
+            for subclone in range(self.n_subclones)
+        ])
 
-        multiplicity_probabilities = self.mutation_table[mult_names].to_numpy()
+        multiplicity_probabilities = self.mutation_table[
+            mult_names
+        ].to_numpy()
 
-        normalising_sums = np.sum(multiplicity_probabilities, axis=1)[:,None]
-        normalising_sums = np.where(np.isclose(normalising_sums,0),1,normalising_sums)
+        normalising_sums = np.sum(
+            multiplicity_probabilities,
+            axis=1,
+        )[:, None]
+        normalising_sums = np.where(
+            np.isclose(normalising_sums, 0),
+            1,
+            normalising_sums,
+        )
         multiplicity_probabilities = multiplicity_probabilities / normalising_sums
 
-        if allele is None:     
-            multiplicity_probabilities= multiplicity_probabilities[self.mutation_table['Phasing'].isna(),:]
-        elif allele =='All':
-            multiplicity_probabilities = multiplicity_probabilities
-        else:
-            multiplicity_probabilities = multiplicity_probabilities[self.mutation_table['Phasing']==allele,:]
+        if allele is None:
+            multiplicity_probabilities = multiplicity_probabilities[
+                self.mutation_table['Phasing'].isna(),
+                :,
+            ]
+        elif allele != 'all':
+            multiplicity_probabilities = multiplicity_probabilities[
+                self.mutation_table['Phasing'] == allele,
+                :,
+            ]
 
-        if multiplicity_probabilities.size ==0:
+        if multiplicity_probabilities.size == 0:
             return None
         
         return multiplicity_probabilities
     
 
     def get_multiplicity_probabilities(self):
-        reads_correction_store = {}
-        reads_correction_store['Non_Phased'] = self.get_reads_correction_array()
-        reads_correction_store['Major'] = self.get_reads_correction_array('Major')
-        reads_correction_store['Minor'] = self.get_reads_correction_array('Minor')
-        reads_correction_store['All'] = self.get_reads_correction_array('All')
+        reads_correction_store = {
+            'Non_Phased': self.get_reads_correction_array(),
+            'Major': self.get_reads_correction_array('major'),
+            'Minor': self.get_reads_correction_array('minor'),
+            'All': self.get_reads_correction_array('all'),
+        }
 
-        mult_array_store = {}
-        mult_array_store['Non_Phased'] = self.get_multiplicity_probabilities_array()
-
-        mult_array_store['Major'] = self.get_multiplicity_probabilities_array('Major')
+        mult_array_store = {
+            'Non_Phased': self.get_multiplicity_probabilities_array(),
+            'Major': self.get_multiplicity_probabilities_array('major'),
+            'Minor': self.get_multiplicity_probabilities_array('minor'),
+            'All': self.get_multiplicity_probabilities_array('all'),
+        }
         
-        mult_array_store['Minor'] = self.get_multiplicity_probabilities_array('Minor')
-        mult_array_store['All'] = self.get_multiplicity_probabilities_array('All')
-        
-        return MultProbabilityStore(mult_array_store,reads_correction_store,self.major_cn,self.minor_cn,self.n_subclones)
+        return MultProbabilityStore(
+            mult_array_store,
+            reads_correction_store,
+            self.major_cn,
+            self.minor_cn,
+            self.n_subclones,
+        )
     
     def get_info_dict(self):
         
