@@ -135,6 +135,8 @@ All SNVs for the sample. The columns ```Chromosome```, ```Tumor_Ref_Count``` and
 
 ```Phasing``` is optional. Non-missing phasing labels are stripped of surrounding whitespace and converted to lowercase, so values such as ```Major ```, ```MAJOR```, and ``` major ``` all become ```major```. The only recognized labels are ```major``` and ```minor```; missing values remain unphased. By default, any other non-missing label raises an error. Supplying ```--drop-unrecognized-phasing``` drops the affected mutation rows instead and emits one warning with the number dropped and the unrecognized values.
 
+An original balanced ```2+2``` segment has one WGD-specific exception. Only while GRITIC evaluates a possible WGD and builds pooled timing for a called WGD, it retains each mutation's ```Phasing``` label but evaluates every SNV against one representative duplicated allele because the two homologs' routes and timings are constrained to be identical. If WGD is rejected, GRITIC uses the ordinary independent-route ```2+2``` model and phasing remains active.
+
 Input mutation columns named ```Segment_Start```, ```Segment_End```, ```Major_CN```, or ```Minor_CN``` are ignored because GRITIC always annotates those values from the copy-number table.
 
 GRITIC supports two segment-assignment modes:

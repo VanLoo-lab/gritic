@@ -18,7 +18,12 @@ from scipy.special import logsumexp
 from scipy.optimize import nnls
 from scipy.linalg import null_space
 
-from gritic.sampletools import Segment, get_major_cn_mode, validate_sample_id
+from gritic.sampletools import (
+    MultProbabilityStore,
+    Segment,
+    get_major_cn_mode,
+    validate_sample_id,
+)
 from gritic import dataloader
 from gritic.intervaltools import (
     DEFAULT_TIMING_INTERVALS,
@@ -1023,6 +1028,47 @@ def get_combined_distribution(
     return combined_distribution_samples
 
 
+def _get_wgd_timing_model(segment):
+    """Return the copy-number geometry and likelihood store for WGD timing.
+
+    Balanced 2+2 segments represent two copies of each parental allele created
+    by the same WGD.  Their WGD timing is therefore fit with one representative
+    duplicated allele (2+0 geometry).  All mutations, including phased rows,
+    contribute once through the original segment's combined likelihood arrays.
+    The original segment and its multiplicity store are left unchanged.
+    """
+    mult_probabilities = segment.multiplicity_probabilities
+    if segment.major_cn != 2 or segment.minor_cn != 2:
+        return segment.minor_cn, mult_probabilities
+
+    pseudo_minor_cn = 0
+
+    combined_array = mult_probabilities.combined_array
+    combined_correction = (
+        mult_probabilities.reads_correction_combined_array
+    )
+    combined_array_store = {
+        'Non_Phased': combined_array,
+        'Major': None,
+        'Minor': None,
+        'All': combined_array,
+    }
+    combined_correction_store = {
+        'Non_Phased': combined_correction,
+        'Major': None,
+        'Minor': None,
+        'All': combined_correction,
+    }
+    wgd_mult_probabilities = MultProbabilityStore(
+        combined_array_store,
+        combined_correction_store,
+        major_cn=segment.major_cn,
+        minor_cn=pseudo_minor_cn,
+        n_subclones=mult_probabilities.n_subclones,
+    )
+    return pseudo_minor_cn, wgd_mult_probabilities
+
+
 def _time_wgd_segment(
     segment,
     mult_store_dir,
@@ -1038,7 +1084,9 @@ def _time_wgd_segment(
         subclone_table,
     )
     try:
-        pseudo_minor_cn = 0 if segment.minor_cn == 2 else segment.minor_cn
+        pseudo_minor_cn, mult_probabilities = _get_wgd_timing_model(
+            segment
+        )
         classifier = RouteClassifier(
             segment.major_cn,
             pseudo_minor_cn,
@@ -1049,17 +1097,11 @@ def _time_wgd_segment(
             segment_cache_identity=segment_cache_identity,
         )
 
-        mult_probabilities = segment.multiplicity_probabilities
-        original_minor_cn = mult_probabilities.minor_cn
-        try:
-            mult_probabilities.minor_cn = pseudo_minor_cn
-            classifier.fit_routes(
-                mult_probabilities,
-                subclone_table,
-                None,
-            )
-        finally:
-            mult_probabilities.minor_cn = original_minor_cn
+        classifier.fit_routes(
+            mult_probabilities,
+            subclone_table,
+            None,
+        )
 
         wgd_route_table = classifier.get_route_table()
         wgd_timing_table = classifier.get_timing_table(
@@ -1212,7 +1254,9 @@ def _time_combined_wgd_segment(
         new_seg.subclone_table,
     )
     try:
-        pseudo_minor_cn = 0 if minor_cn == 2 else minor_cn
+        pseudo_minor_cn, mult_probabilities = _get_wgd_timing_model(
+            new_seg
+        )
         classifier = RouteClassifier(
             new_seg.major_cn,
             pseudo_minor_cn,
@@ -1222,17 +1266,11 @@ def _time_combined_wgd_segment(
             subclone_fraction_prior=subclone_fraction_prior,
             segment_cache_identity=segment_cache_identity,
         )
-        mult_probabilities = new_seg.multiplicity_probabilities
-        original_minor_cn = mult_probabilities.minor_cn
-        try:
-            mult_probabilities.minor_cn = pseudo_minor_cn
-            classifier.fit_routes(
-                mult_probabilities,
-                new_seg.subclone_table,
-                None,
-            )
-        finally:
-            mult_probabilities.minor_cn = original_minor_cn
+        classifier.fit_routes(
+            mult_probabilities,
+            new_seg.subclone_table,
+            None,
+        )
 
         timing_dict = classifier.get_timing_dict()
         write_timing_archive(
