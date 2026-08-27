@@ -52,17 +52,17 @@ logger = logging.getLogger(__name__)
 MIN_WGD_MUTATIONS = 10
 ROUTE_CONDITIONAL_SAMPLE_COUNT = 1000
 COMBINED_WGD_SAMPLE_COUNT = 500
-SUBCLONE_PRIOR_MODES = ('corrected', 'uncorrected')
-DEFAULT_SUBCLONE_PRIOR = 'corrected'
+SUBCLONE_FRACTION_PRIOR_MODES = ('adjusted', 'supplied')
+DEFAULT_SUBCLONE_FRACTION_PRIOR = 'adjusted'
 
 
-def validate_subclone_prior(subclone_prior):
-    if subclone_prior not in SUBCLONE_PRIOR_MODES:
-        permitted = ', '.join(SUBCLONE_PRIOR_MODES)
+def validate_subclone_fraction_prior(subclone_fraction_prior):
+    if subclone_fraction_prior not in SUBCLONE_FRACTION_PRIOR_MODES:
+        permitted = ', '.join(SUBCLONE_FRACTION_PRIOR_MODES)
         raise ValueError(
-            f'subclone_prior must be one of: {permitted}'
+            f'subclone_fraction_prior must be one of: {permitted}'
         )
-    return subclone_prior
+    return subclone_fraction_prior
 
 
 def get_sample_clone_fractions(subclone_table):
@@ -82,9 +82,11 @@ def get_sample_clone_fractions(subclone_table):
 def get_clone_share_prior_alpha(
     sample_clone_fractions,
     subclonal_correction_array=None,
-    subclone_prior=DEFAULT_SUBCLONE_PRIOR,
+    subclone_fraction_prior=DEFAULT_SUBCLONE_FRACTION_PRIOR,
 ):
-    subclone_prior = validate_subclone_prior(subclone_prior)
+    subclone_fraction_prior = validate_subclone_fraction_prior(
+        subclone_fraction_prior
+    )
     clone_fractions = np.asarray(sample_clone_fractions, dtype=float)
     if clone_fractions.ndim != 1 or clone_fractions.size == 0:
         raise ValueError(
@@ -100,7 +102,7 @@ def get_clone_share_prior_alpha(
             'that sum to 1'
         )
 
-    if subclone_prior == 'uncorrected':
+    if subclone_fraction_prior == 'supplied':
         prior_fractions = clone_fractions
     else:
         correction = np.asarray(subclonal_correction_array, dtype=float)
@@ -148,36 +150,43 @@ def get_pooled_wgd_cache_identity(minor_cn, source_segment_ids):
     return f'pooled-wgd:{digest}'
 
 
-def get_subclone_prior_cache_namespace(
-    subclone_prior,
+def get_subclone_fraction_prior_cache_namespace(
+    subclone_fraction_prior,
     segment_cache_identity=None,
 ):
-    subclone_prior = validate_subclone_prior(subclone_prior)
-    if subclone_prior == 'uncorrected':
-        return pathlib.Path('uncorrected')
+    subclone_fraction_prior = validate_subclone_fraction_prior(
+        subclone_fraction_prior
+    )
+    if subclone_fraction_prior == 'supplied':
+        return pathlib.Path('supplied')
     if segment_cache_identity is None:
         raise ValueError(
-            'segment_cache_identity is required for the corrected '
-            'subclone prior'
+            'segment_cache_identity is required for the adjusted '
+            'subclone-fraction prior'
         )
     identity = str(segment_cache_identity)
     if not identity:
         raise ValueError(
-            'segment_cache_identity must not be empty for the corrected '
-            'subclone prior'
+            'segment_cache_identity must not be empty for the adjusted '
+            'subclone-fraction prior'
         )
     digest = hashlib.sha256(identity.encode('utf-8')).hexdigest()
-    return pathlib.Path('corrected') / digest
+    return pathlib.Path('adjusted') / digest
 
 
-def get_cache_subclone_prior(subclone_prior, subclone_table):
-    """Use the shared cache when no subclone prior is sampled."""
-    subclone_prior = validate_subclone_prior(subclone_prior)
+def get_cache_subclone_fraction_prior(
+    subclone_fraction_prior,
+    subclone_table,
+):
+    """Use the supplied-fraction cache when no fraction prior is sampled."""
+    subclone_fraction_prior = validate_subclone_fraction_prior(
+        subclone_fraction_prior
+    )
     if subclone_table is None:
-        return 'uncorrected'
+        return 'supplied'
     if isinstance(subclone_table, pd.DataFrame) and subclone_table.empty:
-        return 'uncorrected'
-    return subclone_prior
+        return 'supplied'
+    return subclone_fraction_prior
 
 
 def _remove_cache_directory_preserving_error(cache_dir):
@@ -218,30 +227,30 @@ def _remove_cache_file_preserving_error(cache_path):
 
 def remove_mult_store_cache_namespace(
     mult_store_dir,
-    subclone_prior,
+    subclone_fraction_prior,
     segment_cache_identity=None,
 ):
     """Remove one resolved cache namespace, if it exists."""
     if mult_store_dir is None:
         return
-    namespace = get_subclone_prior_cache_namespace(
-        subclone_prior,
+    namespace = get_subclone_fraction_prior_cache_namespace(
+        subclone_fraction_prior,
         segment_cache_identity,
     )
     cache_dir = pathlib.Path(mult_store_dir, namespace)
     _remove_cache_directory_preserving_error(cache_dir)
 
-    corrected_root = pathlib.Path(mult_store_dir, 'corrected')
-    if corrected_root.is_dir():
+    adjusted_root = pathlib.Path(mult_store_dir, 'adjusted')
+    if adjusted_root.is_dir():
         try:
-            corrected_root.rmdir()
+            adjusted_root.rmdir()
         except OSError:
             pass
 
 
 def remove_mult_store_route_caches(
     mult_store_dir,
-    subclone_prior,
+    subclone_fraction_prior,
     route_ids,
     wgd_status,
     wgd_timing_distribution,
@@ -250,8 +259,8 @@ def remove_mult_store_route_caches(
     """Remove cached arrays for exact routes in one WGD context."""
     if mult_store_dir is None:
         return
-    namespace = get_subclone_prior_cache_namespace(
-        subclone_prior,
+    namespace = get_subclone_fraction_prior_cache_namespace(
+        subclone_fraction_prior,
         segment_cache_identity,
     )
     cache_dir = pathlib.Path(mult_store_dir, namespace)
@@ -559,12 +568,14 @@ class Route:
         mult_probabilities,
         subclone_table,
         wgd_timing_distribution,
-        subclone_prior=DEFAULT_SUBCLONE_PRIOR,
+        subclone_fraction_prior=DEFAULT_SUBCLONE_FRACTION_PRIOR,
     ):
 
         run_time = time.perf_counter()
 
-        subclone_prior = validate_subclone_prior(subclone_prior)
+        subclone_fraction_prior = validate_subclone_fraction_prior(
+            subclone_fraction_prior
+        )
         n_subclones = (
             0
             if subclone_table is None
@@ -576,7 +587,7 @@ class Route:
                 subclone_table
             )
             subclonal_correction_array = None
-            if subclone_prior == 'corrected':
+            if subclone_fraction_prior == 'adjusted':
                 subclonal_correction_array = (
                     mult_probabilities.get_subclonal_correction_array(
                         subclone_table
@@ -585,7 +596,7 @@ class Route:
             alpha = get_clone_share_prior_alpha(
                 sample_clone_fractions,
                 subclonal_correction_array,
-                subclone_prior,
+                subclone_fraction_prior,
             )
 
         mult_store,timing_store,wgd_timing_store,density = self.get_mult_store(alpha,n_subclones,wgd_timing_distribution)
@@ -618,14 +629,16 @@ class RouteClassifier:
         wgd_trees_status,
         mult_store_dir,
         *,
-        subclone_prior=DEFAULT_SUBCLONE_PRIOR,
+        subclone_fraction_prior=DEFAULT_SUBCLONE_FRACTION_PRIOR,
         segment_cache_identity=None,
     ):
         self.major_cn = major_cn
         self.minor_cn = minor_cn
         self.wgd_status = wgd_status
         self.mult_store_dir = mult_store_dir
-        self.subclone_prior = validate_subclone_prior(subclone_prior)
+        self.subclone_fraction_prior = validate_subclone_fraction_prior(
+            subclone_fraction_prior
+        )
         self.segment_cache_identity = segment_cache_identity
         self.cache_namespace = None
         self.routes = self.generate_routes(wgd_trees_status)
@@ -657,13 +670,15 @@ class RouteClassifier:
         return possible_routes
  
     def fit_routes(self,mult_probabilities,subclone_table,wgd_timing_distribution):
-        self.cache_subclone_prior = get_cache_subclone_prior(
-            self.subclone_prior,
-            subclone_table,
+        self.cache_subclone_fraction_prior = (
+            get_cache_subclone_fraction_prior(
+                self.subclone_fraction_prior,
+                subclone_table,
+            )
         )
         if getattr(self, 'mult_store_dir', None) is not None:
-            self.cache_namespace = get_subclone_prior_cache_namespace(
-                self.cache_subclone_prior,
+            self.cache_namespace = get_subclone_fraction_prior_cache_namespace(
+                self.cache_subclone_fraction_prior,
                 self.segment_cache_identity,
             )
             for route in self.routes.values():
@@ -677,7 +692,7 @@ class RouteClassifier:
                 mult_probabilities,
                 subclone_table,
                 wgd_timing_distribution,
-                self.subclone_prior,
+                self.subclone_fraction_prior,
             )
             route_ll_store.append(route.ll_store)
 
@@ -1013,14 +1028,14 @@ def _time_wgd_segment(
     segment,
     mult_store_dir,
     interval_config,
-    subclone_prior,
+    subclone_fraction_prior,
 ):
     segment_cache_identity = get_segment_cache_identity(
         getattr(segment, 'segment_id', str(segment))
     )
     subclone_table = getattr(segment, 'subclone_table', None)
-    cache_subclone_prior = get_cache_subclone_prior(
-        subclone_prior,
+    cache_subclone_fraction_prior = get_cache_subclone_fraction_prior(
+        subclone_fraction_prior,
         subclone_table,
     )
     try:
@@ -1031,7 +1046,7 @@ def _time_wgd_segment(
             False,
             'No_WGD',
             mult_store_dir,
-            subclone_prior=subclone_prior,
+            subclone_fraction_prior=subclone_fraction_prior,
             segment_cache_identity=segment_cache_identity,
         )
 
@@ -1065,10 +1080,10 @@ def _time_wgd_segment(
         segment_timing = classifier_route.get_node_timing(0)
         return wgd_timing_table, segment_timing
     finally:
-        if cache_subclone_prior == 'corrected':
+        if cache_subclone_fraction_prior == 'adjusted':
             remove_mult_store_cache_namespace(
                 mult_store_dir,
-                cache_subclone_prior,
+                cache_subclone_fraction_prior,
                 segment_cache_identity,
             )
 
@@ -1079,9 +1094,11 @@ def time_wgd_major_cn_2(
     mult_store_dir,
     timing_dict_dir,
     interval_config=DEFAULT_TIMING_INTERVALS,
-    subclone_prior=DEFAULT_SUBCLONE_PRIOR,
+    subclone_fraction_prior=DEFAULT_SUBCLONE_FRACTION_PRIOR,
 ):
-    subclone_prior = validate_subclone_prior(subclone_prior)
+    subclone_fraction_prior = validate_subclone_fraction_prior(
+        subclone_fraction_prior
+    )
 
     wgd_timing_table_path = output_dir/f"{sample.sample_id}_gain_timing_table_wgd_segments.tsv"
     potential_wgd_segments = get_potential_wgd_segments(sample)
@@ -1103,7 +1120,7 @@ def time_wgd_major_cn_2(
             segment,
             mult_store_dir,
             interval_config,
-            subclone_prior,
+            subclone_fraction_prior,
         )
         wgd_timing_tables.append(wgd_timing_table)
 
@@ -1151,7 +1168,7 @@ def time_wgd_major_cn_2(
         sample.purity,
         mult_store_dir,
         timing_dict_dir,
-        subclone_prior=subclone_prior,
+        subclone_fraction_prior=subclone_fraction_prior,
     )
     wgd_timing_distribution = get_combined_distribution(cn_distributions)
     
@@ -1170,7 +1187,7 @@ def _time_combined_wgd_segment(
     coverage_vaf_quantile,
     mult_store_dir,
     timing_dict_dir,
-    subclone_prior,
+    subclone_fraction_prior,
 ):
     mutation_table = mutation_table.copy()
     mutation_table['Segment_ID'] = f'Minor_CN_{minor_cn}'
@@ -1191,8 +1208,8 @@ def _time_combined_wgd_segment(
         minor_cn,
         source_segment_ids,
     )
-    cache_subclone_prior = get_cache_subclone_prior(
-        subclone_prior,
+    cache_subclone_fraction_prior = get_cache_subclone_fraction_prior(
+        subclone_fraction_prior,
         new_seg.subclone_table,
     )
     try:
@@ -1203,7 +1220,7 @@ def _time_combined_wgd_segment(
             False,
             'No_WGD',
             mult_store_dir,
-            subclone_prior=subclone_prior,
+            subclone_fraction_prior=subclone_fraction_prior,
             segment_cache_identity=segment_cache_identity,
         )
         mult_probabilities = new_seg.multiplicity_probabilities
@@ -1226,10 +1243,10 @@ def _time_combined_wgd_segment(
         )
         return classifier.get_best_timing()[0]
     finally:
-        if cache_subclone_prior == 'corrected':
+        if cache_subclone_fraction_prior == 'adjusted':
             remove_mult_store_cache_namespace(
                 mult_store_dir,
-                cache_subclone_prior,
+                cache_subclone_fraction_prior,
                 segment_cache_identity,
             )
 
@@ -1241,9 +1258,11 @@ def get_combined_segment_timing_cn_2(
     sample_purity,
     mult_store_dir,
     timing_dict_dir,
-    subclone_prior=DEFAULT_SUBCLONE_PRIOR,
+    subclone_fraction_prior=DEFAULT_SUBCLONE_FRACTION_PRIOR,
 ):
-    subclone_prior = validate_subclone_prior(subclone_prior)
+    subclone_fraction_prior = validate_subclone_fraction_prior(
+        subclone_fraction_prior
+    )
 
     mutation_tables = []
     combined_width_by_minor_cn = {}
@@ -1304,7 +1323,7 @@ def get_combined_segment_timing_cn_2(
                 coverage_vaf_quantile,
                 mult_store_dir,
                 timing_dict_dir,
-                subclone_prior,
+                subclone_fraction_prior,
             )
         )
     
@@ -1411,7 +1430,7 @@ def _process_segment(
     plot_trees,
     wgd_info,
     interval_config,
-    subclone_prior,
+    subclone_fraction_prior,
     route_table_path,
     timing_table_path,
 ):
@@ -1419,8 +1438,8 @@ def _process_segment(
         getattr(segment, 'segment_id', str(segment))
     )
     subclone_table = getattr(segment, 'subclone_table', None)
-    cache_subclone_prior = get_cache_subclone_prior(
-        subclone_prior,
+    cache_subclone_fraction_prior = get_cache_subclone_fraction_prior(
+        subclone_fraction_prior,
         subclone_table,
     )
     try:
@@ -1430,7 +1449,7 @@ def _process_segment(
             wgd_status,
             'Default',
             mult_store_dir,
-            subclone_prior=subclone_prior,
+            subclone_fraction_prior=subclone_fraction_prior,
             segment_cache_identity=segment_cache_identity,
         )
         classifier.fit_routes(
@@ -1479,10 +1498,10 @@ def _process_segment(
                 gain_interval=interval_config.tree_gain,
             )
     finally:
-        if cache_subclone_prior == 'corrected':
+        if cache_subclone_fraction_prior == 'adjusted':
             remove_mult_store_cache_namespace(
                 mult_store_dir,
-                cache_subclone_prior,
+                cache_subclone_fraction_prior,
                 segment_cache_identity,
             )
 
@@ -1498,9 +1517,11 @@ def process_segments(
     plot_trees,
     wgd_info,
     interval_config=DEFAULT_TIMING_INTERVALS,
-    subclone_prior=DEFAULT_SUBCLONE_PRIOR,
+    subclone_fraction_prior=DEFAULT_SUBCLONE_FRACTION_PRIOR,
 ):
-    subclone_prior = validate_subclone_prior(subclone_prior)
+    subclone_fraction_prior = validate_subclone_fraction_prior(
+        subclone_fraction_prior
+    )
 
     route_table_path = output_dir/f"{sample_id}_route_table.tsv"
     timing_table_path = output_dir/f"{sample_id}_gain_timing_table.tsv"
@@ -1529,14 +1550,14 @@ def process_segments(
                     plot_trees,
                     wgd_info,
                     interval_config,
-                    subclone_prior,
+                    subclone_fraction_prior,
                     route_table_path,
                     timing_table_path,
                 )
         finally:
             remove_mult_store_route_caches(
                 mult_store_dir,
-                'uncorrected',
+                'supplied',
                 route_ids,
                 wgd_status,
                 wgd_timing_distribution,
@@ -1574,7 +1595,7 @@ def _process_sample_with_mult_store(
     min_wgd_overlap,
     wgd_count,
     interval_config,
-    subclone_prior,
+    subclone_fraction_prior,
     major_cn_mode,
 ):
     if wgd_count is not None:
@@ -1601,7 +1622,7 @@ def _process_sample_with_mult_store(
                 mult_store_dir,
                 timing_dict_dir,
                 interval_config=interval_config,
-                subclone_prior=subclone_prior,
+                subclone_fraction_prior=subclone_fraction_prior,
             )
             wgd_status = True
         else:
@@ -1628,7 +1649,7 @@ def _process_sample_with_mult_store(
             mult_store_dir,
             timing_dict_dir,
             interval_config=interval_config,
-            subclone_prior=subclone_prior,
+            subclone_fraction_prior=subclone_fraction_prior,
         )
         if overlap_proportion < min_wgd_overlap:
             warnings.warn(
@@ -1677,7 +1698,7 @@ def _process_sample_with_mult_store(
         plot_trees=plot_trees,
         wgd_info=wgd_info,
         interval_config=interval_config,
-        subclone_prior=subclone_prior,
+        subclone_fraction_prior=subclone_fraction_prior,
     )
 
     if os.path.exists(route_table_path):
@@ -1717,11 +1738,13 @@ def process_sample(
     min_wgd_overlap=0.6,
     wgd_count=None,
     interval_config=DEFAULT_TIMING_INTERVALS,
-    subclone_prior=DEFAULT_SUBCLONE_PRIOR,
+    subclone_fraction_prior=DEFAULT_SUBCLONE_FRACTION_PRIOR,
 ):
     if not isinstance(interval_config, TimingIntervalConfig):
         raise TypeError('interval_config must be a TimingIntervalConfig')
-    subclone_prior = validate_subclone_prior(subclone_prior)
+    subclone_fraction_prior = validate_subclone_fraction_prior(
+        subclone_fraction_prior
+    )
     wgd_count = _validate_wgd_count(wgd_count)
     min_wgd_overlap = _validate_min_wgd_overlap(min_wgd_overlap)
     validate_sample_id(sample.sample_id)
@@ -1775,7 +1798,7 @@ def process_sample(
             min_wgd_overlap,
             wgd_count,
             interval_config,
-            subclone_prior,
+            subclone_fraction_prior,
             major_cn_mode,
         )
     finally:

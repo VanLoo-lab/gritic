@@ -280,8 +280,8 @@ def build_parser():
             'thesis method, which averages detection power over every SNV\'s '
             'observed depth in the segment; 0.9 is the unit-interval form of '
             'the historical code value (the 90th percentile). '
-            'It affects the likelihood correction in both subclone-prior modes '
-            'and the prior correction only in corrected mode.'
+            'It affects the likelihood correction in both subclone-fraction '
+            'prior modes and the prior adjustment only in adjusted mode.'
         ),
     )
     parser.add_argument(
@@ -341,21 +341,24 @@ def build_parser():
         default=None,
         help=(
             'An optional tab separated file containing Cluster, Subclone_CCF '
-            'and Subclone_Fraction.'
+            'and Subclone_Fraction. Subclone_CCF is cellular prevalence; '
+            'Subclone_Fraction is the fraction of called/input SNVs assigned '
+            'to the subclone.'
         ),
     )
     parser.add_argument(
-        '--subclone-prior',
-        choices=gritictimer.SUBCLONE_PRIOR_MODES,
-        default=gritictimer.DEFAULT_SUBCLONE_PRIOR,
+        '--subclone-fraction-prior',
+        choices=gritictimer.SUBCLONE_FRACTION_PRIOR_MODES,
+        default=gritictimer.DEFAULT_SUBCLONE_FRACTION_PRIOR,
         help=(
-            'Subclone-proportion prior mode. This selectable corrected/'
-            'uncorrected interface was added after publication. Corrected '
-            'inverse-detection-adjusts clone proportions per segment and is '
-            'an implementation extension not described in the publication; '
-            'uncorrected reproduces the publication/thesis sample-wide prior '
-            '(default: corrected). The likelihood detection correction '
-            'remains per segment in both modes.'
+            'How supplied Subclone_Fraction values are used to construct the '
+            'prior over clonal and subclonal mutation shares. adjusted '
+            '(default) divides the supplied called-SNV shares by estimated '
+            'detection probabilities separately for each copy-number segment '
+            'and renormalizes them; supplied uses the values directly and '
+            'reproduces the publication/thesis sample-wide prior. This option '
+            'does not modify Subclone_CCF. The likelihood detection correction '
+            'remains active per segment in both modes.'
         ),
     )
     parser.add_argument(
@@ -468,7 +471,7 @@ def main(argv=None):
             plot_trees=args.plot_trees,
             wgd_count=args.wgd_count,
             interval_config=interval_config,
-            subclone_prior=args.subclone_prior,
+            subclone_fraction_prior=args.subclone_fraction_prior,
         )
 
 
