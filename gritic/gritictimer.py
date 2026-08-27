@@ -1262,7 +1262,7 @@ def add_wgd_info_to_route_table(route_table,wgd_info,wgd_status:bool):
     return route_table
 
 
-def _append_table(table, table_path, columns):
+def _append_table(table, table_path, columns, column_dtypes=None):
     table = table[columns]
     if os.path.exists(table_path):
         string_converters = {
@@ -1276,6 +1276,8 @@ def _append_table(table, table_path, columns):
             converters=string_converters,
         )
         table = pd.concat([previous_table, table], ignore_index=True)
+    if column_dtypes is not None:
+        table = table.astype(column_dtypes)
     _write_tsv(table, table_path)
 
 
@@ -1293,6 +1295,7 @@ def write_gain_timing_table(timing_table, timing_table_path):
         timing_table,
         timing_table_path,
         GAIN_TIMING_TABLE_COLUMNS,
+        column_dtypes={'Node': 'Int64'},
     )
 
 
