@@ -615,6 +615,7 @@ class Sample:
                 gritic_id_components,
             )
         )
+        dataloader.validate_phasing_copy_number_consistency(mutation_table)
        
         mutation_table = self.filter_mutation_table(mutation_table)
      

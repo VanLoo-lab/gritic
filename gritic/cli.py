@@ -371,6 +371,19 @@ def build_parser():
         ),
     )
     parser.add_argument(
+        '--unordered-balanced-route-prior',
+        action='store_true',
+        default=gritictimer.DEFAULT_UNORDERED_BALANCED_ROUTE_PRIOR,
+        help=(
+            'Use the former uniform prior over unordered allele-route pairs. '
+            'In a balanced N+N segment, each ordered route whose Major and '
+            'Minor component histories differ receives half the prior weight '
+            'of an identical-component route before normalization. Reciprocal '
+            'orientations remain separate and together carry one prior unit. '
+            'Disabled by default.'
+        ),
+    )
+    parser.add_argument(
         '--sample-sex',
         default=None,
         choices=('XX', 'XY', 'ZZ', 'ZW'),
@@ -483,6 +496,9 @@ def main(argv=None):
             wgd_count=args.wgd_count,
             interval_config=interval_config,
             subclone_fraction_prior=args.subclone_fraction_prior,
+            unordered_balanced_route_prior=(
+                args.unordered_balanced_route_prior
+            ),
         )
 
 

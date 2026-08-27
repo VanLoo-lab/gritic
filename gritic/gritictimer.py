@@ -59,6 +59,13 @@ ROUTE_CONDITIONAL_SAMPLE_COUNT = 1000
 COMBINED_WGD_SAMPLE_COUNT = 500
 SUBCLONE_FRACTION_PRIOR_MODES = ('adjusted', 'supplied')
 DEFAULT_SUBCLONE_FRACTION_PRIOR = 'adjusted'
+DEFAULT_UNORDERED_BALANCED_ROUTE_PRIOR = False
+
+
+_MIRROR_ALLELE = {
+    'Major': 'Minor',
+    'Minor': 'Major',
+}
 
 
 def validate_subclone_fraction_prior(subclone_fraction_prior):
@@ -68,6 +75,12 @@ def validate_subclone_fraction_prior(subclone_fraction_prior):
             f'subclone_fraction_prior must be one of: {permitted}'
         )
     return subclone_fraction_prior
+
+
+def validate_unordered_balanced_route_prior(unordered_balanced_route_prior):
+    if not isinstance(unordered_balanced_route_prior, (bool, np.bool_)):
+        raise ValueError('unordered_balanced_route_prior must be a boolean')
+    return bool(unordered_balanced_route_prior)
 
 
 def get_sample_clone_fractions(subclone_table):
@@ -325,6 +338,41 @@ def get_mult_store_cache_key(
     )
 
 
+def _get_mirror_node_map(source_tree, target_tree):
+    """Map source nodes onto the target after exchanging allele identities."""
+    allele_attribute = treetools.ALLELE_ATTRIBUTE
+
+    def node_match(source_attributes, target_attributes):
+        source_allele = source_attributes.get(allele_attribute)
+        return (
+            _MIRROR_ALLELE.get(source_allele)
+            == target_attributes.get(allele_attribute)
+            and source_attributes.get('WGD_Symbol')
+            == target_attributes.get('WGD_Symbol')
+            and source_attributes.get('Terminal_Node')
+            == target_attributes.get('Terminal_Node')
+        )
+
+    matcher = nx.algorithms.isomorphism.DiGraphMatcher(
+        source_tree,
+        target_tree,
+        node_match=node_match,
+    )
+    try:
+        node_map = next(matcher.isomorphisms_iter())
+    except StopIteration as error:
+        raise ValueError(
+            'Balanced mirror routes must be structurally isomorphic after '
+            'exchanging Major and Minor alleles'
+        ) from error
+
+    if set(node_map) != set(source_tree) or set(node_map.values()) != set(
+        target_tree
+    ):
+        raise ValueError('Balanced mirror route node mapping must be bijective')
+    return node_map
+
+
 class Route:
     def __init__(
         self,
@@ -347,14 +395,32 @@ class Route:
         self.wgd_status = wgd_status
         self.mult_store_dir = mult_store_dir
         self.cache_namespace = cache_namespace
+        self.mirror_route_id = None
+        if major_cn == minor_cn and minor_cn > 0:
+            self.mirror_route_id = treetools.get_mirror_tree_hash(tree)
         self.ll_store = None
         self.node_timing = None
         self.wgd_timing_store = None
         self.n_events_store = None
         self.mult_store = None
+        self.raw_samples = None
+        self.unphased_mirror_source = None
         self.density = None
         self.density_high = None
 
+        self.run_time = np.nan
+
+    def reset_fit(self):
+        """Clear likelihood-dependent state before fitting new mutation data."""
+        self.ll_store = None
+        self.node_timing = None
+        self.wgd_timing_store = None
+        self.n_events_store = None
+        self.mult_store = None
+        self.raw_samples = None
+        self.unphased_mirror_source = None
+        self.density = None
+        self.density_high = None
         self.run_time = np.nan
 
     
@@ -514,44 +580,213 @@ class Route:
     def load_gz_numpy(self,path):
         with gzip.open(path,'rb') as f:
             return np.load(f)
+
+    def _get_mult_store_cache_paths(
+        self,
+        route_id,
+        wgd_timing_distribution,
+    ):
+        cache_dir = pathlib.Path(
+            self.mult_store_dir,
+            self.cache_namespace,
+        )
+        cache_key = get_mult_store_cache_key(
+            route_id,
+            self.wgd_status,
+            wgd_timing_distribution,
+        )
+        cache_suffix = f'{cache_key}.npy.gz'
+        return {
+            'Mult': cache_dir / f'mult_store_{cache_suffix}',
+            'Timing': cache_dir / f'timing_store_{cache_suffix}',
+            'WGD_Timing': cache_dir / f'wgd_timing_store_{cache_suffix}',
+            'Density': cache_dir / f'density_store_{cache_suffix}',
+        }
+
+    def _load_mult_store_cache(self, cache_paths):
+        return (
+            self.load_gz_numpy(cache_paths['Mult']),
+            self.load_gz_numpy(cache_paths['Timing']),
+            self.load_gz_numpy(cache_paths['WGD_Timing']),
+            self.load_gz_numpy(cache_paths['Density']),
+        )
+
+    @staticmethod
+    def _mult_store_cache_exists(cache_paths, route_id):
+        existing_paths = {
+            label: path.is_file()
+            for label, path in cache_paths.items()
+        }
+        if any(existing_paths.values()) and not all(existing_paths.values()):
+            missing = [
+                label
+                for label, exists in existing_paths.items()
+                if not exists
+            ]
+            raise FileNotFoundError(
+                f'Incomplete proposal cache for route {route_id}; missing: '
+                + ', '.join(missing)
+            )
+        return all(existing_paths.values())
+
+    def _save_mult_store_cache(
+        self,
+        cache_paths,
+        mult_store,
+        timing_store,
+        wgd_timing_store,
+        density,
+    ):
+        self.save_gz_numpy(cache_paths['Mult'], mult_store)
+        self.save_gz_numpy(cache_paths['Timing'], timing_store)
+        self.save_gz_numpy(cache_paths['WGD_Timing'], wgd_timing_store)
+        self.save_gz_numpy(cache_paths['Density'], density)
+
+    def _validate_mirror_route(self, mirror_route):
+        if mirror_route is None:
+            return False
+        if self.mirror_route_id is None:
+            raise ValueError('Only balanced two-component routes have mirrors')
+        if mirror_route.route_id != self.mirror_route_id:
+            raise ValueError(
+                'The supplied mirror route does not match the expected ordered '
+                'mirror route ID'
+            )
+        if mirror_route.mirror_route_id != self.route_id:
+            raise ValueError('Balanced route mirror relationships must be reciprocal')
+        return mirror_route is not self
+
+    def _transform_mirror_timing_store(self, source_store, mirror_route):
+        source_store = np.asarray(source_store)
+        source_order = mirror_route.route_tree.non_phased_node_order
+        target_order = self.route_tree.non_phased_node_order
+        if source_store.ndim != 2 or source_store.shape[0] != len(source_order):
+            raise ValueError(
+                'Mirror timing store rows must match the source route node order'
+            )
+
+        node_map = _get_mirror_node_map(
+            mirror_route.route_tree.main_tree,
+            self.route_tree.main_tree,
+        )
+        target_positions = {
+            node: position for position, node in enumerate(target_order)
+        }
+        transformed_store = np.empty(
+            (len(target_order), source_store.shape[1]),
+            dtype=source_store.dtype,
+        )
+        for source_position, source_node in enumerate(source_order):
+            target_node = node_map[source_node]
+            transformed_store[target_positions[target_node], :] = source_store[
+                source_position,
+                :,
+            ]
+        return transformed_store
+
+    def _transform_mirror_mult_store(
+        self,
+        source_store,
+        n_subclones,
+    ):
+        source_store = np.asarray(source_store)
+        if self.major_cn != self.minor_cn or self.minor_cn <= 0:
+            raise ValueError(
+                'Mirror multiplicity transformation requires balanced positive '
+                'copy number'
+            )
+        expected_columns = 3 * self.major_cn + n_subclones
+        if source_store.ndim != 2 or source_store.shape[1] != expected_columns:
+            raise ValueError(
+                'Mirror multiplicity store has an unexpected number of columns'
+            )
+
+        transformed_store = source_store.copy()
+        major_start = self.major_cn
+        minor_start = 2 * self.major_cn
+        subclone_start = 3 * self.major_cn
+        transformed_store[:, major_start:minor_start] = source_store[
+            :,
+            minor_start:subclone_start,
+        ]
+        transformed_store[:, minor_start:subclone_start] = source_store[
+            :,
+            major_start:minor_start,
+        ]
+        return transformed_store
+
+    def _transform_mirror_proposal_store(
+        self,
+        mirror_route,
+        mult_store,
+        timing_store,
+        wgd_timing_store,
+        density,
+        n_subclones,
+    ):
+        return (
+            self._transform_mirror_mult_store(mult_store, n_subclones),
+            self._transform_mirror_timing_store(timing_store, mirror_route),
+            np.asarray(wgd_timing_store).copy(),
+            np.asarray(density).copy(),
+        )
     
-    def get_mult_store(self,alpha,n_subclones,wgd_timing_distribution):
+    def get_mult_store(
+        self,
+        alpha,
+        n_subclones,
+        wgd_timing_distribution,
+        mirror_route=None,
+    ):
         if self.mult_store_dir is not None:
             cache_dir = pathlib.Path(
                 self.mult_store_dir,
                 self.cache_namespace,
             )
             os.makedirs(cache_dir,exist_ok=True)
-
-            cache_key = get_mult_store_cache_key(
+            cache_paths = self._get_mult_store_cache_paths(
                 self.route_id,
-                self.wgd_status,
                 wgd_timing_distribution,
             )
-            cache_suffix = f'{cache_key}.npy.gz'
-            mult_store_path = cache_dir/f'mult_store_{cache_suffix}'
-            timing_store_path = cache_dir/f'timing_store_{cache_suffix}'
-            wgd_timing_store_path = (
-                cache_dir/f'wgd_timing_store_{cache_suffix}'
-            )
-            density_store_path = cache_dir/f'density_store_{cache_suffix}'
 
-            if os.path.exists(mult_store_path):
-                mult_store = self.load_gz_numpy(mult_store_path)
-                timing_store = self.load_gz_numpy(timing_store_path)
-                
-                wgd_timing_store = self.load_gz_numpy(wgd_timing_store_path)
-                density = self.load_gz_numpy(density_store_path)
+            if self._mult_store_cache_exists(
+                cache_paths,
+                self.route_id,
+            ):
+                return self._load_mult_store_cache(cache_paths)
 
-
-                return mult_store,timing_store,wgd_timing_store,density
+            if self._validate_mirror_route(mirror_route):
+                mirror_cache_paths = self._get_mult_store_cache_paths(
+                    mirror_route.route_id,
+                    wgd_timing_distribution,
+                )
+                if self._mult_store_cache_exists(
+                    mirror_cache_paths,
+                    mirror_route.route_id,
+                ):
+                    mirror_store = self._load_mult_store_cache(
+                        mirror_cache_paths
+                    )
+                    transformed_store = self._transform_mirror_proposal_store(
+                        mirror_route,
+                        *mirror_store,
+                        n_subclones,
+                    )
+                    self._save_mult_store_cache(
+                        cache_paths,
+                        *transformed_store,
+                    )
+                    return transformed_store
         mult_store,timing_store,wgd_timing_store,density = self.run_mult_sampling(alpha,n_subclones,wgd_timing_distribution)
         
         if self.mult_store_dir is not None:
-            self.save_gz_numpy(mult_store_path,mult_store)
-            self.save_gz_numpy(timing_store_path,timing_store)
-            self.save_gz_numpy(wgd_timing_store_path,wgd_timing_store)
-            self.save_gz_numpy(density_store_path,density)
+            self._save_mult_store_cache(
+                cache_paths,
+                mult_store,
+                timing_store,
+                wgd_timing_store,
+                density,
+            )
         
         return mult_store,timing_store,wgd_timing_store,density
 
@@ -567,6 +802,78 @@ class Route:
         raw_samples_store['WGD_Timing'] = wgd_timing_store[random_indexes].copy()
         raw_samples_store['LL'] = ll_store[random_indexes].copy()
         return raw_samples_store
+
+    @staticmethod
+    def _contains_phased_mutations(mult_probabilities):
+        return bool(
+            mult_probabilities.use_major
+            or mult_probabilities.use_minor
+        )
+
+    def _reuse_fitted_unphased_mirror(self, mirror_route, n_subclones):
+        """Derive an exact oriented copy of a fitted unphased mirror route."""
+        if not self._validate_mirror_route(mirror_route):
+            raise ValueError('A distinct fitted mirror route is required')
+        required_attributes = (
+            'll_store',
+            'node_timing',
+            'wgd_timing_store',
+            'mult_store',
+            'raw_samples',
+            'n_events_store',
+            'density',
+            'density_high',
+        )
+        missing_attributes = [
+            attribute
+            for attribute in required_attributes
+            if getattr(mirror_route, attribute, None) is None
+        ]
+        if missing_attributes:
+            raise ValueError(
+                'The mirror route must be fully fitted before reuse; missing: '
+                + ', '.join(missing_attributes)
+            )
+
+        self.ll_store = mirror_route.ll_store
+        self.node_timing = self._transform_mirror_timing_store(
+            mirror_route.node_timing,
+            mirror_route,
+        )
+        self.wgd_timing_store = mirror_route.wgd_timing_store.copy()
+        self.mult_store = self._transform_mirror_mult_store(
+            mirror_route.mult_store,
+            n_subclones,
+        )
+        self.n_events_store = {
+            event_type: np.asarray(event_values).copy()
+            for event_type, event_values in mirror_route.n_events_store.items()
+        }
+        self.density = mirror_route.density
+        self.density_high = mirror_route.density_high
+        self.unphased_mirror_source = mirror_route
+
+        node_map = _get_mirror_node_map(
+            mirror_route.route_tree.main_tree,
+            self.route_tree.main_tree,
+        )
+        source_raw_samples = mirror_route.raw_samples
+        self.raw_samples = {
+            'Timing': {
+                node_map[source_node]: np.asarray(node_timing).copy()
+                for source_node, node_timing in source_raw_samples[
+                    'Timing'
+                ].items()
+            },
+            'Mult': self._transform_mirror_mult_store(
+                source_raw_samples['Mult'],
+                n_subclones,
+            ),
+            'WGD_Timing': np.asarray(
+                source_raw_samples['WGD_Timing']
+            ).copy(),
+            'LL': source_raw_samples['LL'],
+        }
     
     def run_sampling(
         self,
@@ -574,9 +881,11 @@ class Route:
         subclone_table,
         wgd_timing_distribution,
         subclone_fraction_prior=DEFAULT_SUBCLONE_FRACTION_PRIOR,
+        mirror_route=None,
     ):
 
         run_time = time.perf_counter()
+        self.unphased_mirror_source = None
 
         subclone_fraction_prior = validate_subclone_fraction_prior(
             subclone_fraction_prior
@@ -586,6 +895,19 @@ class Route:
             if subclone_table is None
             else len(subclone_table.index)
         )
+        if (
+            not self._contains_phased_mutations(mult_probabilities)
+            and mirror_route is not None
+            and mirror_route is not self
+            and mirror_route.ll_store is not None
+        ):
+            self._reuse_fitted_unphased_mirror(
+                mirror_route,
+                n_subclones,
+            )
+            self.run_time = time.perf_counter() - run_time
+            return
+
         alpha = None
         if n_subclones > 0:
             sample_clone_fractions = get_sample_clone_fractions(
@@ -604,7 +926,12 @@ class Route:
                 subclone_fraction_prior,
             )
 
-        mult_store,timing_store,wgd_timing_store,density = self.get_mult_store(alpha,n_subclones,wgd_timing_distribution)
+        mult_store,timing_store,wgd_timing_store,density = self.get_mult_store(
+            alpha,
+            n_subclones,
+            wgd_timing_distribution,
+            mirror_route=mirror_route,
+        )
 
         ll_store = mult_probabilities.evaluate_likelihood_array(mult_store)
         self.raw_samples = self.get_raw_samples_store(mult_store,timing_store,wgd_timing_store,ll_store)
@@ -636,6 +963,7 @@ class RouteClassifier:
         *,
         subclone_fraction_prior=DEFAULT_SUBCLONE_FRACTION_PRIOR,
         segment_cache_identity=None,
+        unordered_balanced_route_prior=DEFAULT_UNORDERED_BALANCED_ROUTE_PRIOR,
     ):
         self.major_cn = major_cn
         self.minor_cn = minor_cn
@@ -645,6 +973,11 @@ class RouteClassifier:
             subclone_fraction_prior
         )
         self.segment_cache_identity = segment_cache_identity
+        self.unordered_balanced_route_prior = (
+            validate_unordered_balanced_route_prior(
+                unordered_balanced_route_prior
+            )
+        )
         self.cache_namespace = None
         self.routes = self.generate_routes(wgd_trees_status)
 
@@ -673,8 +1006,22 @@ class RouteClassifier:
             )
             possible_routes[tree_id] = route
         return possible_routes
+
+    def get_route_prior_weight(self, route):
+        """Return the optional unordered-model prior weight for a route."""
+        if not self.unordered_balanced_route_prior:
+            return 1.0
+        if self.major_cn != self.minor_cn or self.minor_cn <= 0:
+            return 1.0
+        if route.mirror_route_id == route.route_id:
+            return 1.0
+        return 0.5
  
     def fit_routes(self,mult_probabilities,subclone_table,wgd_timing_distribution):
+        self.route_probabilities = {}
+        for route in self.routes.values():
+            route.reset_fit()
+
         self.cache_subclone_fraction_prior = (
             get_cache_subclone_fraction_prior(
                 self.subclone_fraction_prior,
@@ -693,24 +1040,49 @@ class RouteClassifier:
         route_ids = list(sorted(self.routes.keys()))
         for route_id in route_ids:
             route = self.routes[route_id]
+            mirror_route = None
+            if route.mirror_route_id is not None:
+                if route.mirror_route_id not in self.routes:
+                    raise ValueError(
+                        'Every balanced ordered route must have its mirror in '
+                        'the route classifier'
+                    )
+                mirror_route = self.routes[route.mirror_route_id]
             route.run_sampling(
                 mult_probabilities,
                 subclone_table,
                 wgd_timing_distribution,
                 self.subclone_fraction_prior,
+                mirror_route=mirror_route,
             )
             route_ll_store.append(route.ll_store)
 
         #helps keep the exponentiation under control
-        max_point = np.max(np.concatenate(route_ll_store))
+        max_point = np.max([
+            np.max(route_ll)
+            for route_ll in route_ll_store
+        ])
         likelihood_store =[]
+        likelihood_by_ll_store = {}
         
         for route_ll in route_ll_store:
-            route_likelihoods = np.exp(route_ll-max_point)
-            average_likelihood = np.average(route_likelihoods)
+            store_identity = id(route_ll)
+            if store_identity not in likelihood_by_ll_store:
+                route_likelihoods = np.exp(route_ll-max_point)
+                likelihood_by_ll_store[store_identity] = np.average(
+                    route_likelihoods
+                )
+            average_likelihood = likelihood_by_ll_store[store_identity]
             likelihood_store.append(average_likelihood)
         
-        likelihood_store = np.array(likelihood_store)/np.sum(likelihood_store)
+        likelihood_store = np.asarray(likelihood_store)
+        if self.unordered_balanced_route_prior:
+            route_prior_weights = np.array([
+                self.get_route_prior_weight(self.routes[route_id])
+                for route_id in route_ids
+            ])
+            likelihood_store = likelihood_store * route_prior_weights
+        likelihood_store = likelihood_store / np.sum(likelihood_store)
 
         for i,route_id in enumerate(route_ids):
             self.route_probabilities[route_id] = likelihood_store[i]
@@ -836,6 +1208,43 @@ class RouteClassifier:
         timing_dict = {}
         
         for route, _ in self._get_output_routes():
+            mirror_source = getattr(route, 'unphased_mirror_source', None)
+            if mirror_source is not None:
+                if mirror_source.short_id not in timing_dict:
+                    raise ValueError(
+                        'An unphased mirror source must be serialized before '
+                        'its derived ordered route'
+                    )
+                source_samples = timing_dict[mirror_source.short_id]
+                node_map = _get_mirror_node_map(
+                    mirror_source.route_tree.main_tree,
+                    route.route_tree.main_tree,
+                )
+                n_subclones = (
+                    source_samples['Mult'].shape[1]
+                    - 3 * route.major_cn
+                )
+                route_samples = {
+                    'Timing': {
+                        'WGD': source_samples['Timing']['WGD'].copy(),
+                    },
+                    'Mult': route._transform_mirror_mult_store(
+                        source_samples['Mult'],
+                        n_subclones,
+                    ),
+                    'Raw_Samples': route.raw_samples,
+                }
+                for source_node, source_timing in source_samples[
+                    'Timing'
+                ].items():
+                    if source_node == 'WGD':
+                        continue
+                    route_samples['Timing'][node_map[source_node]] = (
+                        source_timing.copy()
+                    )
+                timing_dict[route.short_id] = route_samples
+                continue
+
             route_samples = {'Timing':{}}
             
             wgd_timing_store =route.wgd_timing_store
@@ -1074,6 +1483,7 @@ def _time_wgd_segment(
     mult_store_dir,
     interval_config,
     subclone_fraction_prior,
+    unordered_balanced_route_prior,
 ):
     segment_cache_identity = get_segment_cache_identity(
         getattr(segment, 'segment_id', str(segment))
@@ -1095,6 +1505,7 @@ def _time_wgd_segment(
             mult_store_dir,
             subclone_fraction_prior=subclone_fraction_prior,
             segment_cache_identity=segment_cache_identity,
+            unordered_balanced_route_prior=unordered_balanced_route_prior,
         )
 
         classifier.fit_routes(
@@ -1136,9 +1547,13 @@ def time_wgd_major_cn_2(
     timing_dict_dir,
     interval_config=DEFAULT_TIMING_INTERVALS,
     subclone_fraction_prior=DEFAULT_SUBCLONE_FRACTION_PRIOR,
+    unordered_balanced_route_prior=DEFAULT_UNORDERED_BALANCED_ROUTE_PRIOR,
 ):
     subclone_fraction_prior = validate_subclone_fraction_prior(
         subclone_fraction_prior
+    )
+    unordered_balanced_route_prior = validate_unordered_balanced_route_prior(
+        unordered_balanced_route_prior
     )
 
     wgd_timing_table_path = output_dir/f"{sample.sample_id}_gain_timing_table_wgd_segments.tsv"
@@ -1162,6 +1577,7 @@ def time_wgd_major_cn_2(
             mult_store_dir,
             interval_config,
             subclone_fraction_prior,
+            unordered_balanced_route_prior,
         )
         wgd_timing_tables.append(wgd_timing_table)
 
@@ -1210,6 +1626,7 @@ def time_wgd_major_cn_2(
         mult_store_dir,
         timing_dict_dir,
         subclone_fraction_prior=subclone_fraction_prior,
+        unordered_balanced_route_prior=unordered_balanced_route_prior,
     )
     wgd_timing_distribution = get_combined_distribution(cn_distributions)
     
@@ -1229,6 +1646,7 @@ def _time_combined_wgd_segment(
     mult_store_dir,
     timing_dict_dir,
     subclone_fraction_prior,
+    unordered_balanced_route_prior,
 ):
     mutation_table = mutation_table.copy()
     mutation_table['Segment_ID'] = f'Minor_CN_{minor_cn}'
@@ -1265,6 +1683,7 @@ def _time_combined_wgd_segment(
             mult_store_dir,
             subclone_fraction_prior=subclone_fraction_prior,
             segment_cache_identity=segment_cache_identity,
+            unordered_balanced_route_prior=unordered_balanced_route_prior,
         )
         classifier.fit_routes(
             mult_probabilities,
@@ -1296,9 +1715,13 @@ def get_combined_segment_timing_cn_2(
     mult_store_dir,
     timing_dict_dir,
     subclone_fraction_prior=DEFAULT_SUBCLONE_FRACTION_PRIOR,
+    unordered_balanced_route_prior=DEFAULT_UNORDERED_BALANCED_ROUTE_PRIOR,
 ):
     subclone_fraction_prior = validate_subclone_fraction_prior(
         subclone_fraction_prior
+    )
+    unordered_balanced_route_prior = validate_unordered_balanced_route_prior(
+        unordered_balanced_route_prior
     )
 
     mutation_tables = []
@@ -1361,6 +1784,7 @@ def get_combined_segment_timing_cn_2(
                 mult_store_dir,
                 timing_dict_dir,
                 subclone_fraction_prior,
+                unordered_balanced_route_prior,
             )
         )
     
@@ -1468,6 +1892,7 @@ def _process_segment(
     wgd_info,
     interval_config,
     subclone_fraction_prior,
+    unordered_balanced_route_prior,
     route_table_path,
     timing_table_path,
 ):
@@ -1488,6 +1913,7 @@ def _process_segment(
             mult_store_dir,
             subclone_fraction_prior=subclone_fraction_prior,
             segment_cache_identity=segment_cache_identity,
+            unordered_balanced_route_prior=unordered_balanced_route_prior,
         )
         classifier.fit_routes(
             segment.multiplicity_probabilities,
@@ -1555,9 +1981,13 @@ def process_segments(
     wgd_info,
     interval_config=DEFAULT_TIMING_INTERVALS,
     subclone_fraction_prior=DEFAULT_SUBCLONE_FRACTION_PRIOR,
+    unordered_balanced_route_prior=DEFAULT_UNORDERED_BALANCED_ROUTE_PRIOR,
 ):
     subclone_fraction_prior = validate_subclone_fraction_prior(
         subclone_fraction_prior
+    )
+    unordered_balanced_route_prior = validate_unordered_balanced_route_prior(
+        unordered_balanced_route_prior
     )
 
     route_table_path = output_dir/f"{sample_id}_route_table.tsv"
@@ -1588,6 +2018,7 @@ def process_segments(
                     wgd_info,
                     interval_config,
                     subclone_fraction_prior,
+                    unordered_balanced_route_prior,
                     route_table_path,
                     timing_table_path,
                 )
@@ -1633,6 +2064,7 @@ def _process_sample_with_mult_store(
     wgd_count,
     interval_config,
     subclone_fraction_prior,
+    unordered_balanced_route_prior,
     major_cn_mode,
 ):
     if wgd_count is not None:
@@ -1660,6 +2092,7 @@ def _process_sample_with_mult_store(
                 timing_dict_dir,
                 interval_config=interval_config,
                 subclone_fraction_prior=subclone_fraction_prior,
+                unordered_balanced_route_prior=unordered_balanced_route_prior,
             )
             wgd_status = True
         else:
@@ -1687,6 +2120,7 @@ def _process_sample_with_mult_store(
             timing_dict_dir,
             interval_config=interval_config,
             subclone_fraction_prior=subclone_fraction_prior,
+            unordered_balanced_route_prior=unordered_balanced_route_prior,
         )
         if overlap_proportion < min_wgd_overlap:
             warnings.warn(
@@ -1736,6 +2170,7 @@ def _process_sample_with_mult_store(
         wgd_info=wgd_info,
         interval_config=interval_config,
         subclone_fraction_prior=subclone_fraction_prior,
+        unordered_balanced_route_prior=unordered_balanced_route_prior,
     )
 
     if os.path.exists(route_table_path):
@@ -1776,11 +2211,15 @@ def process_sample(
     wgd_count=None,
     interval_config=DEFAULT_TIMING_INTERVALS,
     subclone_fraction_prior=DEFAULT_SUBCLONE_FRACTION_PRIOR,
+    unordered_balanced_route_prior=DEFAULT_UNORDERED_BALANCED_ROUTE_PRIOR,
 ):
     if not isinstance(interval_config, TimingIntervalConfig):
         raise TypeError('interval_config must be a TimingIntervalConfig')
     subclone_fraction_prior = validate_subclone_fraction_prior(
         subclone_fraction_prior
+    )
+    unordered_balanced_route_prior = validate_unordered_balanced_route_prior(
+        unordered_balanced_route_prior
     )
     wgd_count = _validate_wgd_count(wgd_count)
     min_wgd_overlap = _validate_min_wgd_overlap(min_wgd_overlap)
@@ -1836,6 +2275,7 @@ def process_sample(
             wgd_count,
             interval_config,
             subclone_fraction_prior,
+            unordered_balanced_route_prior,
             major_cn_mode,
         )
     finally:

@@ -10,6 +10,7 @@ from gritic.intervaltools import DEFAULT_TIMING_INTERVALS, get_interval_bounds
 from gritic.tableschemas import (
     GAIN_DRAW_COLUMNS,
     GAIN_TIMING_TABLE_COLUMNS,
+    NODE_PHASING_LABELS,
     ROUTE_DRAW_COLUMNS,
     ROUTE_KEY_COLUMNS,
     ROUTE_TABLE_COLUMNS,
@@ -243,6 +244,30 @@ def _validate_gain_timing_table(gain_timing_table, route_table, sample_id):
         raise ValueError(
             f'The gain timing table for sample {sample_id} contains other '
             f"Sample_ID values: {', '.join(unexpected_sample_ids)}"
+        )
+
+    invalid_node_phasing = ~gain_timing_table['Node_Phasing'].isin(
+        NODE_PHASING_LABELS
+    )
+    if invalid_node_phasing.any():
+        def describe_value(value):
+            if pd.isna(value):
+                return '<missing/NaN>'
+            if isinstance(value, str) and not value.strip():
+                return '<blank>'
+            return repr(value)
+
+        invalid_values = sorted({
+            describe_value(value)
+            for value in gain_timing_table.loc[
+                invalid_node_phasing,
+                'Node_Phasing',
+            ]
+        })
+        raise ValueError(
+            'The gain timing table Node_Phasing column must contain only '
+            'the exact, case-sensitive values Major or Minor; invalid '
+            f"value(s): {', '.join(invalid_values)}"
         )
 
     duplicate_nodes = gain_timing_table.duplicated(

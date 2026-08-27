@@ -1,5 +1,6 @@
 ROUTE_KEY_COLUMNS = ['Sample_ID', 'Segment_ID', 'Route']
 SEGMENT_KEY_COLUMNS = ['Sample_ID', 'Segment_ID']
+NODE_PHASING_LABELS = ('Major', 'Minor')
 
 SEGMENT_METADATA_COLUMNS = [
     'Sample_ID',

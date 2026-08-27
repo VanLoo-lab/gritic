@@ -578,6 +578,35 @@ def validate_or_drop_phasing_labels(
     return mutation_table
 
 
+def validate_phasing_copy_number_consistency(mutation_table):
+    """Reject minor-phased mutations assigned to zero-minor-copy segments."""
+    if 'Phasing' not in mutation_table.columns:
+        return mutation_table
+
+    invalid_minor_phasing = (
+        mutation_table['Phasing'].eq('minor').fillna(False)
+        & mutation_table['Minor_CN'].eq(0)
+    )
+    if not invalid_minor_phasing.any():
+        return mutation_table
+
+    affected_mutations = mutation_table.loc[
+        invalid_minor_phasing,
+        ['GRITIC_Mutation_ID', 'Segment_ID'],
+    ]
+    affected_description = ', '.join(
+        f"({row.GRITIC_Mutation_ID!r}, {row.Segment_ID!r})"
+        for row in affected_mutations.itertuples(index=False)
+    )
+    raise ValueError(
+        "Mutation table contains mutation(s) phased to the minor allele in "
+        "copy-number segments with Minor_CN=0. Minor-phased mutations require "
+        "Minor_CN > 0; correct the Phasing value or copy-number assignment for "
+        "the affected (GRITIC_Mutation_ID, Segment_ID) pair(s): "
+        + affected_description
+    )
+
+
 def validate_copy_number_values(copy_number_table):
     """Validate and canonicalize allele-specific copy numbers."""
     copy_number_table = copy_number_table.copy()

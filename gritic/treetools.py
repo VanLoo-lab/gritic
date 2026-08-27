@@ -2,7 +2,19 @@ import networkx as nx
 import itertools
 import hashlib
 import warnings
-import numpy as np
+
+from gritic.tableschemas import NODE_PHASING_LABELS
+
+
+ALLELE_ATTRIBUTE = 'Allele'
+EMPTY_MINOR_COMPONENT_HASH = '<empty-minor>'
+_ORDERED_TREE_HASH_VERSION = 'ordered-alleles-v1'
+_ROUTE_IDENTITY_NODE_ATTRIBUTES = (
+    ALLELE_ATTRIBUTE,
+    'WGD_Symbol',
+    'Terminal_Node',
+)
+
 #problem posed  https://leetcode.com/problems/all-possible-full-binary-trees/
 #code from https://www.youtube.com/watch?v=nZtrZPTTCAo
 # Definition for a binary tree node.
@@ -70,9 +82,15 @@ def convert_to_plotting_tree(route_tree,wgd_timing,route_timing_summary,node_ord
 
                 plotting_tree.nodes[new_predecessor]['Loss_Symbol']=False
                 plotting_tree.nodes[new_predecessor]['WGD_Symbol']=True
+                plotting_tree.nodes[new_predecessor][ALLELE_ATTRIBUTE] = (
+                    route_tree.nodes[node][ALLELE_ATTRIBUTE]
+                )
                 
                 plotting_tree.nodes[new_loss]['WGD_Symbol']=False
                 plotting_tree.nodes[new_loss]['Loss_Symbol']=True
+                plotting_tree.nodes[new_loss][ALLELE_ATTRIBUTE] = (
+                    route_tree.nodes[node][ALLELE_ATTRIBUTE]
+                )
                 if predecessor is not None:
                     
                     plotting_tree.remove_edge(predecessor,node)
@@ -80,44 +98,190 @@ def convert_to_plotting_tree(route_tree,wgd_timing,route_timing_summary,node_ord
 
     return plotting_tree
 
+def _get_allele_node_sets(tree):
+    allele_nodes = {allele: set() for allele in NODE_PHASING_LABELS}
+    for node, attributes in tree.nodes(data=True):
+        allele = attributes.get(ALLELE_ATTRIBUTE)
+        if allele not in allele_nodes:
+            raise ValueError(
+                f'Every route node must have {ALLELE_ATTRIBUTE}=Major or '
+                f'Minor; node {node!r} has {allele!r}'
+            )
+        allele_nodes[allele].add(node)
+
+    major_nodes = allele_nodes['Major']
+    minor_nodes = allele_nodes['Minor']
+    if not major_nodes:
+        raise ValueError('A route tree must contain a Major allele component')
+
+    for allele, nodes in allele_nodes.items():
+        if not nodes:
+            continue
+        component = tree.subgraph(nodes).to_undirected()
+        if not nx.is_connected(component):
+            raise ValueError(
+                f'The {allele} allele must form exactly one connected component'
+            )
+
+    for source, target in tree.edges:
+        if tree.nodes[source][ALLELE_ATTRIBUTE] != tree.nodes[target][ALLELE_ATTRIBUTE]:
+            raise ValueError('Route-tree edges cannot connect different alleles')
+
+    return major_nodes, minor_nodes
+
+
+def _get_component_hash(component):
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            'ignore',
+            message=(
+                r'^The hashes produced for directed graphs changed in '
+                r'version v3\.5 due to a bugfix to track in and out edges '
+                r'separately \(see documentation\)\.$'
+            ),
+            category=UserWarning,
+        )
+        return nx.weisfeiler_lehman_graph_hash(
+            component,
+            node_attr='WGD_Symbol',
+        )
+
+
+def get_ordered_component_hashes(tree):
+    """Return the Major and Minor topology hashes in explicit allele order."""
+    major_nodes, minor_nodes = _get_allele_node_sets(tree)
+    major_hash = _get_component_hash(tree.subgraph(major_nodes))
+    minor_hash = EMPTY_MINOR_COMPONENT_HASH
+    if minor_nodes:
+        minor_hash = _get_component_hash(tree.subgraph(minor_nodes))
+    return major_hash, minor_hash
+
+
+def _combine_ordered_component_hashes(major_hash, minor_hash):
+    identity = (
+        f'{_ORDERED_TREE_HASH_VERSION}|Major:{major_hash}|Minor:{minor_hash}'
+    )
+    return hashlib.md5(identity.encode('utf-8')).hexdigest()
+
+
 def get_tree_hash(tree):
-    connected_nodes = list(nx.connected_components(tree.to_undirected()))
-    hashes = []
-    for nodes in connected_nodes:
-        sub_tree = tree.subgraph(nodes)
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                'ignore',
-                message=(
-                    r'^The hashes produced for directed graphs changed in '
-                    r'version v3\.5 due to a bugfix to track in and out edges '
-                    r'separately \(see documentation\)\.$'
-                ),
-                category=UserWarning,
-            )
-            tree_hash = nx.weisfeiler_lehman_graph_hash(
-                sub_tree,
-                node_attr='WGD_Symbol',
-            )
-        hashes.append(tree_hash)
-    joint_hash = '-'.join(sorted(hashes))
-    final_hash = hashlib.md5(joint_hash.encode('utf-8')).hexdigest()
-    return final_hash
-    
-def convert_to_nx_tree(tree,D=None,current_node_id=0):
+    """Hash a route forest while preserving Major/Minor component identity."""
+    return _combine_ordered_component_hashes(
+        *get_ordered_component_hashes(tree)
+    )
+
+
+def _route_trees_are_isomorphic(first_tree, second_tree):
+    """Compare every node attribute that contributes to route identity."""
+    missing_attribute = object()
+
+    def node_match(first_attributes, second_attributes):
+        return all(
+            first_attributes.get(attribute, missing_attribute)
+            == second_attributes.get(attribute, missing_attribute)
+            for attribute in _ROUTE_IDENTITY_NODE_ATTRIBUTES
+        )
+
+    return nx.is_isomorphic(
+        first_tree,
+        second_tree,
+        node_match=node_match,
+    )
+
+
+def _register_ordered_tree(tree_store, tree_id, tree, context):
+    """Store one isomorphism representative and reject true hash collisions."""
+    retained_tree = tree_store.get(tree_id)
+    if retained_tree is None:
+        tree_store[tree_id] = tree
+        return True
+
+    if not _route_trees_are_isomorphic(retained_tree, tree):
+        raise ValueError(
+            f'Ordered route hash collision for {tree_id!r} while {context}: '
+            'non-isomorphic route trees share one identifier'
+        )
+    return False
+
+
+def _get_component_leaf_count(tree, component_nodes):
+    return sum(tree.out_degree(node) == 0 for node in component_nodes)
+
+
+def get_mirror_tree(tree):
+    """Return the balanced route obtained by exchanging its allele identities."""
+    major_nodes, minor_nodes = _get_allele_node_sets(tree)
+    major_leaf_count = _get_component_leaf_count(tree, major_nodes)
+    minor_leaf_count = _get_component_leaf_count(tree, minor_nodes)
+    if (
+        major_leaf_count <= 0
+        or minor_leaf_count <= 0
+        or major_leaf_count != minor_leaf_count
+    ):
+        raise ValueError(
+            'Only balanced two-allele routes with equal positive terminal '
+            'copy counts have a mirror route'
+        )
+
+    mirror_tree = tree.copy()
+    for node in major_nodes:
+        mirror_tree.nodes[node][ALLELE_ATTRIBUTE] = 'Minor'
+    for node in minor_nodes:
+        mirror_tree.nodes[node][ALLELE_ATTRIBUTE] = 'Major'
+    return mirror_tree
+
+
+def get_mirror_tree_hash(tree):
+    """Return the ordered route ID of a balanced route's mirror."""
+    return get_tree_hash(get_mirror_tree(tree))
+
+
+def _get_new_node_id(tree):
+    node_id = len(tree)
+    while node_id in tree:
+        node_id += 1
+    return node_id
+
+
+def convert_to_nx_tree(tree,allele,D=None,current_node_id=0):
+    if allele not in NODE_PHASING_LABELS:
+        raise ValueError(f'allele must be Major or Minor, not {allele!r}')
     if D is None:
         D = nx.DiGraph()
-        D.add_node(current_node_id,WGD_Symbol=False,Terminal_Node=False)
-    if tree.left is not None:            
-        new_node_id = len(D.nodes)
-        D.add_node(new_node_id,WGD_Symbol=False,Terminal_Node=False)
+    if current_node_id not in D:
+        D.add_node(current_node_id)
+
+    current_attributes = D.nodes[current_node_id]
+    current_allele = current_attributes.get(ALLELE_ATTRIBUTE)
+    if current_allele is not None and current_allele != allele:
+        raise ValueError(
+            f'Cannot extend {current_allele!r} allele node {current_node_id!r} '
+            f'with a {allele!r} allele tree'
+        )
+    current_attributes[ALLELE_ATTRIBUTE] = allele
+    current_attributes.setdefault('WGD_Symbol', False)
+    current_attributes['Terminal_Node'] = tree.left is None
+
+    if tree.left is not None:
+        new_node_id = _get_new_node_id(D)
+        D.add_node(
+            new_node_id,
+            WGD_Symbol=False,
+            Terminal_Node=False,
+            Allele=allele,
+        )
         D.add_edge(current_node_id,new_node_id)
-        convert_to_nx_tree(tree.left,D,new_node_id)
+        convert_to_nx_tree(tree.left,allele,D,new_node_id)
         
-        new_node_id = len(D.nodes)
-        D.add_node(new_node_id,WGD_Symbol=False,Terminal_Node=False)
+        new_node_id = _get_new_node_id(D)
+        D.add_node(
+            new_node_id,
+            WGD_Symbol=False,
+            Terminal_Node=False,
+            Allele=allele,
+        )
         D.add_edge(current_node_id,new_node_id)
-        convert_to_nx_tree(tree.right,D,new_node_id)
+        convert_to_nx_tree(tree.right,allele,D,new_node_id)
     else:
         D.nodes[current_node_id]['Terminal_Node'] = True
     
@@ -153,7 +317,7 @@ def get_wgd_trees(tree,wgd_trees_status):
     internal_nodes  = [node for node in tree.nodes if not tree.nodes[node]['Terminal_Node'] ]
 
     wgd_trees = []
-    wgd_tree_hashes = set()
+    wgd_tree_store = {}
     for node_length in range(len(internal_nodes)+1):
         for wgd_nodes in itertools.combinations(internal_nodes,node_length):
             # one node combination is always acceptable
@@ -164,10 +328,13 @@ def get_wgd_trees(tree,wgd_trees_status):
             #inelegant way of removing the isomoprhic wgd trees
             wgd_hash = get_tree_hash(wgd_tree)
 
-            if not wgd_hash in wgd_tree_hashes:
-
+            if _register_ordered_tree(
+                wgd_tree_store,
+                wgd_hash,
+                wgd_tree,
+                f'deduplicating {wgd_trees_status} WGD routes',
+            ):
                 wgd_trees.append(wgd_tree)
-                wgd_tree_hashes.add(wgd_hash)
     return wgd_trees
 
 
@@ -178,25 +345,23 @@ def check_tree(tree):
     return True
 
 
-def convert_to_nx_trees(trees):
+def convert_to_nx_trees(trees,allele):
     nx_trees = []
     for tree in trees:
-        nx_tree = convert_to_nx_tree(tree)
+        nx_tree = convert_to_nx_tree(tree,allele)
         assert check_tree(nx_tree)
         nx_trees.append(nx_tree)
     return nx_trees
 def get_nx_trees(major_cn,minor_cn,wgd_status,wgd_trees_status):
-    major_cn_trees = convert_to_nx_trees(allPossibleFBT(major_cn))
-    minor_cn_trees = convert_to_nx_trees(allPossibleFBT(minor_cn))
+    major_cn_trees = convert_to_nx_trees(allPossibleFBT(major_cn),'Major')
+    minor_cn_trees = convert_to_nx_trees(allPossibleFBT(minor_cn),'Minor')
 
     if minor_cn ==0:
         combined_trees = major_cn_trees
     else:
         combined_trees = []
-        for i,major_tree in enumerate(major_cn_trees):
-            for j,minor_tree in enumerate(minor_cn_trees):
-                if major_cn == minor_cn and j>i:
-                    break
+        for major_tree in major_cn_trees:
+            for minor_tree in minor_cn_trees:
                 combined_trees.append(nx.disjoint_union(major_tree,minor_tree))
 
     
@@ -212,9 +377,16 @@ def get_nx_trees(major_cn,minor_cn,wgd_status,wgd_trees_status):
     tree_store = {}
     for tree in full_trees:
         tree_id = get_tree_hash(tree)
-        #tree_hash = nx.weisfeiler_lehman_graph_hash(tree,node_attr='WGD_Symbol')
-        #tree_id = hashlib.md5(f'{major_cn}_{minor_cn}_{tree_hash}'.encode('utf-8')).hexdigest()
-        tree_store[tree_id] = tree
+        _register_ordered_tree(
+            tree_store,
+            tree_id,
+            tree,
+            (
+                f'building the {major_cn}+{minor_cn} route store '
+                f'(wgd_status={wgd_status}, '
+                f'wgd_trees_status={wgd_trees_status})'
+            ),
+        )
     
     return tree_store
 
@@ -262,19 +434,13 @@ def get_wgd_paths(tree):
     return all_possible_paths
 
 def get_node_phasing_tree(tree):
-    node_phasing = {}
-    connected_components = sorted(list(nx.connected_components(tree.to_undirected())),key=lambda x:len(x))[::-1]
-    assert len(connected_components) <=2
-    if len(connected_components) == 1:
-        phasing = (np.nan,)
-    elif len(connected_components[0]) == len(connected_components[1]):
-        phasing = ('A','B')
-    else:
-        phasing = ('Major','Minor')
-    for i,connected_component in enumerate(connected_components):
-        for node in connected_component:
-            node_phasing[node] = phasing[i]
-    return node_phasing
+    _get_allele_node_sets(tree)
+    return {
+        node: attributes[ALLELE_ATTRIBUTE]
+        for node, attributes in tree.nodes(data=True)
+    }
+
+
 def get_node_attributes(tree,wgd_status):
     node_attributes = {}
     node_phasing = get_node_phasing_tree(tree)
@@ -317,13 +483,17 @@ def get_node_attributes(tree,wgd_status):
 
     
     return node_attributes
+
+
 def split_tree(tree):
-        connected_components = sorted(list(nx.connected_components(tree.to_undirected())),key=lambda x:len(x))[::-1]
-        major_tree = tree.subgraph(connected_components[0])
-        minor_tree = nx.empty_graph(0,create_using=nx.DiGraph())
-        if len(connected_components) >1:
-            minor_tree = tree.subgraph(connected_components[1])
-        return major_tree,minor_tree
+    major_nodes, minor_nodes = _get_allele_node_sets(tree)
+    major_tree = tree.subgraph(major_nodes)
+    minor_tree = nx.empty_graph(0, create_using=nx.DiGraph())
+    if minor_nodes:
+        minor_tree = tree.subgraph(minor_nodes)
+    return major_tree, minor_tree
+
+
 def write_tree(route_tree,output_path=None):
     nodes_to_delete = []
     for node in route_tree.nodes():
@@ -367,11 +537,9 @@ def plot_tree(route_tree,title,output_path=None):
         plt.show()
     plt.close(fig)
 def get_combined_hierarchy_pos(route_tree):
-    connected_components = sorted(list(nx.connected_components(route_tree.to_undirected())),key=lambda x:len(x))[::-1]
-    major_component = route_tree.subgraph(connected_components[0])
+    major_component, minor_component = split_tree(route_tree)
     major_pos = hierarchy_pos(major_component)
-    if len(connected_components) >1:
-        minor_component = route_tree.subgraph(connected_components[1])
+    if minor_component.number_of_nodes():
         minor_pos = hierarchy_pos(minor_component,x_offset=1)
     else:
         minor_pos = {}
