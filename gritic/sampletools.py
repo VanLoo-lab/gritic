@@ -261,7 +261,6 @@ class MultProbabilityStore:
             assert self.minor_array.shape[1] == self.reads_correction_minor_array.size
 
         if sum([self.use_non_phased,self.use_major,self.use_minor]) == 0:
-            print(self.non_phased_array,self.major_array,self.minor_array)
             raise ValueError('No arrays provided')
 
         self.n_mutations = self.non_phased_array.shape[0] if self.use_non_phased else self.major_array.shape[0] if self.use_major else self.minor_array.shape[0]

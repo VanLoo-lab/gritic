@@ -7,8 +7,6 @@ import numpy as np
 #code from https://www.youtube.com/watch?v=nZtrZPTTCAo
 # Definition for a binary tree node.
 
-import matplotlib.pyplot as plt
-plt.rcParams["figure.figsize"] = (11,6)
 #I modded to make isomorphic
 class TreeNode:
      def __init__(self, left=None, right=None):
@@ -338,6 +336,8 @@ def write_tree(route_tree,output_path=None):
     
     nx.write_graphml(route_tree,output_path)
 def plot_tree(route_tree,title,output_path=None):
+    import matplotlib.pyplot as plt
+
     node_colors = []
     for node in route_tree.nodes:
         if 'Loss_Symbol' in route_tree.nodes[node] and route_tree.nodes[node]['Loss_Symbol']:
@@ -350,7 +350,7 @@ def plot_tree(route_tree,title,output_path=None):
             node_colors.append('#509BCE')
     
     pos = get_combined_hierarchy_pos(route_tree)
-    fig = plt.figure()
+    fig = plt.figure(figsize=(11, 6))
     ax1 = fig.add_subplot(111)
     ax1.margins(0.1)
     plt.title(title)

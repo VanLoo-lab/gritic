@@ -1,6 +1,13 @@
+import warnings
+
 import numpy as np
 from scipy.linalg import null_space
 from numba import njit
+
+
+MAX_INITIAL_POSITION_ATTEMPTS = 50_000
+MIN_INITIAL_POSITION_DISTANCE = 1e-2
+
 
 @njit
 def get_random_direction(dimension):
@@ -46,13 +53,13 @@ def run_chain(current_position,null_dimension,A_null,timing_state,burn_in=25,ski
     return hit_and_run_store[burn_in::skips]
 
 @njit()
-def hit_and_run(A_null,timing_state,n_samples=500,burn_in=25,skips=5):
+def _hit_and_run(A_null,timing_state,n_samples=500,burn_in=25,skips=5):
  
     if A_null.shape[1] ==0:
         hit_and_run_store = np.zeros((n_samples,timing_state.size))
         for i in range(n_samples):
             hit_and_run_store[i,:] = timing_state
-        return hit_and_run_store
+        return hit_and_run_store, False
    
     if A_null.shape[1] ==1:
 
@@ -64,22 +71,51 @@ def hit_and_run(A_null,timing_state,n_samples=500,burn_in=25,skips=5):
         extra_vectors = np.outer(valid_length_samples,direction)
         hit_and_run_store = extra_vectors+timing_state
 
-        return hit_and_run_store
+        return hit_and_run_store, False
     
     null_dimension = A_null.shape[1]
     first_position = timing_state
     current_position = timing_state
     
     process_count =0
-    while np.sum(np.abs(current_position-first_position))<1e-2:
+    process_limit_exceeded = False
+    while (
+        np.sum(np.abs(current_position-first_position))
+        < MIN_INITIAL_POSITION_DISTANCE
+    ):
         current_position = get_new_position(current_position,null_dimension,A_null)
         process_count+=1
-        if process_count>50000:
-            
-            print("Warning: process count exceeded 50000")
-            print('final pos',current_position)
-            print('initial pos',first_position)
-            print('='*50)
+        if process_count > MAX_INITIAL_POSITION_ATTEMPTS:
+            process_limit_exceeded = True
             break
 
-    return run_chain(current_position,null_dimension,A_null,timing_state,burn_in=burn_in,skips=skips,n_samples=n_samples)
+    samples = run_chain(
+        current_position,
+        null_dimension,
+        A_null,
+        timing_state,
+        burn_in=burn_in,
+        skips=skips,
+        n_samples=n_samples,
+    )
+    return samples, process_limit_exceeded
+
+
+def hit_and_run(A_null,timing_state,n_samples=500,burn_in=25,skips=5):
+    samples, process_limit_exceeded = _hit_and_run(
+        A_null,
+        timing_state,
+        n_samples=n_samples,
+        burn_in=burn_in,
+        skips=skips,
+    )
+    if process_limit_exceeded:
+        warnings.warn(
+            'Hit-and-run initialization process count exceeded '
+            f'{MAX_INITIAL_POSITION_ATTEMPTS} before moving at least '
+            f'{MIN_INITIAL_POSITION_DISTANCE:g} from its initial position; '
+            'continuing from the last sampled position.',
+            UserWarning,
+            stacklevel=2,
+        )
+    return samples
