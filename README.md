@@ -252,6 +252,8 @@ timing_dict = load_timing_archive(
 
 ```
 
-The reconstructed dictionary keys correspond to the routes for the sample. Within each route there are ```Timing``` and ```Mult``` keys. The ```Timing``` entry gives raw stored timing distributions for independent gains indexed by the corresponding structural node in the tree; it does not store a chronological ```Gain_Index```. A WGD timing entry is also given if applicable. No credible interval is applied to timing stores: consumers choose their own interval width and method from the stored samples.
+The reconstructed dictionary keys correspond to the routes for the sample. Within each route there are ```Timing```, ```Mult```, and ```Raw_Samples``` keys. The ```Timing``` entry gives raw stored timing distributions for independent gains indexed by the corresponding structural node in the tree; it does not store a chronological ```Gain_Index```. A WGD timing entry is also given if applicable. No credible interval is applied to timing stores: consumers choose their own interval width and method from the stored samples.
 
 The ```Mult``` entry gives the multiplicity proportions corresponding to each timing sample. It is a N_SamplesxN_Multiplicities numpy array. Across the columns, the multiplicities are orderred from 1 to the major copy number of the segment, followed by the subclonal multiplicity probabilities.
+
+```Raw_Samples``` contains the aligned proposal-sampling ```Timing```, ```Mult```, ```WGD_Timing```, and ```LL``` arrays used before likelihood resampling. The likelihood-resampled route output does not contain an ```LL``` array.

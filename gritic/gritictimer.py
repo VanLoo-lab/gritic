@@ -841,7 +841,6 @@ class RouteClassifier:
                 node_timing = route.get_node_timing(node)
                 route_samples['Timing'][node] = node_timing[random_indexes]
             route_samples['Mult'] = route.mult_store[random_indexes]
-            route_samples['LL'] = route.ll_store[random_indexes]
             route_samples['Raw_Samples'] = route.raw_samples
             timing_dict[route.short_id] = route_samples
         return timing_dict
