@@ -1985,6 +1985,20 @@ def _validate_min_wgd_overlap(min_wgd_overlap):
     return float(min_wgd_overlap)
 
 
+def _validate_random_seed(random_seed):
+    if random_seed is None:
+        return None
+    if (
+        isinstance(random_seed, (bool, np.bool_))
+        or not isinstance(random_seed, Integral)
+        or not 0 <= random_seed <= np.iinfo(np.uint32).max
+    ):
+        raise ValueError(
+            'random_seed must be None or an integer between 0 and 2**32 - 1'
+        )
+    return int(random_seed)
+
+
 def _run_sample(
     sample,
     output_dir,
@@ -2139,6 +2153,7 @@ def process_sample(
     interval_config=DEFAULT_TIMING_INTERVALS,
     subclone_fraction_prior=DEFAULT_SUBCLONE_FRACTION_PRIOR,
     unordered_balanced_route_prior=DEFAULT_UNORDERED_BALANCED_ROUTE_PRIOR,
+    random_seed=None,
 ):
     if not isinstance(interval_config, TimingIntervalConfig):
         raise TypeError('interval_config must be a TimingIntervalConfig')
@@ -2150,6 +2165,7 @@ def process_sample(
     )
     wgd_count = _validate_wgd_count(wgd_count)
     min_wgd_overlap = _validate_min_wgd_overlap(min_wgd_overlap)
+    random_seed = _validate_random_seed(random_seed)
     validate_sample_id(sample.sample_id)
     major_cn_mode = get_major_cn_mode(sample)
     if major_cn_mode not in (1, 2):
@@ -2171,6 +2187,10 @@ def process_sample(
             )
     else:
         os.makedirs(output_dir, exist_ok=False)
+
+    if random_seed is not None:
+        np.random.seed(random_seed)
+        hitandrun.seed_random(random_seed)
 
 
     timing_dict_dir= output_dir/f"{sample.sample_id}_timing_dicts/"

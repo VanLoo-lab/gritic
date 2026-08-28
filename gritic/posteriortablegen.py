@@ -131,7 +131,7 @@ def add_penalized_probability(route_table):
             ] = np.nan
             continue
 
-        with np.errstate(divide='ignore'):
+        with np.errstate(divide='ignore', over='ignore'):
             log_weights = (
                 np.log(probabilities)
                 - NON_PARSIMONY_PENALTY_COEFFICIENT * average_events

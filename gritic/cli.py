@@ -51,6 +51,20 @@ def positive_integer(value):
     return parsed_value
 
 
+def random_seed(value):
+    try:
+        parsed_value = int(value)
+    except (TypeError, ValueError) as error:
+        raise argparse.ArgumentTypeError(
+            'must be an integer between 0 and 2**32 - 1'
+        ) from error
+    if not 0 <= parsed_value <= 2**32 - 1:
+        raise argparse.ArgumentTypeError(
+            'must be an integer between 0 and 2**32 - 1'
+        )
+    return parsed_value
+
+
 def unit_interval_number(value):
     try:
         parsed_value = float(value)
@@ -406,6 +420,15 @@ def build_parser():
             '1. By default, GRITIC infers the count.'
         ),
     )
+    inference_arguments.add_argument(
+        '--random-seed',
+        type=random_seed,
+        default=None,
+        help=(
+            'Seed both NumPy and Numba stochastic inference with an integer '
+            'between 0 and 2**32 - 1. By default, no seed is imposed.'
+        ),
+    )
     defaults = intervaltools.DEFAULT_TIMING_INTERVALS
     _add_interval_arguments(
         inference_arguments,
@@ -521,6 +544,7 @@ def main(argv=None):
             unordered_balanced_route_prior=(
                 args.unordered_balanced_route_prior
             ),
+            random_seed=args.random_seed,
         )
 
 

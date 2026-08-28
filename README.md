@@ -62,6 +62,7 @@ Posterior intervals use the shortest contiguous empirical HPD interval by defaul
 ### Inference model and WGD calling
 
 - ```--wgd-count {0,1}``` Override GRITIC's inferred whole-genome-duplication count. Counts below 0 or above 1 are rejected because GRITIC currently supports at most one WGD. If omitted, GRITIC infers the count.
+- ```--random-seed``` Seed both NumPy and Numba stochastic inference with an integer from 0 through ```2**32 - 1```. If omitted, GRITIC does not impose a seed.
 - ```--wgd-overlap-interval-width```, ```--wgd-overlap-interval-method {hpd,equal-tailed}``` control the hidden candidate-segment bounds used for WGD overlap and can therefore change WGD inference (default width: 0.9, or 90%).
 - ```--unordered-balanced-route-prior``` Reproduce the former uniform prior over unordered allele-route pairs while retaining the current ordered route model. In a balanced ```N+N``` segment, an ordered route with different Major and Minor component histories receives half the prior weight of a route with identical component histories. Reciprocal orientations remain separate, so together they carry one prior unit. This is disabled by default.
 
@@ -133,6 +134,7 @@ gritictimer.process_sample(
     wgd_count=1,
     subclone_fraction_prior='adjusted',
     unordered_balanced_route_prior=False,
+    random_seed=20260828,
     interval_config=intervaltools.TimingIntervalConfig(
         route_gain=intervaltools.IntervalSpec(0.95),
         tree_gain=intervaltools.IntervalSpec(0.9),

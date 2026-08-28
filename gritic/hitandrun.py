@@ -10,6 +10,12 @@ MIN_INITIAL_POSITION_DISTANCE = 1e-2
 
 
 @njit(cache=True)
+def seed_random(seed):
+    """Seed the Numba random stream used by the hit-and-run kernels."""
+    np.random.seed(seed)
+
+
+@njit(cache=True)
 def get_random_direction(dimension):
     x = np.random.normal(0,1,size=dimension)
     return x/np.linalg.norm(x)
