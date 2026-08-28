@@ -80,8 +80,13 @@ class ExampleDataIntegrationTest(unittest.TestCase):
                 'all'
             )
             corrections = segment.get_reads_correction_array('all')
+            weights = segment.get_multiplicity_probability_weights('all')
 
-            self.assertEqual(probabilities.shape[0], segment.n_mutations)
+            self.assertEqual(
+                probabilities.shape[0],
+                len(segment.count_group_table),
+            )
+            self.assertEqual(int(weights.sum()), segment.n_mutations)
             self.assertEqual(
                 probabilities.shape[1],
                 segment.major_cn + segment.n_subclones,

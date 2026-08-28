@@ -271,6 +271,12 @@ class MultProbabilityStoreTest(unittest.TestCase):
                 'Minor': None,
                 'All': np.ones(2),
             },
+            {
+                'Non_Phased': None,
+                'Major': np.ones(2, dtype=np.int64),
+                'Minor': None,
+                'All': np.ones(2, dtype=np.int64),
+            },
             major_cn=2,
             minor_cn=0,
             n_subclones=0,
@@ -296,6 +302,12 @@ class MultProbabilityStoreTest(unittest.TestCase):
                     'Minor': None,
                     'All': np.ones(3),
                 },
+                {
+                    'Non_Phased': np.ones(2, dtype=np.int64),
+                    'Major': None,
+                    'Minor': None,
+                    'All': np.ones(2, dtype=np.int64),
+                },
                 major_cn=3,
                 minor_cn=0,
                 n_subclones=0,
@@ -314,6 +326,12 @@ class MultProbabilityStoreTest(unittest.TestCase):
                 'Major': np.array([0.2, 0.4, 0.6, 0.8]),
                 'Minor': np.array([0.25, 0.45, 0.65]),
                 'All': np.ones(4),
+            },
+            {
+                'Non_Phased': np.ones(2, dtype=np.int64),
+                'Major': np.ones(1, dtype=np.int64),
+                'Minor': np.ones(3, dtype=np.int64),
+                'All': np.ones(6, dtype=np.int64),
             },
             major_cn=2,
             minor_cn=1,
@@ -343,6 +361,12 @@ class MultProbabilityStoreTest(unittest.TestCase):
                 'Major': None,
                 'Minor': None,
                 'All': np.ones(2),
+            },
+            {
+                'Non_Phased': np.ones(2, dtype=np.int64),
+                'Major': None,
+                'Minor': None,
+                'All': np.ones(2, dtype=np.int64),
             },
             major_cn=2,
             minor_cn=0,
@@ -380,7 +404,7 @@ class SegmentDeterministicBehaviorTest(unittest.TestCase):
 
         probability_columns = ['Prob_Mult_1', 'Prob_Mult_2']
         np.testing.assert_allclose(
-            segment.mutation_table[probability_columns].sum(axis=1),
+            segment.count_group_table[probability_columns].sum(axis=1),
             1.0,
         )
         store = segment.multiplicity_probabilities
@@ -392,6 +416,7 @@ class SegmentDeterministicBehaviorTest(unittest.TestCase):
             store.reads_correction_combined_array,
             [1.0, 1.0],
         )
+        np.testing.assert_array_equal(store.combined_weights, [1, 1, 1])
 
     def test_subclones_extend_names_multiplicities_and_clone_fractions(self):
         subclones = pd.DataFrame({
@@ -428,7 +453,7 @@ class SegmentDeterministicBehaviorTest(unittest.TestCase):
             'Prob_Subclone_1',
         ]
         np.testing.assert_allclose(
-            segment.mutation_table[probability_columns].sum(axis=1),
+            segment.count_group_table[probability_columns].sum(axis=1),
             1.0,
         )
 
@@ -446,24 +471,24 @@ class SegmentDeterministicBehaviorTest(unittest.TestCase):
         # total CN=3, normal CN=2, purity=.8 gives one-copy VAF 2/7.
         multiplicity_vafs = np.array([2.0 / 7.0, 4.0 / 7.0])
         expected_corrections = poisson.sf(2, 20 * multiplicity_vafs)
-        for index, expected in enumerate(expected_corrections, start=1):
-            np.testing.assert_allclose(
-                segment.mutation_table[
-                    f'Alt_Count_Correction_Mult_{index}'
-                ],
-                expected,
-            )
+        np.testing.assert_allclose(
+            segment.get_reads_correction_array('all'),
+            expected_corrections,
+        )
 
         first_log_probabilities = binom.logpmf(5, 20, multiplicity_vafs)
         expected_first_probabilities = np.exp(
             first_log_probabilities - first_log_probabilities.max()
         )
         expected_first_probabilities /= expected_first_probabilities.sum()
+        first_group = segment.count_group_table.loc[
+            segment.count_group_table['Tumor_Alt_Count'].eq(5)
+            & segment.count_group_table['Tumor_Ref_Count'].eq(15)
+        ].iloc[0]
         np.testing.assert_allclose(
-            segment.mutation_table.loc[
-                0,
-                ['Prob_Mult_1', 'Prob_Mult_2'],
-            ].to_numpy(dtype=float),
+            first_group[['Prob_Mult_1', 'Prob_Mult_2']].to_numpy(
+                dtype=float
+            ),
             expected_first_probabilities,
         )
 

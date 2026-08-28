@@ -188,6 +188,12 @@ class HighCopyNumberFitTest(unittest.TestCase):
                 'Minor': None,
                 'All': np.ones(major_cn),
             },
+            {
+                'Non_Phased': np.ones(5, dtype=np.int64),
+                'Major': None,
+                'Minor': None,
+                'All': np.ones(5, dtype=np.int64),
+            },
             major_cn=major_cn,
             minor_cn=minor_cn,
             n_subclones=0,

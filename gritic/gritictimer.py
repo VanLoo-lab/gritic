@@ -29,9 +29,15 @@ from gritic.intervaltools import (
     get_interval_bounds,
 )
 from gritic.tableschemas import (
+    COUNT_GROUP_LIKELIHOOD_BASE_COLUMNS,
+    COUNT_GROUP_TABLE_COLUMNS,
     GAIN_TIMING_TABLE_COLUMNS,
+    LIKELIHOOD_CONTEXT_TABLE_COLUMNS,
+    PHASE_GROUP_TABLE_COLUMNS,
     ROUTE_PARTICLES_REPRESENTATION,
     ROUTE_TABLE_COLUMNS,
+    SEGMENT_CONTEXT_TABLE_COLUMNS,
+    SEGMENT_GROUP_TABLE_COLUMNS,
     TIMING_REPRESENTATION_COLUMN,
     UNIFORM_NO_GAIN_REPRESENTATION,
 )
@@ -1832,6 +1838,794 @@ def _write_tsv(table, table_path):
     table.to_csv(table_path, sep='\t', index=False)
 
 
+def _numbered_probability_columns(likelihood_table):
+    """Return canonical dynamic likelihood columns or reject the schema."""
+    base_columns = set(COUNT_GROUP_LIKELIHOOD_BASE_COLUMNS)
+    probability_columns = []
+    unexpected_columns = []
+    for column in likelihood_table.columns:
+        if column in base_columns:
+            continue
+        if column.startswith('Prob_Mult_'):
+            prefix = 'Prob_Mult_'
+            first_index = 1
+        elif column.startswith('Prob_Subclone_'):
+            prefix = 'Prob_Subclone_'
+            first_index = 0
+        else:
+            unexpected_columns.append(column)
+            continue
+        suffix = column.removeprefix(prefix)
+        if not suffix.isdigit() or int(suffix) < first_index:
+            raise ValueError(
+                'Count-group-likelihood columns must use numbered '
+                'Prob_Mult_1... or Prob_Subclone_0... names; observed '
+                f'{column!r}'
+            )
+        probability_columns.append((prefix, int(suffix), column))
+
+    if unexpected_columns:
+        raise ValueError(
+            'Unexpected count-group-likelihood table column(s): '
+            + ', '.join(map(str, unexpected_columns))
+        )
+
+    ordered_columns = []
+    for prefix, first_index in (
+        ('Prob_Mult_', 1),
+        ('Prob_Subclone_', 0),
+    ):
+        indexed_columns = sorted(
+            (index, column)
+            for observed_prefix, index, column in probability_columns
+            if observed_prefix == prefix
+        )
+        if indexed_columns:
+            observed_indices = [index for index, _ in indexed_columns]
+            expected_indices = list(
+                range(first_index, max(observed_indices) + 1)
+            )
+            if observed_indices != expected_indices:
+                raise ValueError(
+                    f'{prefix} columns must be consecutively numbered from '
+                    f'{first_index}'
+                )
+            ordered_columns.extend(column for _, column in indexed_columns)
+
+    if not any(column.startswith('Prob_Mult_') for column in ordered_columns):
+        raise ValueError(
+            'Count-group-likelihood table must contain at least Prob_Mult_1'
+        )
+    return ordered_columns
+
+
+def _validate_dense_ids(table, id_column, table_name):
+    numeric_ids = pd.to_numeric(table[id_column], errors='coerce')
+    valid_ids = (
+        numeric_ids.notna()
+        & np.isfinite(numeric_ids)
+        & numeric_ids.mod(1).eq(0)
+        & numeric_ids.ge(0)
+    )
+    if not valid_ids.all():
+        raise ValueError(
+            f'{table_name} {id_column} must contain nonnegative integers'
+        )
+    table[id_column] = numeric_ids.astype(np.int64)
+    observed_ids = np.sort(table[id_column].to_numpy())
+    expected_ids = np.arange(len(table), dtype=np.int64)
+    if not np.array_equal(observed_ids, expected_ids):
+        raise ValueError(
+            f'{table_name} {id_column} must be sample-wide, zero-based, '
+            'unique, and dense'
+        )
+
+
+def _validate_positive_integer_column(table, column, table_name):
+    numeric_values = pd.to_numeric(table[column], errors='coerce')
+    valid_values = (
+        numeric_values.notna()
+        & np.isfinite(numeric_values)
+        & numeric_values.mod(1).eq(0)
+        & numeric_values.gt(0)
+    )
+    if not valid_values.all():
+        raise ValueError(
+            f'{table_name} {column} must contain positive integers'
+        )
+    table[column] = numeric_values.astype(np.int64)
+
+
+def _validate_nonnegative_integer_column(table, column, table_name):
+    numeric_values = pd.to_numeric(table[column], errors='coerce')
+    valid_values = (
+        numeric_values.notna()
+        & np.isfinite(numeric_values)
+        & numeric_values.mod(1).eq(0)
+        & numeric_values.ge(0)
+    )
+    if not valid_values.all():
+        raise ValueError(
+            f'{table_name} {column} must contain nonnegative integers'
+        )
+    table[column] = numeric_values.astype(np.int64)
+
+
+def _select_exact_columns(table, columns, table_name):
+    missing_columns = [
+        column for column in columns if column not in table.columns
+    ]
+    unexpected_columns = [
+        column for column in table.columns if column not in columns
+    ]
+    if missing_columns or unexpected_columns:
+        details = []
+        if missing_columns:
+            details.append('missing: ' + ', '.join(missing_columns))
+        if unexpected_columns:
+            details.append('unexpected: ' + ', '.join(unexpected_columns))
+        raise ValueError(
+            f'Invalid {table_name} columns; ' + '; '.join(details)
+        )
+    return table.loc[:, columns]
+
+
+def _attach_sample_id(table, sample_id, table_name):
+    table = table.copy()
+    if 'Sample_ID' in table.columns:
+        observed_sample_ids = set(table['Sample_ID'].astype(str))
+        if observed_sample_ids != {sample_id}:
+            raise ValueError(
+                f'{table_name} Sample_ID must equal {sample_id!r}'
+            )
+        table['Sample_ID'] = sample_id
+    else:
+        table.insert(0, 'Sample_ID', sample_id)
+    return table
+
+
+def _canonical_phasing(table, column='Phasing'):
+    return table[column].astype('string').fillna('non_phased').astype(str)
+
+
+def _prepare_group_output_tables(sample, mutation_table):
+    """Build and validate the normalized sample-wide mutation data contract."""
+    mutation_table = mutation_table.copy()
+    if mutation_table.empty:
+        raise ValueError('Mutation table must not be empty')
+    if 'Phase_Group_ID' not in mutation_table.columns:
+        raise ValueError('Mutation table is missing Phase_Group_ID')
+
+    sample_id = str(sample.sample_id)
+    table_specs = (
+        (
+            sample.get_count_group_table(),
+            COUNT_GROUP_TABLE_COLUMNS,
+            'Count-group table',
+        ),
+        (
+            sample.get_phase_group_table(),
+            PHASE_GROUP_TABLE_COLUMNS,
+            'Phase-group table',
+        ),
+        (
+            sample.get_likelihood_context_table(),
+            LIKELIHOOD_CONTEXT_TABLE_COLUMNS,
+            'Likelihood-context table',
+        ),
+        (
+            sample.get_segment_context_table(),
+            SEGMENT_CONTEXT_TABLE_COLUMNS,
+            'Segment-context table',
+        ),
+        (
+            sample.get_count_group_likelihood_table(),
+            None,
+            'Count-group-likelihood table',
+        ),
+        (
+            sample.get_segment_group_table(),
+            SEGMENT_GROUP_TABLE_COLUMNS,
+            'Segment-group table',
+        ),
+    )
+    prepared_tables = []
+    for source_table, columns, table_name in table_specs:
+        table = _attach_sample_id(source_table, sample_id, table_name)
+        if table.empty:
+            raise ValueError(f'{table_name} must not be empty')
+        if columns is not None:
+            table = _select_exact_columns(table, columns, table_name)
+        prepared_tables.append(table)
+    (
+        count_group_table,
+        phase_group_table,
+        likelihood_context_table,
+        segment_context_table,
+        count_group_likelihood_table,
+        segment_group_table,
+    ) = prepared_tables
+
+    probability_columns = _numbered_probability_columns(
+        count_group_likelihood_table
+    )
+    count_group_likelihood_table = count_group_likelihood_table.loc[
+        :,
+        COUNT_GROUP_LIKELIHOOD_BASE_COLUMNS + probability_columns,
+    ]
+
+    for table, id_column, table_name in (
+        (count_group_table, 'Count_Group_ID', 'Count-group table'),
+        (phase_group_table, 'Phase_Group_ID', 'Phase-group table'),
+        (
+            likelihood_context_table,
+            'Likelihood_Context_ID',
+            'Likelihood-context table',
+        ),
+    ):
+        _validate_dense_ids(table, id_column, table_name)
+
+    for table, column, table_name in (
+        (phase_group_table, 'Count_Group_ID', 'Phase-group table'),
+        (
+            segment_context_table,
+            'Likelihood_Context_ID',
+            'Segment-context table',
+        ),
+        (
+            count_group_likelihood_table,
+            'Likelihood_Context_ID',
+            'Count-group-likelihood table',
+        ),
+        (
+            count_group_likelihood_table,
+            'Count_Group_ID',
+            'Count-group-likelihood table',
+        ),
+        (segment_group_table, 'Phase_Group_ID', 'Segment-group table'),
+    ):
+        _validate_nonnegative_integer_column(table, column, table_name)
+    _validate_positive_integer_column(
+        segment_group_table,
+        'N_Mutations',
+        'Segment-group table',
+    )
+
+    for column in ('Tumor_Ref_Count', 'Tumor_Alt_Count'):
+        numeric_counts = pd.to_numeric(
+            count_group_table[column], errors='coerce'
+        )
+        valid_counts = (
+            numeric_counts.notna()
+            & np.isfinite(numeric_counts)
+            & numeric_counts.mod(1).eq(0)
+            & numeric_counts.ge(0)
+        )
+        if not valid_counts.all():
+            raise ValueError(
+                f'Count-group table {column} must contain nonnegative integers'
+            )
+        count_group_table[column] = numeric_counts.astype(np.int64)
+    if (
+        count_group_table['Tumor_Ref_Count']
+        + count_group_table['Tumor_Alt_Count']
+    ).le(0).any():
+        raise ValueError('Every count group must have positive total coverage')
+
+    for column in ('Major_CN', 'Minor_CN', 'Normal_Total_CN'):
+        _validate_nonnegative_integer_column(
+            likelihood_context_table,
+            column,
+            'Likelihood-context table',
+        )
+    if likelihood_context_table['Major_CN'].le(0).any():
+        raise ValueError('Likelihood-context Major_CN must be positive')
+    if (
+        likelihood_context_table['Minor_CN']
+        > likelihood_context_table['Major_CN']
+    ).any():
+        raise ValueError(
+            'Likelihood-context Minor_CN must not exceed Major_CN'
+        )
+
+    valid_phasings = {'non_phased', 'major', 'minor'}
+    if not phase_group_table['Phasing'].isin(valid_phasings).all():
+        raise ValueError(
+            'Phase-group table Phasing must be non_phased, major, or minor'
+        )
+
+    if count_group_table.duplicated([
+        'Tumor_Ref_Count',
+        'Tumor_Alt_Count',
+    ]).any():
+        raise ValueError(
+            'Every sample-wide read-count pair must define one count group'
+        )
+    if phase_group_table.duplicated([
+        'Count_Group_ID',
+        'Phasing',
+    ]).any():
+        raise ValueError(
+            'Every sample-wide count-group/phasing tuple must define one '
+            'phase group'
+        )
+    if likelihood_context_table.duplicated([
+        'Major_CN',
+        'Minor_CN',
+        'Normal_Total_CN',
+    ]).any():
+        raise ValueError(
+            'Every copy-number observation context must define one '
+            'likelihood context'
+        )
+    if segment_context_table['Segment_ID'].duplicated().any():
+        raise ValueError(
+            'Every Segment_ID must define exactly one likelihood context'
+        )
+    if count_group_likelihood_table.duplicated([
+        'Likelihood_Context_ID',
+        'Count_Group_ID',
+    ]).any():
+        raise ValueError(
+            'Count-group-likelihood compound keys must be unique'
+        )
+    if segment_group_table.duplicated([
+        'Segment_ID',
+        'Phase_Group_ID',
+    ]).any():
+        raise ValueError('Segment-group compound keys must be unique')
+
+    phase_order = {'non_phased': 0, 'major': 1, 'minor': 2}
+    observed_count_tuples = list(
+        count_group_table.sort_values('Count_Group_ID', kind='stable')[
+            ['Tumor_Ref_Count', 'Tumor_Alt_Count']
+        ].itertuples(index=False, name=None)
+    )
+    if observed_count_tuples != sorted(observed_count_tuples):
+        raise ValueError(
+            'Count_Group_ID must follow sample-wide ascending ref/alt order'
+        )
+    observed_phase_tuples = list(
+        phase_group_table.sort_values('Phase_Group_ID', kind='stable')[
+            ['Count_Group_ID', 'Phasing']
+        ].itertuples(index=False, name=None)
+    )
+    expected_phase_tuples = sorted(
+        observed_phase_tuples,
+        key=lambda value: (value[0], phase_order[value[1]]),
+    )
+    if observed_phase_tuples != expected_phase_tuples:
+        raise ValueError(
+            'Phase_Group_ID must follow sample-wide count-group and canonical '
+            'phasing order'
+        )
+    observed_context_tuples = list(
+        likelihood_context_table.sort_values(
+            'Likelihood_Context_ID', kind='stable'
+        )[['Major_CN', 'Minor_CN', 'Normal_Total_CN']].itertuples(
+            index=False,
+            name=None,
+        )
+    )
+    if observed_context_tuples != sorted(observed_context_tuples):
+        raise ValueError(
+            'Likelihood_Context_ID must follow ascending Major_CN, Minor_CN, '
+            'and Normal_Total_CN order'
+        )
+
+    count_ids = set(count_group_table['Count_Group_ID'])
+    phase_ids = set(phase_group_table['Phase_Group_ID'])
+    context_ids = set(likelihood_context_table['Likelihood_Context_ID'])
+    if not set(phase_group_table['Count_Group_ID']).issubset(count_ids):
+        raise ValueError('Every phase group must reference a count group')
+    if not set(segment_context_table['Likelihood_Context_ID']).issubset(
+        context_ids
+    ):
+        raise ValueError(
+            'Every segment context must reference a likelihood context'
+        )
+    if not set(count_group_likelihood_table['Count_Group_ID']).issubset(
+        count_ids
+    ):
+        raise ValueError(
+            'Every count-group likelihood must reference a count group'
+        )
+    if not set(
+        count_group_likelihood_table['Likelihood_Context_ID']
+    ).issubset(context_ids):
+        raise ValueError(
+            'Every count-group likelihood must reference a likelihood context'
+        )
+    if not set(segment_group_table['Phase_Group_ID']).issubset(phase_ids):
+        raise ValueError('Every segment group must reference a phase group')
+
+    phase_with_counts = phase_group_table.merge(
+        count_group_table,
+        on=['Sample_ID', 'Count_Group_ID'],
+        how='left',
+        validate='many_to_one',
+    )
+
+    mutation_table['Segment_ID'] = mutation_table['Segment_ID'].astype(str)
+    segment_context_table['Segment_ID'] = segment_context_table[
+        'Segment_ID'
+    ].astype(str)
+    segment_group_table['Segment_ID'] = segment_group_table[
+        'Segment_ID'
+    ].astype(str)
+    mutation_phase_ids = pd.to_numeric(
+        mutation_table['Phase_Group_ID'], errors='coerce'
+    )
+    valid_mutation_phase_ids = (
+        mutation_phase_ids.notna()
+        & np.isfinite(mutation_phase_ids)
+        & mutation_phase_ids.mod(1).eq(0)
+        & mutation_phase_ids.ge(0)
+    )
+    if not valid_mutation_phase_ids.all():
+        raise ValueError('Mutation Phase_Group_ID must contain nonnegative integers')
+    mutation_table['Phase_Group_ID'] = mutation_phase_ids.astype(np.int64)
+
+    mutation_groups = mutation_table.loc[
+        :,
+        [
+            'Segment_ID',
+            'Phase_Group_ID',
+            'Tumor_Ref_Count',
+            'Tumor_Alt_Count',
+            'Phasing',
+        ],
+    ].copy()
+    mutation_groups['Phasing'] = _canonical_phasing(mutation_groups)
+    mapped_mutations = mutation_groups.merge(
+        phase_with_counts.loc[
+            :,
+            [
+                'Phase_Group_ID',
+                'Phasing',
+                'Tumor_Ref_Count',
+                'Tumor_Alt_Count',
+            ],
+        ],
+        on=['Phase_Group_ID'],
+        how='left',
+        validate='many_to_one',
+        suffixes=('_Mutation', '_Group'),
+        indicator=True,
+    )
+    if not mapped_mutations['_merge'].eq('both').all():
+        raise ValueError('Every mutation must reference a phase group')
+    phasing_matches = (
+        mapped_mutations['Phasing_Mutation'].astype(str).to_numpy()
+        == mapped_mutations['Phasing_Group'].astype(str).to_numpy()
+    )
+    if not np.all(phasing_matches):
+        raise ValueError(
+            'Mutation Phasing must match its referenced phase group'
+        )
+    for column in ('Tumor_Ref_Count', 'Tumor_Alt_Count'):
+        mutation_values = pd.to_numeric(
+            mapped_mutations[f'{column}_Mutation'], errors='coerce'
+        ).to_numpy()
+        group_values = pd.to_numeric(
+            mapped_mutations[f'{column}_Group'], errors='coerce'
+        ).to_numpy()
+        if not np.array_equal(mutation_values, group_values):
+            raise ValueError(
+                f'Mutation {column} must match its referenced count group'
+            )
+
+    observed_phase_sizes = mutation_table.groupby(
+        ['Segment_ID', 'Phase_Group_ID'], sort=False
+    ).size()
+    expected_phase_sizes = segment_group_table.set_index(
+        ['Segment_ID', 'Phase_Group_ID']
+    )['N_Mutations']
+    if not observed_phase_sizes.sort_index().equals(
+        expected_phase_sizes.sort_index()
+    ):
+        raise ValueError(
+            'Mutation membership must match phase-group N_Mutations'
+        )
+
+    mutation_segments = set(mutation_table['Segment_ID'])
+    if set(segment_context_table['Segment_ID']) != mutation_segments:
+        raise ValueError(
+            'Segment-context rows must exactly cover mutation segments'
+        )
+    if set(segment_group_table['Segment_ID']) != mutation_segments:
+        raise ValueError(
+            'Segment-group rows must exactly cover mutation segments'
+        )
+
+    used_phase_ids = set(segment_group_table['Phase_Group_ID'])
+    if used_phase_ids != phase_ids:
+        raise ValueError(
+            'Phase-group rows must exactly cover sample-used phase groups'
+        )
+    if set(phase_group_table['Count_Group_ID']) != count_ids:
+        raise ValueError(
+            'Count-group rows must exactly cover sample-used count groups'
+        )
+    if set(segment_context_table['Likelihood_Context_ID']) != context_ids:
+        raise ValueError(
+            'Likelihood-context rows must exactly cover segment contexts'
+        )
+
+    context_usage = (
+        segment_group_table
+        .merge(
+            phase_group_table.loc[:, ['Phase_Group_ID', 'Count_Group_ID']],
+            on='Phase_Group_ID',
+            how='left',
+            validate='many_to_one',
+        )
+        .merge(
+            segment_context_table.loc[
+                :, ['Segment_ID', 'Likelihood_Context_ID']
+            ],
+            on='Segment_ID',
+            how='left',
+            validate='many_to_one',
+        )
+    )
+    required_likelihood_keys = set(context_usage.loc[
+        :, ['Likelihood_Context_ID', 'Count_Group_ID']
+    ].itertuples(index=False, name=None))
+    observed_likelihood_keys = set(count_group_likelihood_table.loc[
+        :, ['Likelihood_Context_ID', 'Count_Group_ID']
+    ].itertuples(index=False, name=None))
+    if observed_likelihood_keys != required_likelihood_keys:
+        raise ValueError(
+            'Count-group-likelihood rows must exactly cover observed '
+            'context/count-group pairs'
+        )
+
+    segment_metadata_columns = [
+        'Segment_ID',
+        'Chromosome',
+        'Major_CN',
+        'Minor_CN',
+    ]
+    missing_metadata = [
+        column
+        for column in segment_metadata_columns
+        if column not in mutation_table.columns
+    ]
+    if missing_metadata:
+        raise ValueError(
+            'Mutation table is missing context-validation column(s): '
+            + ', '.join(missing_metadata)
+        )
+    for column in ('Chromosome', 'Major_CN', 'Minor_CN'):
+        if mutation_table.groupby('Segment_ID', sort=False)[column].nunique(
+            dropna=False
+        ).gt(1).any():
+            raise ValueError(
+                f'Mutation {column} must be unique within every Segment_ID'
+            )
+    segment_metadata = mutation_table.loc[
+        :, segment_metadata_columns
+    ].drop_duplicates('Segment_ID')
+    segment_metadata['Major_CN'] = pd.to_numeric(
+        segment_metadata['Major_CN'], errors='coerce'
+    )
+    segment_metadata['Minor_CN'] = pd.to_numeric(
+        segment_metadata['Minor_CN'], errors='coerce'
+    )
+    expected_normal_cn = np.array([
+        dataloader.get_normal_total_copy_number(
+            str(chromosome),
+            getattr(sample, 'sex', None),
+        )
+        for chromosome in segment_metadata['Chromosome']
+    ], dtype=np.int64)
+    segment_metadata['Expected_Normal_Total_CN'] = expected_normal_cn
+    mapped_segment_contexts = (
+        segment_context_table
+        .merge(
+            likelihood_context_table,
+            on=['Sample_ID', 'Likelihood_Context_ID'],
+            how='left',
+            validate='many_to_one',
+        )
+        .merge(
+            segment_metadata,
+            on='Segment_ID',
+            how='left',
+            validate='one_to_one',
+            suffixes=('_Context', '_Mutation'),
+        )
+    )
+    if not np.array_equal(
+        mapped_segment_contexts['Major_CN_Context'].to_numpy(),
+        mapped_segment_contexts['Major_CN_Mutation'].to_numpy(),
+    ) or not np.array_equal(
+        mapped_segment_contexts['Minor_CN_Context'].to_numpy(),
+        mapped_segment_contexts['Minor_CN_Mutation'].to_numpy(),
+    ):
+        raise ValueError(
+            'Segment likelihood-context copy number must match mutation '
+            'segment copy number'
+        )
+    if not np.array_equal(
+        mapped_segment_contexts['Normal_Total_CN'].to_numpy(),
+        mapped_segment_contexts['Expected_Normal_Total_CN'].to_numpy(),
+    ):
+        raise ValueError(
+            'Likelihood-context Normal_Total_CN must match chromosome and sex'
+        )
+    segment_phase_context = context_usage.merge(
+        phase_group_table.loc[:, ['Phase_Group_ID', 'Phasing']],
+        on='Phase_Group_ID',
+        how='left',
+        validate='many_to_one',
+    ).merge(
+        likelihood_context_table.loc[
+            :, ['Likelihood_Context_ID', 'Major_CN', 'Minor_CN']
+        ],
+        on='Likelihood_Context_ID',
+        how='left',
+        validate='many_to_one',
+    )
+    invalid_minor_phase = (
+        segment_phase_context['Phasing'].eq('minor')
+        & segment_phase_context['Minor_CN'].eq(0)
+    )
+    if invalid_minor_phase.any():
+        raise ValueError(
+            'Minor-phased segment groups require positive Minor_CN'
+        )
+
+    max_major_cn = int(likelihood_context_table['Major_CN'].max())
+    subclone_table = sample.get_subclone_table()
+    n_subclones = 0 if subclone_table is None else len(subclone_table)
+    expected_probability_columns = [
+        f'Prob_Mult_{multiplicity}'
+        for multiplicity in range(1, max_major_cn + 1)
+    ] + [
+        f'Prob_Subclone_{subclone}'
+        for subclone in range(n_subclones)
+    ]
+    if probability_columns != expected_probability_columns:
+        raise ValueError(
+            'Count-group-likelihood probability columns must span every '
+            'sample multiplicity and subclone in canonical order'
+        )
+    source_probability_table = count_group_likelihood_table[
+        probability_columns
+    ]
+    probability_table = source_probability_table.apply(
+        pd.to_numeric,
+        errors='coerce',
+    )
+    invalid_numeric_values = (
+        source_probability_table.notna() & probability_table.isna()
+    )
+    if invalid_numeric_values.any().any():
+        raise ValueError(
+            'Count-group likelihoods must be numeric or blank'
+        )
+    count_group_likelihood_table.loc[
+        :, probability_columns
+    ] = probability_table
+    context_major_cn = likelihood_context_table.set_index(
+        'Likelihood_Context_ID'
+    )['Major_CN']
+    for row_index, likelihood_row in count_group_likelihood_table.iterrows():
+        row_major_cn = int(
+            context_major_cn.loc[likelihood_row['Likelihood_Context_ID']]
+        )
+        active_mult_columns = [
+            f'Prob_Mult_{multiplicity}'
+            for multiplicity in range(1, row_major_cn + 1)
+        ]
+        inactive_mult_columns = [
+            f'Prob_Mult_{multiplicity}'
+            for multiplicity in range(row_major_cn + 1, max_major_cn + 1)
+        ]
+        required_columns = active_mult_columns + expected_probability_columns[
+            max_major_cn:
+        ]
+        required_values = probability_table.loc[
+            row_index, required_columns
+        ].to_numpy(dtype=float)
+        if (
+            not np.isfinite(required_values).all()
+            or np.any(required_values < 0)
+        ):
+            raise ValueError(
+                'Applicable count-group likelihoods must contain finite '
+                'nonnegative values'
+            )
+        if inactive_mult_columns and probability_table.loc[
+            row_index, inactive_mult_columns
+        ].notna().any():
+            raise ValueError(
+                'Prob_Mult_* values above a context Major_CN must be blank'
+            )
+        if not np.isclose(np.sum(required_values), 1.0):
+            raise ValueError(
+                'Every count-group likelihood row must sum to one'
+            )
+
+    segment_order = {
+        segment_id: index
+        for index, segment_id in enumerate(
+            dict.fromkeys(mutation_table['Segment_ID'].tolist())
+        )
+    }
+    count_group_table.sort_values(
+        'Count_Group_ID', kind='stable', inplace=True
+    )
+    phase_group_table.sort_values(
+        'Phase_Group_ID', kind='stable', inplace=True
+    )
+    likelihood_context_table.sort_values(
+        'Likelihood_Context_ID', kind='stable', inplace=True
+    )
+    count_group_likelihood_table.sort_values(
+        ['Likelihood_Context_ID', 'Count_Group_ID'],
+        kind='stable',
+        inplace=True,
+    )
+    for table, id_column in (
+        (segment_context_table, 'Likelihood_Context_ID'),
+        (segment_group_table, 'Phase_Group_ID'),
+    ):
+        table['_Segment_Order'] = table['Segment_ID'].map(segment_order)
+        table.sort_values(
+            ['_Segment_Order', id_column],
+            kind='stable',
+            inplace=True,
+        )
+        table.drop(columns='_Segment_Order', inplace=True)
+    for table in (
+        count_group_table,
+        phase_group_table,
+        likelihood_context_table,
+        segment_context_table,
+        count_group_likelihood_table,
+        segment_group_table,
+    ):
+        table.reset_index(drop=True, inplace=True)
+
+    repeated_columns = [
+        column
+        for column in mutation_table.columns
+        if column in {
+            'Count_Group_ID',
+            'Tumor_Ref_Count',
+            'Tumor_Alt_Count',
+            'Phasing',
+            'Major_CN',
+            'Minor_CN',
+            'Total_CN',
+            'Gain_Type',
+        }
+        or column.startswith('Prob_')
+        or column.startswith('Alt_Count_Correction_')
+    ]
+    mutation_table = mutation_table.drop(columns=repeated_columns)
+    mutation_columns = mutation_table.columns.tolist()
+    mutation_columns.remove('Phase_Group_ID')
+    phase_group_position = mutation_columns.index(
+        'Segment_Mutation_Index'
+    ) + 1
+    mutation_columns.insert(phase_group_position, 'Phase_Group_ID')
+    mutation_table = mutation_table.loc[:, mutation_columns]
+
+    return (
+        mutation_table,
+        count_group_table,
+        phase_group_table,
+        likelihood_context_table,
+        segment_context_table,
+        count_group_likelihood_table,
+        segment_group_table,
+    )
+
+
 def write_route_table(route_table, route_table_path):
     _append_table(route_table, route_table_path, ROUTE_TABLE_COLUMNS)
 
@@ -1959,9 +2753,16 @@ def _get_wgd_timing_model(segment):
         'Minor': None,
         'All': combined_correction,
     }
+    combined_weight_store = {
+        'Non_Phased': mult_probabilities.combined_weights,
+        'Major': None,
+        'Minor': None,
+        'All': mult_probabilities.combined_weights,
+    }
     wgd_mult_probabilities = MultProbabilityStore(
         combined_array_store,
         combined_correction_store,
+        combined_weight_store,
         major_cn=segment.major_cn,
         minor_cn=pseudo_minor_cn,
         n_subclones=mult_probabilities.n_subclones,
@@ -2773,9 +3574,64 @@ def process_sample(
     timing_dict_dir= output_dir/f"{sample.sample_id}_timing_dicts/"
     os.makedirs(timing_dict_dir,exist_ok=True)
 
-    sample_mutation_table = sample.get_mutation_table()
-    sample_mutation_table_path = output_dir/f"{sample.sample_id}_mutation_table.tsv"
+    (
+        sample_mutation_table,
+        sample_count_group_table,
+        sample_phase_group_table,
+        sample_likelihood_context_table,
+        sample_segment_context_table,
+        sample_count_group_likelihood_table,
+        sample_segment_group_table,
+    ) = _prepare_group_output_tables(
+        sample,
+        sample.get_mutation_table(),
+    )
+    sample_mutation_table_path = (
+        output_dir / f'{sample.sample_id}_mutation_table.tsv'
+    )
     _write_tsv(sample_mutation_table, sample_mutation_table_path)
+
+    sample_count_group_table_path = (
+        output_dir / f'{sample.sample_id}_count_group_table.tsv'
+    )
+    _write_tsv(sample_count_group_table, sample_count_group_table_path)
+
+    sample_phase_group_table_path = (
+        output_dir / f'{sample.sample_id}_phase_group_table.tsv'
+    )
+    _write_tsv(sample_phase_group_table, sample_phase_group_table_path)
+
+    sample_likelihood_context_table_path = (
+        output_dir / f'{sample.sample_id}_likelihood_context_table.tsv'
+    )
+    _write_tsv(
+        sample_likelihood_context_table,
+        sample_likelihood_context_table_path,
+    )
+
+    sample_segment_context_table_path = (
+        output_dir / f'{sample.sample_id}_segment_context_table.tsv'
+    )
+    _write_tsv(
+        sample_segment_context_table,
+        sample_segment_context_table_path,
+    )
+
+    sample_count_group_likelihood_table_path = (
+        output_dir / f'{sample.sample_id}_count_group_likelihood_table.tsv'
+    )
+    _write_tsv(
+        sample_count_group_likelihood_table,
+        sample_count_group_likelihood_table_path,
+    )
+
+    sample_segment_group_table_path = (
+        output_dir / f'{sample.sample_id}_segment_group_table.tsv'
+    )
+    _write_tsv(
+        sample_segment_group_table,
+        sample_segment_group_table_path,
+    )
 
     sample_subclone_table = sample.get_subclone_table()
     sample_subclone_table_path = output_dir/f"{sample.sample_id}_subclone_table.tsv"

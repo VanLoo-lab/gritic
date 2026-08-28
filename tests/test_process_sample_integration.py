@@ -101,11 +101,17 @@ class ProcessSampleIntegrationTest(unittest.TestCase):
             output_directory = Path(temporary_directory) / sample.sample_id
 
             expected_files = {
+                'SMOKE_count_group_table.tsv',
+                'SMOKE_count_group_likelihood_table.tsv',
                 'SMOKE_gain_timing_table.tsv',
+                'SMOKE_likelihood_context_table.tsv',
                 'SMOKE_mutation_table.tsv',
+                'SMOKE_phase_group_table.tsv',
                 'SMOKE_posterior_timing_table_summary_penalty_False.tsv',
                 'SMOKE_posterior_timing_table_summary_penalty_True.tsv',
                 'SMOKE_route_table.tsv',
+                'SMOKE_segment_context_table.tsv',
+                'SMOKE_segment_group_table.tsv',
                 'SMOKE_subclone_table.tsv',
                 'SMOKE_wgd_calling_info.json',
             }
@@ -158,6 +164,115 @@ class ProcessSampleIntegrationTest(unittest.TestCase):
                 sorted(mutation_table['Segment_Mutation_Index']),
                 list(range(12)),
             )
+            self.assertIn('Phase_Group_ID', mutation_table.columns)
+            self.assertFalse(any(
+                column.startswith('Prob_')
+                or column.startswith('Alt_Count_Correction_')
+                for column in mutation_table.columns
+            ))
+            self.assertTrue({
+                'Tumor_Ref_Count',
+                'Tumor_Alt_Count',
+                'Phasing',
+                'Major_CN',
+                'Minor_CN',
+                'Total_CN',
+                'Gain_Type',
+            }.isdisjoint(mutation_table.columns))
+
+            count_group_table = pd.read_csv(
+                output_directory / 'SMOKE_count_group_table.tsv',
+                sep='\t',
+            )
+            self.assertEqual(
+                count_group_table.columns.tolist(),
+                tableschemas.COUNT_GROUP_TABLE_COLUMNS,
+            )
+            self.assertEqual(len(count_group_table), 1)
+            self.assertEqual(count_group_table.loc[0, 'Sample_ID'], 'SMOKE')
+            self.assertEqual(count_group_table.loc[0, 'Count_Group_ID'], 0)
+            self.assertEqual(count_group_table.loc[0, 'Tumor_Ref_Count'], 20)
+            self.assertEqual(count_group_table.loc[0, 'Tumor_Alt_Count'], 5)
+
+            phase_group_table = pd.read_csv(
+                output_directory / 'SMOKE_phase_group_table.tsv',
+                sep='\t',
+            )
+            self.assertEqual(
+                phase_group_table.columns.tolist(),
+                tableschemas.PHASE_GROUP_TABLE_COLUMNS,
+            )
+            self.assertEqual(len(phase_group_table), 1)
+            self.assertEqual(phase_group_table.loc[0, 'Sample_ID'], 'SMOKE')
+            self.assertEqual(phase_group_table.loc[0, 'Phase_Group_ID'], 0)
+            self.assertEqual(phase_group_table.loc[0, 'Count_Group_ID'], 0)
+            self.assertEqual(
+                phase_group_table.loc[0, 'Phasing'],
+                'non_phased',
+            )
+
+            likelihood_context_table = pd.read_csv(
+                output_directory / 'SMOKE_likelihood_context_table.tsv',
+                sep='\t',
+            )
+            self.assertEqual(
+                likelihood_context_table.columns.tolist(),
+                tableschemas.LIKELIHOOD_CONTEXT_TABLE_COLUMNS,
+            )
+            self.assertEqual(len(likelihood_context_table), 1)
+            self.assertEqual(
+                likelihood_context_table.loc[0, [
+                    'Major_CN',
+                    'Minor_CN',
+                    'Normal_Total_CN',
+                ]].tolist(),
+                [1, 1, 2],
+            )
+
+            segment_context_table = pd.read_csv(
+                output_directory / 'SMOKE_segment_context_table.tsv',
+                sep='\t',
+            )
+            self.assertEqual(
+                segment_context_table.columns.tolist(),
+                tableschemas.SEGMENT_CONTEXT_TABLE_COLUMNS,
+            )
+            self.assertEqual(len(segment_context_table), 1)
+            self.assertEqual(
+                segment_context_table.loc[0, 'Segment_ID'],
+                '1-0-1000',
+            )
+            self.assertEqual(
+                segment_context_table.loc[0, 'Likelihood_Context_ID'],
+                0,
+            )
+
+            count_group_likelihood_table = pd.read_csv(
+                output_directory
+                / 'SMOKE_count_group_likelihood_table.tsv',
+                sep='\t',
+            )
+            self.assertEqual(
+                count_group_likelihood_table.columns.tolist(),
+                tableschemas.COUNT_GROUP_LIKELIHOOD_BASE_COLUMNS
+                + ['Prob_Mult_1'],
+            )
+            self.assertEqual(len(count_group_likelihood_table), 1)
+            self.assertEqual(
+                count_group_likelihood_table.loc[0, 'Prob_Mult_1'],
+                1.0,
+            )
+
+            segment_group_table = pd.read_csv(
+                output_directory / 'SMOKE_segment_group_table.tsv',
+                sep='\t',
+            )
+            self.assertEqual(
+                segment_group_table.columns.tolist(),
+                tableschemas.SEGMENT_GROUP_TABLE_COLUMNS,
+            )
+            self.assertEqual(len(segment_group_table), 1)
+            self.assertEqual(segment_group_table.loc[0, 'N_Mutations'], 12)
 
             subclone_table = pd.read_csv(
                 output_directory / 'SMOKE_subclone_table.tsv',
@@ -236,6 +351,39 @@ class ProcessSampleIntegrationTest(unittest.TestCase):
                 random_seed=20260829,
             )
             output_directory = Path(temporary_directory) / sample.sample_id
+
+            count_group_table = pd.read_csv(
+                output_directory / 'GAIN_count_group_table.tsv',
+                sep='\t',
+            )
+            phase_group_table = pd.read_csv(
+                output_directory / 'GAIN_phase_group_table.tsv',
+                sep='\t',
+            )
+            count_group_likelihood_table = pd.read_csv(
+                output_directory
+                / 'GAIN_count_group_likelihood_table.tsv',
+                sep='\t',
+            )
+            segment_group_table = pd.read_csv(
+                output_directory / 'GAIN_segment_group_table.tsv',
+                sep='\t',
+            )
+            mutation_table = pd.read_csv(
+                output_directory / 'GAIN_mutation_table.tsv',
+                sep='\t',
+            )
+            self.assertEqual(len(count_group_table), 1)
+            self.assertEqual(len(phase_group_table), 1)
+            self.assertEqual(len(count_group_likelihood_table), 2)
+            self.assertEqual(segment_group_table['N_Mutations'].sum(), 24)
+            self.assertEqual(len(mutation_table), 24)
+            self.assertEqual(
+                segment_group_table.groupby('Segment_ID')[
+                    'N_Mutations'
+                ].sum().sort_index().tolist(),
+                [12, 12],
+            )
 
             route_table = pd.read_csv(
                 output_directory / 'GAIN_route_table.tsv',

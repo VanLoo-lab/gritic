@@ -66,6 +66,7 @@ class WarningOutputTest(unittest.TestCase):
                 sampletools.MultProbabilityStore(
                     array_store,
                     array_store.copy(),
+                    array_store.copy(),
                     major_cn=1,
                     minor_cn=0,
                     n_subclones=0,

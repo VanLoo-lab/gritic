@@ -9,6 +9,51 @@ TIMING_REPRESENTATIONS = (
     ROUTE_PARTICLES_REPRESENTATION,
 )
 
+# Read-count and phasing groups are sample-wide dictionaries.  Likelihoods are
+# stored separately for the sparse set of count-group/copy-number contexts that
+# actually occurs.  ``Prob_Mult_*`` and ``Prob_Subclone_*`` columns follow
+# COUNT_GROUP_LIKELIHOOD_BASE_COLUMNS in canonical numeric order.
+COUNT_GROUP_TABLE_COLUMNS = [
+    'Sample_ID',
+    'Count_Group_ID',
+    'Tumor_Ref_Count',
+    'Tumor_Alt_Count',
+]
+
+PHASE_GROUP_TABLE_COLUMNS = [
+    'Sample_ID',
+    'Phase_Group_ID',
+    'Count_Group_ID',
+    'Phasing',
+]
+
+LIKELIHOOD_CONTEXT_TABLE_COLUMNS = [
+    'Sample_ID',
+    'Likelihood_Context_ID',
+    'Major_CN',
+    'Minor_CN',
+    'Normal_Total_CN',
+]
+
+SEGMENT_CONTEXT_TABLE_COLUMNS = [
+    'Sample_ID',
+    'Segment_ID',
+    'Likelihood_Context_ID',
+]
+
+COUNT_GROUP_LIKELIHOOD_BASE_COLUMNS = [
+    'Sample_ID',
+    'Likelihood_Context_ID',
+    'Count_Group_ID',
+]
+
+SEGMENT_GROUP_TABLE_COLUMNS = [
+    'Sample_ID',
+    'Segment_ID',
+    'Phase_Group_ID',
+    'N_Mutations',
+]
+
 SEGMENT_METADATA_COLUMNS = [
     'Sample_ID',
     'Segment_ID',

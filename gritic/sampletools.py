@@ -20,6 +20,12 @@ DEFAULT_MAX_SUBCLONE_CCF = 0.9
 DEFAULT_MIN_SUBCLONE_FRACTION = 0.1
 DEFAULT_AUTOSOME_COUNT = 22
 
+PHASE_GROUP_ORDER = {
+    'non_phased': 0,
+    'major': 1,
+    'minor': 2,
+}
+
 _VALIDATED_INPUT_TABLES = object()
 
 _WINDOWS_FORBIDDEN_FILENAME_CHARACTERS = frozenset('<>:"/\\|?*')
@@ -103,9 +109,359 @@ def validate_purity(value):
     return dataloader.validate_purity(value)
 
 
+def frequency_weighted_quantile(values, frequencies, quantile):
+    """Return NumPy's linear quantile of an integer-frequency sample.
+
+    This is equivalent to ``np.quantile(np.repeat(values, frequencies), q)``
+    without materializing the expanded sample.  GRITIC uses it for the
+    high-VAF coverage estimate, where count groups carry the number of SNVs
+    represented by each distinct read-count pair.
+    """
+    values = np.asarray(values, dtype=np.float64)
+    frequencies = np.asarray(frequencies, dtype=np.int64)
+    quantile = validate_coverage_vaf_quantile(quantile)
+    if values.ndim != 1 or frequencies.ndim != 1:
+        raise ValueError('values and frequencies must be one-dimensional')
+    if values.size == 0 or values.size != frequencies.size:
+        raise ValueError(
+            'values and frequencies must have the same non-zero length'
+        )
+    if np.any(frequencies <= 0):
+        raise ValueError('frequencies must contain positive integers')
+
+    order = np.argsort(values, kind='stable')
+    ordered_values = values[order]
+    cumulative_frequencies = np.cumsum(
+        frequencies[order],
+        dtype=np.int64,
+    )
+    expanded_size = int(cumulative_frequencies[-1])
+    position = (expanded_size - 1) * quantile
+    lower_position = int(np.floor(position))
+    upper_position = int(np.ceil(position))
+    interpolation_weight = position - lower_position
+    lower_index = np.searchsorted(
+        cumulative_frequencies,
+        lower_position,
+        side='right',
+    )
+    upper_index = np.searchsorted(
+        cumulative_frequencies,
+        upper_position,
+        side='right',
+    )
+    lower_value = ordered_values[lower_index]
+    upper_value = ordered_values[upper_index]
+
+    # Match NumPy's scalar linear interpolation, including its numerically
+    # stable upper-end expression for weights at or above one half.
+    difference = upper_value - lower_value
+    if interpolation_weight >= 0.5:
+        return upper_value - difference * (1.0 - interpolation_weight)
+    return lower_value + difference * interpolation_weight
+
+
 def get_normal_total_copy_number(chromosome, sex):
     """Return normal-cell copy number for an autosome or sex chromosome."""
     return dataloader.get_normal_total_copy_number(chromosome, sex)
+
+
+def _canonical_phase_labels(phasing):
+    """Return the compact phase labels used by the grouping tables."""
+    return phasing.where(phasing.notna(), 'non_phased').astype(str)
+
+
+def build_sample_group_tables(mutation_table):
+    """Build sample-wide count/phase dictionaries and segment weights.
+
+    Count groups are unique read-count pairs across the sample. Phase groups
+    are unique ``(Count_Group_ID, Phasing)`` pairs across the sample. Only the
+    sparse segment/phase-group association carries mutation frequencies.
+    """
+    if mutation_table.empty:
+        raise ValueError('Cannot group an empty mutation table')
+
+    mutation_table = mutation_table.drop(
+        columns=['Count_Group_ID', 'Phase_Group_ID'],
+        errors='ignore',
+    ).copy()
+    if 'Phasing' not in mutation_table.columns:
+        mutation_table['Phasing'] = np.nan
+
+    count_columns = ['Tumor_Ref_Count', 'Tumor_Alt_Count']
+    count_group_table = (
+        mutation_table[count_columns]
+        .drop_duplicates()
+        .sort_values(count_columns, kind='mergesort')
+        .reset_index(drop=True)
+    )
+    count_group_table.insert(
+        0,
+        'Count_Group_ID',
+        np.arange(len(count_group_table), dtype=np.int64),
+    )
+
+    count_lookup = count_group_table.set_index(count_columns)[
+        'Count_Group_ID'
+    ]
+    mutation_count_index = pd.MultiIndex.from_frame(
+        mutation_table[count_columns]
+    )
+    mutation_count_groups = count_lookup.reindex(
+        mutation_count_index
+    ).to_numpy(dtype=np.int64)
+
+    phase_rows = pd.DataFrame({
+        'Count_Group_ID': mutation_count_groups,
+        'Phasing': _canonical_phase_labels(
+            mutation_table['Phasing']
+        ).to_numpy(),
+    })
+    phase_group_table = phase_rows.drop_duplicates().copy()
+    phase_group_table['_Phase_Order'] = (
+        phase_group_table['Phasing'].map(PHASE_GROUP_ORDER).fillna(3)
+    )
+    phase_group_table = (
+        phase_group_table
+        .sort_values(
+            ['Count_Group_ID', '_Phase_Order', 'Phasing'],
+            kind='mergesort',
+        )
+        .drop(columns='_Phase_Order')
+        .reset_index(drop=True)
+    )
+    phase_group_table.insert(
+        0,
+        'Phase_Group_ID',
+        np.arange(len(phase_group_table), dtype=np.int64),
+    )
+
+    phase_lookup = phase_group_table.set_index(
+        ['Count_Group_ID', 'Phasing']
+    )['Phase_Group_ID']
+    mutation_phase_index = pd.MultiIndex.from_frame(phase_rows)
+    mutation_table['Phase_Group_ID'] = phase_lookup.reindex(
+        mutation_phase_index
+    ).to_numpy(dtype=np.int64)
+
+    segment_group_table = (
+        mutation_table
+        .groupby(
+            ['Segment_ID', 'Phase_Group_ID'],
+            sort=True,
+            as_index=False,
+        )
+        .size()
+        .rename(columns={'size': 'N_Mutations'})
+        .sort_values(
+            ['Segment_ID', 'Phase_Group_ID'],
+            kind='mergesort',
+        )
+        .reset_index(drop=True)
+    )
+    segment_group_table['Phase_Group_ID'] = segment_group_table[
+        'Phase_Group_ID'
+    ].astype(np.int64)
+    segment_group_table['N_Mutations'] = segment_group_table[
+        'N_Mutations'
+    ].astype(np.int64)
+
+    if int(segment_group_table['N_Mutations'].sum()) != len(mutation_table):
+        raise AssertionError('Segment-group weights do not cover all mutations')
+
+    return (
+        mutation_table,
+        count_group_table,
+        phase_group_table,
+        segment_group_table,
+    )
+
+
+def build_likelihood_context_tables(mutation_table, sex):
+    """Build deterministic observation contexts and a segment/context map."""
+    segment_columns = [
+        'Segment_ID',
+        'Chromosome',
+        'Major_CN',
+        'Minor_CN',
+    ]
+    segment_rows = mutation_table[segment_columns].drop_duplicates()
+    duplicate_segments = segment_rows.duplicated('Segment_ID', keep=False)
+    if duplicate_segments.any():
+        raise ValueError(
+            'Chromosome and copy number must be unique within each segment'
+        )
+    segment_rows = segment_rows.copy()
+    segment_rows['Normal_Total_CN'] = [
+        get_normal_total_copy_number(chromosome, sex)
+        for chromosome in segment_rows['Chromosome']
+    ]
+
+    context_columns = ['Major_CN', 'Minor_CN', 'Normal_Total_CN']
+    likelihood_context_table = (
+        segment_rows[context_columns]
+        .drop_duplicates()
+        .sort_values(context_columns, kind='mergesort')
+        .reset_index(drop=True)
+    )
+    likelihood_context_table.insert(
+        0,
+        'Likelihood_Context_ID',
+        np.arange(len(likelihood_context_table), dtype=np.int64),
+    )
+    segment_context_table = (
+        segment_rows[['Segment_ID'] + context_columns]
+        .merge(
+            likelihood_context_table,
+            on=context_columns,
+            how='left',
+            sort=False,
+            validate='many_to_one',
+        )[['Segment_ID', 'Likelihood_Context_ID']]
+        .sort_values('Segment_ID', kind='mergesort')
+        .reset_index(drop=True)
+    )
+    segment_context_table['Likelihood_Context_ID'] = segment_context_table[
+        'Likelihood_Context_ID'
+    ].astype(np.int64)
+    return likelihood_context_table, segment_context_table
+
+
+def _normalised_count_likelihoods(
+    ref_counts,
+    alt_counts,
+    state_vafs,
+):
+    """Return the legacy-normalized read likelihood for each state/group."""
+    total_counts = ref_counts + alt_counts
+    log_probabilities = binom.logpmf(
+        alt_counts[None, :],
+        total_counts[None, :],
+        state_vafs[:, None],
+    )
+    probabilities = np.exp(
+        log_probabilities - np.max(log_probabilities, axis=0)
+    )
+    normalising_sums = probabilities.sum(axis=0)
+    normalising_sums = np.where(
+        np.isclose(normalising_sums, 0),
+        1,
+        normalising_sums,
+    )
+    return probabilities / normalising_sums
+
+
+def build_count_group_likelihood_table(
+    count_group_table,
+    phase_group_table,
+    segment_group_table,
+    likelihood_context_table,
+    segment_context_table,
+    purity,
+    subclone_table,
+):
+    """Calculate each observed ``(context, count-group)`` likelihood once."""
+    observed_pairs = (
+        segment_group_table[['Segment_ID', 'Phase_Group_ID']]
+        .merge(
+            phase_group_table,
+            on='Phase_Group_ID',
+            how='left',
+            sort=False,
+            validate='many_to_one',
+        )
+        .merge(
+            segment_context_table,
+            on='Segment_ID',
+            how='left',
+            sort=False,
+            validate='many_to_one',
+        )[['Likelihood_Context_ID', 'Count_Group_ID']]
+        .drop_duplicates()
+        .sort_values(
+            ['Likelihood_Context_ID', 'Count_Group_ID'],
+            kind='mergesort',
+        )
+        .reset_index(drop=True)
+    )
+    if observed_pairs.isna().any().any():
+        raise AssertionError('Grouping tables contain an unresolved key')
+
+    max_major_cn = int(likelihood_context_table['Major_CN'].max())
+    n_subclones = 0 if subclone_table is None else len(subclone_table)
+    probability_columns = [
+        f'Prob_Mult_{multiplicity}'
+        for multiplicity in range(1, max_major_cn + 1)
+    ]
+    probability_columns.extend(
+        f'Prob_Subclone_{index}' for index in range(n_subclones)
+    )
+    probability_values = np.full(
+        (len(observed_pairs), len(probability_columns)),
+        np.nan,
+        dtype=np.float64,
+    )
+    count_lookup = count_group_table.set_index('Count_Group_ID')
+
+    for context in likelihood_context_table.itertuples(index=False):
+        context_mask = observed_pairs['Likelihood_Context_ID'].eq(
+            context.Likelihood_Context_ID
+        )
+        if not context_mask.any():
+            continue
+        context_count_ids = observed_pairs.loc[
+            context_mask,
+            'Count_Group_ID',
+        ].to_numpy(dtype=np.int64)
+        context_counts = count_lookup.loc[context_count_ids]
+        ref_counts = context_counts['Tumor_Ref_Count'].to_numpy(
+            dtype=np.int64
+        )
+        alt_counts = context_counts['Tumor_Alt_Count'].to_numpy(
+            dtype=np.int64
+        )
+        total_cn = context.Major_CN + context.Minor_CN
+        mult_one_vaf = purity / (
+            total_cn * purity
+            + context.Normal_Total_CN * (1 - purity)
+        )
+        clonal_multiplicities = np.arange(
+            1,
+            context.Major_CN + 1,
+            dtype=np.float64,
+        )
+        if subclone_table is None:
+            state_multiplicities = clonal_multiplicities
+        else:
+            state_multiplicities = np.concatenate((
+                clonal_multiplicities,
+                subclone_table['Subclone_CCF'].to_numpy(dtype=np.float64),
+            ))
+        state_vafs = np.minimum(1, mult_one_vaf * state_multiplicities)
+        context_probabilities = _normalised_count_likelihoods(
+            ref_counts,
+            alt_counts,
+            state_vafs,
+        ).T
+        context_row_indices = np.flatnonzero(context_mask.to_numpy())
+        probability_values[
+            context_row_indices,
+            :context.Major_CN,
+        ] = context_probabilities[:, :context.Major_CN]
+        if n_subclones:
+            probability_values[
+                context_row_indices,
+                max_major_cn:,
+            ] = context_probabilities[:, context.Major_CN:]
+
+    probability_table = pd.DataFrame(
+        probability_values,
+        columns=probability_columns,
+    )
+    return pd.concat(
+        [observed_pairs, probability_table],
+        axis=1,
+    )
 
 
 def validate_sample_id(sample_id):
@@ -203,11 +559,11 @@ def get_major_cn_mode(sample):
     return get_major_cn_mode_from_cn_table(cn_table, _validated=True)
 
 @njit(parallel=True, cache=True)
-def log_likelihood_numba_parallel(mult_array,mult_states):
+def log_likelihood_numba_parallel(mult_array, mult_states, group_weights):
     log_likelihood_store = np.zeros(mult_states.shape[0])
     for i in prange(mult_states.shape[0]):
         log_likelihood = 0.0
-        for mutation_index in range(mult_array.shape[0]):
+        for group_index in range(mult_array.shape[0]):
             mutation_likelihood = 0.0
             for multiplicity_index in range(mult_array.shape[1]):
                 state_probability = mult_states[i, multiplicity_index]
@@ -217,40 +573,97 @@ def log_likelihood_numba_parallel(mult_array,mult_states):
                     state_probability = 1.0
                 mutation_likelihood += (
                     state_probability
-                    * mult_array[mutation_index, multiplicity_index]
+                    * mult_array[group_index, multiplicity_index]
                 )
-            log_likelihood += np.log(mutation_likelihood + 2.2e-300)
+            log_likelihood += (
+                group_weights[group_index]
+                * np.log(mutation_likelihood + 2.2e-300)
+            )
         log_likelihood_store[i] = log_likelihood
     return log_likelihood_store
 
-@njit(cache=True)
-def evaluate_likelihood_array_numba(full_states,non_phased_array,reads_correction_array,tolerance=1e-8):
-    
-    full_states = np.multiply(full_states,reads_correction_array)
-    full_states = full_states/np.sum(full_states,axis=1).reshape(-1,1)
-    
-    prob_sums = np.sum(non_phased_array,axis=1)
-    probs_sums_good = (prob_sums>(1.0-tolerance)) & (prob_sums<(1.0+tolerance))
+def evaluate_likelihood_array_numba(
+    full_states,
+    non_phased_array,
+    reads_correction_array,
+    group_weights,
+    tolerance=1e-8,
+):
+    full_states = np.multiply(full_states, reads_correction_array)
+    full_states = full_states / np.sum(
+        full_states,
+        axis=1,
+        keepdims=True,
+    )
 
-    non_phased_array = non_phased_array[probs_sums_good,:]
+    prob_sums = np.sum(non_phased_array, axis=1)
+    probs_sums_good = (
+        (prob_sums > 1.0 - tolerance)
+        & (prob_sums < 1.0 + tolerance)
+    )
+    non_phased_array = np.ascontiguousarray(
+        non_phased_array[probs_sums_good, :],
+        dtype=np.float64,
+    )
+    group_weights = np.ascontiguousarray(
+        group_weights[probs_sums_good],
+        dtype=np.int64,
+    )
     if non_phased_array.shape[0] ==0:
-        return np.nan*np.ones_like(full_states[:,0])
-    likelihood_array = log_likelihood_numba_parallel(non_phased_array,full_states)
+        return np.full(full_states.shape[0], np.nan)
+    likelihood_array = log_likelihood_numba_parallel(
+        non_phased_array,
+        np.ascontiguousarray(full_states, dtype=np.float64),
+        group_weights,
+    )
 
     return likelihood_array
 
 class MultProbabilityStore:
-    def __init__(self,mult_array_store,reads_correction_store,major_cn,minor_cn,n_subclones):
-        self.non_phased_array = mult_array_store['Non_Phased']
-        self.major_array = mult_array_store['Major']
-        self.minor_array = mult_array_store['Minor']
-        self.combined_array = mult_array_store['All']
+    def __init__(
+        self,
+        mult_array_store,
+        reads_correction_store,
+        weight_store,
+        major_cn,
+        minor_cn,
+        n_subclones,
+    ):
+        def probability_array(name):
+            value = mult_array_store[name]
+            if value is None:
+                return None
+            return np.ascontiguousarray(value, dtype=np.float64)
+
+        def integer_weights(name):
+            value = weight_store[name]
+            if value is None:
+                return None
+            return np.ascontiguousarray(value, dtype=np.int64)
+
+        def correction_array(name):
+            value = reads_correction_store[name]
+            if value is None:
+                return None
+            return np.ascontiguousarray(value, dtype=np.float64)
+
+        self.non_phased_array = probability_array('Non_Phased')
+        self.major_array = probability_array('Major')
+        self.minor_array = probability_array('Minor')
+        self.combined_array = probability_array('All')
+
+        self.non_phased_weights = integer_weights('Non_Phased')
+        self.major_weights = integer_weights('Major')
+        self.minor_weights = integer_weights('Minor')
+        self.combined_weights = integer_weights('All')
 
         
-        self.reads_correction_non_phased_array = reads_correction_store['Non_Phased']
-        self.reads_correction_major_array = reads_correction_store['Major']
-        self.reads_correction_minor_array = reads_correction_store['Minor']
-        self.reads_correction_combined_array = reads_correction_store['All']
+        self.reads_correction_non_phased_array = correction_array(
+            'Non_Phased'
+        )
+        self.reads_correction_major_array = correction_array('Major')
+        self.reads_correction_minor_array = correction_array('Minor')
+        self.reads_correction_combined_array = correction_array('All')
 
         self.use_non_phased = self.non_phased_array is not None and self.non_phased_array.shape[0]>0
         self.use_major = self.major_array is not None and self.major_array.shape[0]>0
@@ -261,24 +674,36 @@ class MultProbabilityStore:
         if self.use_non_phased:
 
             assert self.non_phased_array.shape[1] == self.reads_correction_non_phased_array.size
+            assert self.non_phased_array.shape[0] == self.non_phased_weights.size
+            assert np.all(self.non_phased_weights > 0)
         if self.use_major:
 
             assert self.major_array.shape[1] == self.reads_correction_major_array.size
+            assert self.major_array.shape[0] == self.major_weights.size
+            assert np.all(self.major_weights > 0)
         if self.use_minor:
 
             assert self.minor_array.shape[1] == self.reads_correction_minor_array.size
+            assert self.minor_array.shape[0] == self.minor_weights.size
+            assert np.all(self.minor_weights > 0)
 
         if sum([self.use_non_phased,self.use_major,self.use_minor]) == 0:
             raise ValueError('No arrays provided')
 
-        self.n_mutations = self.non_phased_array.shape[0] if self.use_non_phased else self.major_array.shape[0] if self.use_major else self.minor_array.shape[0]
+        assert self.combined_array.shape[0] == self.combined_weights.size
+        assert np.all(self.combined_weights > 0)
+        self.n_mutations = int(np.sum(self.combined_weights))
         
         self.major_cn = major_cn
         self.minor_cn = minor_cn
         self.n_subclones = n_subclones
     
     def __str__(self):
-        return str(np.average(self.non_phased_array,axis=0))
+        return str(np.average(
+            self.combined_array,
+            axis=0,
+            weights=self.combined_weights,
+        ))
     
     def get_subclonal_correction_array(self,subclone_table):
         weights = []
@@ -286,31 +711,37 @@ class MultProbabilityStore:
         if self.use_non_phased:
             non_phased_array = np.concatenate([[self.reads_correction_non_phased_array[0]],self.reads_correction_non_phased_array[-(len(subclone_table.index)):]])
             arrays.append(non_phased_array)
-            weights.append(self.non_phased_array.shape[0])
+            weights.append(np.sum(self.non_phased_weights))
         if self.use_major:
             major_array = np.concatenate([[self.reads_correction_major_array[0]],self.reads_correction_major_array[-(len(subclone_table.index)):]])
             arrays.append(major_array)
-            weights.append(self.major_array.shape[0])
+            weights.append(np.sum(self.major_weights))
         if self.use_minor:
             minor_array = np.concatenate([[self.reads_correction_minor_array[0]],self.reads_correction_minor_array[-(len(subclone_table.index)):]])
             arrays.append(minor_array)
-            weights.append(self.minor_array.shape[0])
+            weights.append(np.sum(self.minor_weights))
         arrays = np.stack(arrays)
         weights = np.array(weights)
         weights = weights/np.sum(weights)
         return np.average(arrays,axis=0,weights=weights)
 
-    def array_likelihood(self,mult_state,array):
+    def array_likelihood(self, mult_state, array, group_weights):
         likelihood = np.multiply(mult_state, array)
         
         likelihood = np.sum(likelihood, axis=1)
-        likelihood = np.sum(np.log(likelihood + 2.2e-300))
+        likelihood = np.sum(
+            group_weights * np.log(likelihood + 2.2e-300)
+        )
         return likelihood
     def evaluate_likelihood(self,mult_state):
         mult_state = np.clip(mult_state,0.0,1.0)
         mult_state = mult_state/np.sum(mult_state)
         
-        log_likelihood= self.array_likelihood(mult_state,self.combined_array)
+        log_likelihood = self.array_likelihood(
+            mult_state,
+            self.combined_array,
+            self.combined_weights,
+        )
 
         return log_likelihood
     
@@ -333,18 +764,33 @@ class MultProbabilityStore:
         
         if self.use_non_phased:
             full_states_non_phased = full_states[:,non_phased_indicies]
-            ll_non_phased = evaluate_likelihood_array_numba(full_states_non_phased,self.non_phased_array,self.reads_correction_non_phased_array)
+            ll_non_phased = evaluate_likelihood_array_numba(
+                full_states_non_phased,
+                self.non_phased_array,
+                self.reads_correction_non_phased_array,
+                self.non_phased_weights,
+            )
             
             ll += ll_non_phased
         if self.use_major:
             full_states_major = full_states[:,major_indicies]
-            ll_major = evaluate_likelihood_array_numba(full_states_major,self.major_array,self.reads_correction_major_array)
+            ll_major = evaluate_likelihood_array_numba(
+                full_states_major,
+                self.major_array,
+                self.reads_correction_major_array,
+                self.major_weights,
+            )
            
             ll += ll_major
         if self.use_minor:
             full_states_minor = full_states[:,minor_indicies]
             
-            ll_minor = evaluate_likelihood_array_numba(full_states_minor,self.minor_array,self.reads_correction_minor_array)
+            ll_minor = evaluate_likelihood_array_numba(
+                full_states_minor,
+                self.minor_array,
+                self.reads_correction_minor_array,
+                self.minor_weights,
+            )
             ll += ll_minor
         return ll
     
@@ -517,6 +963,30 @@ class Sample:
 
         self.cn_table = cn_table.copy()
         self.subclone_table = self.format_subclone_table(subclone_table)
+        (
+            self.mutation_table,
+            self.count_group_table,
+            self.phase_group_table,
+            self.segment_group_table,
+        ) = build_sample_group_tables(self.mutation_table)
+        (
+            self.likelihood_context_table,
+            self.segment_context_table,
+        ) = build_likelihood_context_tables(
+            self.mutation_table,
+            self.sex,
+        )
+        self.count_group_likelihood_table = (
+            build_count_group_likelihood_table(
+                self.count_group_table,
+                self.phase_group_table,
+                self.segment_group_table,
+                self.likelihood_context_table,
+                self.segment_context_table,
+                self.purity,
+                self.subclone_table,
+            )
+        )
         self.segments = self.get_segments(_validated=True)
 
     def process_raw_mutation_table(
@@ -779,6 +1249,16 @@ class Sample:
     
     def get_segments(self,min_mutations=0, *, _validated=False):
         segments = []
+        sample_group_tables = {
+            'count_group_table': self.count_group_table,
+            'phase_group_table': self.phase_group_table,
+            'segment_group_table': self.segment_group_table,
+            'likelihood_context_table': self.likelihood_context_table,
+            'segment_context_table': self.segment_context_table,
+            'count_group_likelihood_table': (
+                self.count_group_likelihood_table
+            ),
+        }
         for _,segment_table in self.mutation_table.groupby('Segment_ID'):
             if len(segment_table.index) >= min_mutations:
                 segment = Segment(
@@ -790,6 +1270,7 @@ class Sample:
                     min_mutation_alt_count=self.min_mutation_alt_count,
                     coverage_vaf_quantile=self.coverage_vaf_quantile,
                     _validated=_validated,
+                    _sample_group_tables=sample_group_tables,
                 )
                 segments.append(segment)
         return segments
@@ -797,6 +1278,24 @@ class Sample:
     def get_mutation_table(self):
         mutation_table = pd.concat([segment.mutation_table for segment in self.segments])
         return self.sort_table_by_chromosome(mutation_table)
+
+    def get_count_group_table(self):
+        return self.count_group_table.copy()
+
+    def get_phase_group_table(self):
+        return self.phase_group_table.copy()
+
+    def get_likelihood_context_table(self):
+        return self.likelihood_context_table.copy()
+
+    def get_segment_context_table(self):
+        return self.segment_context_table.copy()
+
+    def get_count_group_likelihood_table(self):
+        return self.count_group_likelihood_table.copy()
+
+    def get_segment_group_table(self):
+        return self.segment_group_table.copy()
     
     def get_subclone_table(self):
         return self.subclone_table
@@ -820,16 +1319,19 @@ class Segment:
         coverage_vaf_quantile=DEFAULT_COVERAGE_VAF_QUANTILE,
         *,
         _validated=False,
+        _sample_group_tables=None,
     ):
         if _validated:
-            self.mutation_table = mutation_table.copy()
+            self.mutation_table = mutation_table.copy().reset_index(drop=True)
         else:
             self.mutation_table = dataloader.validate_mutation_read_counts(
                 mutation_table
             )
             self.mutation_table = dataloader.validate_segment_coordinates(
                 self.mutation_table
-            )
+            ).reset_index(drop=True)
+        if 'Phasing' not in self.mutation_table.columns:
+            self.mutation_table['Phasing'] = np.nan
         self.n_mutations = len(self.mutation_table.index)
         if subclone_table is None:
             self.subclone_table = None
@@ -867,7 +1369,8 @@ class Segment:
         self.start = self.get_unique_attribute_from_table('Segment_Start')
         self.end = self.get_unique_attribute_from_table('Segment_End')
         self.width = int(self.end) - int(self.start)
-        
+
+        self.assign_mutation_groups(_sample_group_tables)
         self.assign_multiplicity_probabilities()
         
         self.multiplicity_probabilities = self.get_multiplicity_probabilities()
@@ -923,15 +1426,9 @@ class Segment:
         
         mutation_rate = self.n_mutations*mult_correction_factor
         return mutation_rate/self.width
-    
-    def assign_multiplicity_probabilities(self):
-        #remove mult cols if they already exist
-        mult_cols = [
-            col
-            for col in self.mutation_table.columns
-            if 'Prob_' in col or 'Alt_Count_Correction_' in col
-        ]
-        self.mutation_table = self.mutation_table.drop(columns=mult_cols)
+
+    def assign_mutation_groups(self, sample_group_tables=None):
+        """Attach this segment to the sample-wide grouping dictionaries."""
         represented_sex_chromosomes = (
             set(self.mutation_table['Chromosome'].unique())
             & {'X', 'Y', 'Z', 'W'}
@@ -940,39 +1437,235 @@ class Segment:
             raise ValueError(
                 'sex must be specified when timing sex-chromosome segments'
             )
-        normal_total_cn = self.mutation_table['Chromosome'].map(
-            lambda chromosome: get_normal_total_copy_number(
-                chromosome,
+
+        if sample_group_tables is None:
+            (
+                self.mutation_table,
+                count_group_dictionary,
+                phase_group_dictionary,
+                segment_group_table,
+            ) = build_sample_group_tables(self.mutation_table)
+            (
+                likelihood_context_table,
+                segment_context_table,
+            ) = build_likelihood_context_tables(
+                self.mutation_table,
                 self.sex,
             )
-        )
-        
-        alt_count_correction_factors = []
-        multiplicity_probabilities = []
+            count_group_likelihood_table = (
+                build_count_group_likelihood_table(
+                    count_group_dictionary,
+                    phase_group_dictionary,
+                    segment_group_table,
+                    likelihood_context_table,
+                    segment_context_table,
+                    self.purity,
+                    self.subclone_table,
+                )
+            )
+        else:
+            required_tables = {
+                'count_group_table',
+                'phase_group_table',
+                'segment_group_table',
+                'likelihood_context_table',
+                'segment_context_table',
+                'count_group_likelihood_table',
+            }
+            missing_tables = required_tables - set(sample_group_tables)
+            if missing_tables:
+                raise ValueError(
+                    'Missing sample grouping tables: '
+                    + ', '.join(sorted(missing_tables))
+                )
+            count_group_dictionary = sample_group_tables[
+                'count_group_table'
+            ]
+            phase_group_dictionary = sample_group_tables[
+                'phase_group_table'
+            ]
+            segment_group_table = sample_group_tables[
+                'segment_group_table'
+            ]
+            likelihood_context_table = sample_group_tables[
+                'likelihood_context_table'
+            ]
+            segment_context_table = sample_group_tables[
+                'segment_context_table'
+            ]
+            count_group_likelihood_table = sample_group_tables[
+                'count_group_likelihood_table'
+            ]
 
-        mult_one_vaf = self.purity / (self.total_cn* self.purity + normal_total_cn * (1 - self.purity))
-        
-        combined_all_possible_multiplicities = np.concatenate((self.all_possible_clonal_multiplicities,self.all_possible_subclonal_multiplicities))
-        peak_names = self.get_multiplicity_names()
-        
-        vaf = self.mutation_table["Tumor_Alt_Count"] / (self.mutation_table["Tumor_Alt_Count"] + self.mutation_table["Tumor_Ref_Count"])
-        highest_vaf_m_table = self.mutation_table[
-            vaf > np.quantile(vaf, self.coverage_vaf_quantile) - 0.01
+        segment_context = segment_context_table.loc[
+            segment_context_table['Segment_ID'].eq(self.segment_id)
         ]
-        highest_vaf_average_coverage = np.average(highest_vaf_m_table['Tumor_Alt_Count']+highest_vaf_m_table['Tumor_Ref_Count'])
-        
+        if len(segment_context) != 1:
+            raise ValueError(
+                f'Expected one likelihood context for {self.segment_id}'
+            )
+        self.likelihood_context_id = int(
+            segment_context.iloc[0]['Likelihood_Context_ID']
+        )
+        context_row = likelihood_context_table.loc[
+            likelihood_context_table['Likelihood_Context_ID'].eq(
+                self.likelihood_context_id
+            )
+        ]
+        if len(context_row) != 1:
+            raise ValueError(
+                f'Likelihood context {self.likelihood_context_id} is missing'
+            )
+        self.normal_total_cn = int(context_row.iloc[0]['Normal_Total_CN'])
+        if (
+            int(context_row.iloc[0]['Major_CN']) != self.major_cn
+            or int(context_row.iloc[0]['Minor_CN']) != self.minor_cn
+        ):
+            raise ValueError('Likelihood context copy number does not match')
+
+        self.segment_group_table = (
+            segment_group_table.loc[
+                segment_group_table['Segment_ID'].eq(self.segment_id)
+            ]
+            .sort_values('Phase_Group_ID', kind='mergesort')
+            .reset_index(drop=True)
+            .copy()
+        )
+        if self.segment_group_table.empty:
+            raise ValueError(f'No mutation groups exist for {self.segment_id}')
+
+        phase_group_table = self.segment_group_table.merge(
+            phase_group_dictionary,
+            on='Phase_Group_ID',
+            how='left',
+            sort=False,
+            validate='many_to_one',
+        )
+        if phase_group_table[['Count_Group_ID', 'Phasing']].isna().any().any():
+            raise AssertionError('Segment references an unknown phase group')
+        self.phase_group_table = phase_group_table[[
+            'Segment_ID',
+            'Phase_Group_ID',
+            'Count_Group_ID',
+            'Phasing',
+            'N_Mutations',
+        ]].copy()
+
+        count_weights = (
+            self.phase_group_table
+            .groupby('Count_Group_ID', sort=True, as_index=False)[
+                'N_Mutations'
+            ]
+            .sum()
+        )
+        segment_count_groups = count_group_dictionary.merge(
+            count_weights,
+            on='Count_Group_ID',
+            how='inner',
+            sort=False,
+            validate='one_to_one',
+        )
+        context_likelihoods = count_group_likelihood_table.loc[
+            count_group_likelihood_table['Likelihood_Context_ID'].eq(
+                self.likelihood_context_id
+            )
+        ].drop(columns='Likelihood_Context_ID')
+        segment_count_groups = segment_count_groups.merge(
+            context_likelihoods,
+            on='Count_Group_ID',
+            how='left',
+            sort=False,
+            validate='one_to_one',
+        ).sort_values('Count_Group_ID', kind='mergesort').reset_index(
+            drop=True
+        )
+        probability_columns = [
+            column
+            for column in segment_count_groups.columns
+            if column.startswith('Prob_')
+        ]
+        required_probability_columns = [
+            f'Prob_Mult_{multiplicity}'
+            for multiplicity in range(1, self.major_cn + 1)
+        ]
+        required_probability_columns.extend(
+            f'Prob_Subclone_{index}'
+            for index in range(self.n_subclones)
+        )
+        missing_probabilities = (
+            set(required_probability_columns) - set(probability_columns)
+        )
+        if missing_probabilities:
+            raise ValueError(
+                'Missing count-group probabilities: '
+                + ', '.join(sorted(missing_probabilities))
+            )
+        if segment_count_groups[required_probability_columns].isna().any().any():
+            raise ValueError('Count-group likelihood lookup is incomplete')
+        segment_count_groups.insert(0, 'Segment_ID', self.segment_id)
+        self.count_group_table = segment_count_groups
+
+        observed_phase_counts = self.mutation_table[
+            'Phase_Group_ID'
+        ].value_counts(sort=False).sort_index()
+        expected_phase_counts = self.segment_group_table.set_index(
+            'Phase_Group_ID'
+        )['N_Mutations'].sort_index()
+        if not observed_phase_counts.equals(expected_phase_counts):
+            raise AssertionError('Mutation/segment-group mapping is inconsistent')
+        if int(self.count_group_table['N_Mutations'].sum()) != self.n_mutations:
+            raise AssertionError('Count-group weights do not cover the segment')
+        if int(self.phase_group_table['N_Mutations'].sum()) != self.n_mutations:
+            raise AssertionError('Phase-group weights do not cover the segment')
+
+    def get_count_group_table(self):
+        return self.count_group_table.copy()
+
+    def get_phase_group_table(self):
+        return self.phase_group_table.copy()
+
+    def assign_multiplicity_probabilities(self):
+        """Calculate segment-specific coverage and detection corrections."""
+        mult_one_vaf = self.purity / (
+            self.total_cn * self.purity
+            + self.normal_total_cn * (1 - self.purity)
+        )
+        combined_all_possible_multiplicities = np.concatenate((
+            self.all_possible_clonal_multiplicities,
+            self.all_possible_subclonal_multiplicities,
+        ))
+        ref_counts = self.count_group_table[
+            'Tumor_Ref_Count'
+        ].to_numpy(dtype=np.int64)
+        alt_counts = self.count_group_table[
+            'Tumor_Alt_Count'
+        ].to_numpy(dtype=np.int64)
+        total_counts = ref_counts + alt_counts
+        group_weights = self.count_group_table[
+            'N_Mutations'
+        ].to_numpy(dtype=np.int64)
+        vaf = alt_counts / total_counts
+        vaf_quantile = frequency_weighted_quantile(
+            vaf,
+            group_weights,
+            self.coverage_vaf_quantile,
+        )
+        high_vaf_groups = vaf > vaf_quantile - 0.01
+        highest_vaf_average_coverage = np.average(
+            total_counts[high_vaf_groups],
+            weights=group_weights[high_vaf_groups],
+        )
+
         if not self.apply_reads_correction:
-            highest_vaf_average_coverage = (self.mutation_table['Tumor_Alt_Count']+self.mutation_table['Tumor_Ref_Count']).mean()
+            highest_vaf_average_coverage = np.average(
+                total_counts,
+                weights=group_weights,
+            )
+        self.highest_vaf_average_coverage = highest_vaf_average_coverage
 
+        alt_count_correction_factors = []
         for multiplicity in combined_all_possible_multiplicities:
-            # if multiplicity is bigger than total cn then the vaf can be > 1 which causes a crash
-            #any mult > major cn is set to zero subsequently
             mult_vaf = np.minimum(1, mult_one_vaf * multiplicity)
-
-            total_counts = self.mutation_table["Tumor_Alt_Count"] + self.mutation_table["Tumor_Ref_Count"]
-            mult_probability = binom.logpmf(self.mutation_table["Tumor_Alt_Count"],total_counts,mult_vaf)
-            multiplicity_probabilities.append(mult_probability)
-
             # If total depth is Poisson and alternate reads are a binomial
             # thinning of that depth, the alternate-read count is Poisson
             # with mean coverage * VAF. Evaluate the detection probability
@@ -984,63 +1677,32 @@ class Segment:
             alt_count_correction_factors.append(
                 alt_count_correction_factor
             )
-
-        multiplicity_probabilities = np.array(multiplicity_probabilities)
-        alt_count_correction_factors = np.array(
+        self.alt_count_correction_factors = np.array(
             alt_count_correction_factors
         )
         
-        multiplicity_probabilities = np.exp(multiplicity_probabilities-np.max(multiplicity_probabilities,axis=0))
-        
-        normalising_sums = np.sum(multiplicity_probabilities, axis=0)
-
-        
-        normalising_sums = np.where(np.isclose(normalising_sums,0),1,normalising_sums)
-        multiplicity_probabilities = multiplicity_probabilities / normalising_sums
-        new_cols = {}
-        for index, peak_name in enumerate(peak_names):
-            new_cols[f"Prob_{peak_name}"] = multiplicity_probabilities[index, :]
-            new_cols[f'Alt_Count_Correction_{peak_name}'] = (
-                alt_count_correction_factors[index, :]
-            )
-        new_cols_table = pd.DataFrame(new_cols,index=self.mutation_table.index)
-        self.mutation_table = pd.concat((self.mutation_table,new_cols_table),axis=1)
-        
         
     def get_reads_correction_array(self, allele=None):
-        if allele == 'minor':
-            clonal_multiplicities = np.arange(1, self.minor_cn + 1)
-        else:
-            clonal_multiplicities = np.arange(1, self.major_cn + 1)
-        mult_names = [
-            f"Alt_Count_Correction_Mult_{mult}"
-            for mult in clonal_multiplicities
-        ]
-        mult_names.extend([
-            f"Alt_Count_Correction_Subclone_{subclone}"
-            for subclone in range(self.n_subclones)
-        ])
- 
-        reads_correction = self.mutation_table[mult_names].to_numpy()
-
-        if allele is None:
-            reads_correction = reads_correction[
-                self.mutation_table['Phasing'].isna(),
-                :,
-            ]
-        elif allele != 'all':
-            reads_correction = reads_correction[
-                self.mutation_table['Phasing'] == allele,
-                :,
-            ]
-        
-        if reads_correction.size == 0:
+        group_weights = self.get_multiplicity_probability_weights(allele)
+        if group_weights is None:
             return None
-
-        
-        
-        
-        reads_correction = np.average(reads_correction, axis=0)
+        if allele == 'minor':
+            clonal_correction = self.alt_count_correction_factors[
+                :self.minor_cn
+            ]
+        else:
+            clonal_correction = self.alt_count_correction_factors[
+                :self.major_cn
+            ]
+        if self.n_subclones:
+            subclonal_correction = self.alt_count_correction_factors[
+                -self.n_subclones:
+            ]
+            reads_correction = np.concatenate(
+                (clonal_correction, subclonal_correction)
+            )
+        else:
+            reads_correction = clonal_correction.copy()
         if not self.apply_reads_correction:
             reads_correction = np.ones_like(reads_correction)
         
@@ -1061,9 +1723,25 @@ class Segment:
             for subclone in range(self.n_subclones)
         ])
 
-        multiplicity_probabilities = self.mutation_table[
+        if allele == 'all':
+            source_table = self.count_group_table
+        else:
+            phase_label = 'non_phased' if allele is None else allele
+            phase_groups = self.phase_group_table.loc[
+                self.phase_group_table['Phasing'].eq(phase_label)
+            ].sort_values('Phase_Group_ID', kind='mergesort')
+            if phase_groups.empty:
+                return None
+            count_probabilities = self.count_group_table.set_index(
+                'Count_Group_ID'
+            )
+            source_table = count_probabilities.loc[
+                phase_groups['Count_Group_ID'].to_numpy(dtype=np.int64)
+            ]
+
+        multiplicity_probabilities = source_table[
             mult_names
-        ].to_numpy()
+        ].to_numpy(dtype=np.float64)
 
         normalising_sums = np.sum(
             multiplicity_probabilities,
@@ -1076,21 +1754,21 @@ class Segment:
         )
         multiplicity_probabilities = multiplicity_probabilities / normalising_sums
 
-        if allele is None:
-            multiplicity_probabilities = multiplicity_probabilities[
-                self.mutation_table['Phasing'].isna(),
-                :,
-            ]
-        elif allele != 'all':
-            multiplicity_probabilities = multiplicity_probabilities[
-                self.mutation_table['Phasing'] == allele,
-                :,
-            ]
-
-        if multiplicity_probabilities.size == 0:
-            return None
-        
         return multiplicity_probabilities
+
+    def get_multiplicity_probability_weights(self, allele=None):
+        if allele == 'all':
+            return self.count_group_table[
+                'N_Mutations'
+            ].to_numpy(dtype=np.int64)
+        phase_label = 'non_phased' if allele is None else allele
+        weights = self.phase_group_table.loc[
+            self.phase_group_table['Phasing'].eq(phase_label),
+            'N_Mutations',
+        ].to_numpy(dtype=np.int64)
+        if weights.size == 0:
+            return None
+        return weights
     
 
     def get_multiplicity_probabilities(self):
@@ -1107,10 +1785,18 @@ class Segment:
             'Minor': self.get_multiplicity_probabilities_array('minor'),
             'All': self.get_multiplicity_probabilities_array('all'),
         }
+
+        weight_store = {
+            'Non_Phased': self.get_multiplicity_probability_weights(),
+            'Major': self.get_multiplicity_probability_weights('major'),
+            'Minor': self.get_multiplicity_probability_weights('minor'),
+            'All': self.get_multiplicity_probability_weights('all'),
+        }
         
         return MultProbabilityStore(
             mult_array_store,
             reads_correction_store,
+            weight_store,
             self.major_cn,
             self.minor_cn,
             self.n_subclones,

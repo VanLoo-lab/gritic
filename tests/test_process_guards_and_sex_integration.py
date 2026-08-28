@@ -15,8 +15,48 @@ class ProcessSampleGuardTest(unittest.TestCase):
     def lightweight_sample(sample_id):
         return SimpleNamespace(
             sample_id=sample_id,
+            sex=None,
             get_mutation_table=lambda: pd.DataFrame({
                 'Mutation_ID': ['mutation'],
+                'Segment_ID': ['segment'],
+                'Segment_Mutation_Index': [0],
+                'Phase_Group_ID': [0],
+                'Chromosome': ['1'],
+                'Major_CN': [1],
+                'Minor_CN': [0],
+                'Tumor_Ref_Count': [10],
+                'Tumor_Alt_Count': [5],
+                'Phasing': [pd.NA],
+            }),
+            get_count_group_table=lambda: pd.DataFrame({
+                'Count_Group_ID': [0],
+                'Tumor_Ref_Count': [10],
+                'Tumor_Alt_Count': [5],
+            }),
+            get_phase_group_table=lambda: pd.DataFrame({
+                'Phase_Group_ID': [0],
+                'Count_Group_ID': [0],
+                'Phasing': ['non_phased'],
+            }),
+            get_likelihood_context_table=lambda: pd.DataFrame({
+                'Likelihood_Context_ID': [0],
+                'Major_CN': [1],
+                'Minor_CN': [0],
+                'Normal_Total_CN': [2],
+            }),
+            get_segment_context_table=lambda: pd.DataFrame({
+                'Segment_ID': ['segment'],
+                'Likelihood_Context_ID': [0],
+            }),
+            get_count_group_likelihood_table=lambda: pd.DataFrame({
+                'Likelihood_Context_ID': [0],
+                'Count_Group_ID': [0],
+                'Prob_Mult_1': [1.0],
+            }),
+            get_segment_group_table=lambda: pd.DataFrame({
+                'Segment_ID': ['segment'],
+                'Phase_Group_ID': [0],
+                'N_Mutations': [1],
             }),
             get_subclone_table=lambda: None,
         )
@@ -90,6 +130,38 @@ class ProcessSampleGuardTest(unittest.TestCase):
 
             self.assertTrue(
                 (sample_output_path / 'EMPTY_mutation_table.tsv').is_file()
+            )
+            self.assertTrue(
+                (
+                    sample_output_path / 'EMPTY_count_group_table.tsv'
+                ).is_file()
+            )
+            self.assertTrue(
+                (
+                    sample_output_path / 'EMPTY_phase_group_table.tsv'
+                ).is_file()
+            )
+            self.assertTrue(
+                (
+                    sample_output_path
+                    / 'EMPTY_likelihood_context_table.tsv'
+                ).is_file()
+            )
+            self.assertTrue(
+                (
+                    sample_output_path / 'EMPTY_segment_context_table.tsv'
+                ).is_file()
+            )
+            self.assertTrue(
+                (
+                    sample_output_path
+                    / 'EMPTY_count_group_likelihood_table.tsv'
+                ).is_file()
+            )
+            self.assertTrue(
+                (
+                    sample_output_path / 'EMPTY_segment_group_table.tsv'
+                ).is_file()
             )
             self.assertTrue(
                 (sample_output_path / 'EMPTY_subclone_table.tsv').is_file()

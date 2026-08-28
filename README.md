@@ -159,7 +159,7 @@ After copy-number assignment, every mutation with ```Phasing=minor``` must have 
 
 An original balanced ```2+2``` segment has one WGD-specific exception. Only while GRITIC evaluates a possible WGD and builds pooled timing for a called WGD, it retains each mutation's ```Phasing``` label but evaluates every SNV against one representative duplicated allele because the two homologs' routes and timings are constrained to be identical. If WGD is rejected, GRITIC uses the ordinary independent-route ```2+2``` model and phasing remains active.
 
-The ```Phasing=minor``` invariant still accepts this WGD-specific case: the representative allele's internal geometry is ```2+0```, but the mutation table's emitted, original ```Minor_CN``` remains ```2```.
+The ```Phasing=minor``` invariant still accepts this WGD-specific case: the representative allele's internal geometry is ```2+0```, while the segment's observation context retains the original ```2+2``` copy number.
 
 Input mutation columns named ```Segment_Start```, ```Segment_End```, ```Major_CN```, or ```Minor_CN``` are ignored because GRITIC always annotates those values from the copy-number table.
 
@@ -251,8 +251,6 @@ This table is produced while evaluating WGD timing. It gives the preliminary non
 ### _mutation_table.tsv
 The mutation table processed by GRITIC to give additional SNV multiplicity information. ```Segment_ID``` is GRITIC's final coordinate-derived segment ID, after copy-number merging when explicitly enabled.
 
-```Phasing``` contains the canonical lowercase values ```major``` or ```minor```, or is blank for an unphased mutation.
-
 Every output row contains these mutation identity, mapping, and provenance columns:
 
 - ```Source_Segment_ID``` is the input segment ID when both input tables supplied matching ```Segment_ID``` columns. For position-based copy-number assignment it is the final assigned segment ID.
@@ -260,10 +258,33 @@ Every output row contains these mutation identity, mapping, and provenance colum
 - ```Position``` contains the canonical non-negative integer input position when supplied and is blank otherwise. The column is always present.
 - ```GRITIC_Mutation_ID``` is the canonical sample-unique identifier derived from the source segment plus ```Mutation_ID``` when supplied, otherwise from the source segment plus ```Position```. Its two components are URL-escaped and separated by ```:``` (for example, source segment ```001``` and selected value ```0007``` produce ```001:0007```). Consumers should treat this value as opaque.
 - ```Segment_Mutation_Index``` is a zero-based, consecutive index within the final ```Segment_ID```. GRITIC assigns it by sorting ```GRITIC_Mutation_ID``` lexicographically within each segment, so it is independent of input row order. MUTIC uses this index as the row number in the segment's posterior timing matrix.
+- ```Phase_Group_ID``` is a sample-wide, zero-based identifier that links the mutation to one row of ```_phase_group_table.tsv```. Together with ```Segment_ID```, it also links to the mutation count in ```_segment_group_table.tsv```.
 
 ```Mutation_ID``` and ```Position``` are retained only as provenance after ```GRITIC_Mutation_ID``` is generated. Neither is a downstream mutation key; downstream mutation referencing always uses ```GRITIC_Mutation_ID```.
 
-SNV multiplicity probabilities are given by the ```Prob_Mult_``` columns. ```Alt_Count_Correction_Mult_``` and ```Alt_Count_Correction_Subclone_``` columns contain the exact probability that a Poisson alternate-read count, whose mean is the selected segment coverage multiplied by the modelled VAF, satisfies the configured minimum alternate-read threshold. GRITIC uses these probabilities to correct for alternate-read ascertainment; the separate minimum-total-coverage filter is not included in this correction.
+Read counts, phasing, copy number, gain type, multiplicity likelihoods, and alternate-read correction columns are not repeated per mutation. Follow ```Phase_Group_ID``` through the phase- and count-group dictionaries to recover its canonical phasing and read counts. Follow ```Segment_ID``` through ```_segment_context_table.tsv``` and ```_likelihood_context_table.tsv``` to recover ```Major_CN```, ```Minor_CN```, and total copy number; ```Gain_Type``` is simply the derived major/minor combination. The alternate-read correction remains an internal segment/state quantity and is not emitted.
+
+### _count_group_table.tsv
+This sample-wide dictionary stores one row for each distinct ```(Tumor_Ref_Count, Tumor_Alt_Count)``` pair in the retained sample. Its columns are exactly ```Sample_ID```, ```Count_Group_ID```, ```Tumor_Ref_Count```, and ```Tumor_Alt_Count```. ```Count_Group_ID``` is zero-based and consecutive across the sample, assigned in ascending reference-count then alternate-count order. Counts and likelihoods are stored in the relational tables below rather than repeated here.
+
+### _phase_group_table.tsv
+This sample-wide dictionary subdivides count groups by mutation phasing. Its columns are exactly ```Sample_ID```, ```Phase_Group_ID```, ```Count_Group_ID```, and ```Phasing```. ```Phasing``` is explicitly one of ```non_phased```, ```major```, or ```minor```. ```Phase_Group_ID``` is zero-based and consecutive across the sample, assigned by ```Count_Group_ID``` and then that canonical phasing order, and ```Count_Group_ID``` is a foreign key into ```_count_group_table.tsv```. Only combinations observed in the sample are stored.
+
+### _likelihood_context_table.tsv
+This dictionary contains one row for each distinct read-count observation context, with columns ```Sample_ID```, ```Likelihood_Context_ID```, ```Major_CN```, ```Minor_CN```, and ```Normal_Total_CN```. Context IDs are zero-based and consecutive in ascending copy-number tuple order. ```Normal_Total_CN``` distinguishes observation models such as a haploid normal sex chromosome from a diploid normal autosome. Purity and subclone CCFs are sample-wide inputs and therefore need not be duplicated in the context key.
+
+The observation context records the true genomic copy-number state. In particular, a balanced WGD ```2+2``` segment retains a ```2+2``` likelihood context even though its constrained timing geometry is represented by the pseudo-```2+0``` route model.
+
+### _segment_context_table.tsv
+This table maps every biological segment to exactly one observation context. Its columns are ```Sample_ID```, ```Segment_ID```, and ```Likelihood_Context_ID```. The context copy numbers exactly match the segment metadata and its normal copy number matches the chromosome and configured sample sex.
+
+### _count_group_likelihood_table.tsv
+This sparse table stores one likelihood vector for each ```(Likelihood_Context_ID, Count_Group_ID)``` pair that is actually used by at least one segment. Its fixed leading columns are ```Sample_ID```, ```Likelihood_Context_ID```, and ```Count_Group_ID```. They are followed by ```Prob_Mult_1```, ```Prob_Mult_2```, and so on through the largest sample-wide major copy number, then ```Prob_Subclone_0```, ```Prob_Subclone_1```, and so on. Multiplicity columns above the row context's ```Major_CN``` are blank; every applicable entry is finite and nonnegative, and the applicable entries on a row sum to one. GRITIC calculates the vector once and shares it across every segment with that observation context instead of repeating the binomial evaluation per segment.
+
+### _segment_group_table.tsv
+This sparse association table stores ```Sample_ID```, ```Segment_ID```, ```Phase_Group_ID```, and ```N_Mutations```. Its compound key is ```(Segment_ID, Phase_Group_ID)```, and ```N_Mutations``` is the positive number of retained mutations in that segment belonging to the sample-wide phase group. These counts exactly reproduce the mutation-table fanout.
+
+GRITIC uses the sparse segment-group counts directly when evaluating coverage summaries, VAF quantiles, route likelihoods, and mutation-rate models. MUTIC constructs each distinct segment-specific timing mixture once per phase group, draws independent posterior samples for its member mutations, and scatters those rows back through the mutation-table mapping. The route-particle and uniform-no-gain timing archives are unchanged by this normalization; group tables describe biological segments and are never duplicated inside route entries or synthetic pooled-WGD records.
 
 ### _subclone_table.tsv
 The retained and normalized subclone inputs with the fixed columns ```Cluster```, ```Subclone_CCF```, ```Subclone_Fraction```, and ```N_SNVs```. This file is always written. If no subclone table was supplied, or no candidate survived filtering, it contains the header and zero rows.

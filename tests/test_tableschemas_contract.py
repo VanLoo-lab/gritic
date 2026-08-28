@@ -47,6 +47,44 @@ class TableSchemaContractTest(unittest.TestCase):
         self.assertEqual(route_table[-4], 'WGD_Status')
 
     def test_specialized_schema_tails_have_stable_semantic_order(self):
+        self.assertEqual(tableschemas.COUNT_GROUP_TABLE_COLUMNS, [
+            'Sample_ID',
+            'Count_Group_ID',
+            'Tumor_Ref_Count',
+            'Tumor_Alt_Count',
+        ])
+        self.assertEqual(tableschemas.PHASE_GROUP_TABLE_COLUMNS, [
+            'Sample_ID',
+            'Phase_Group_ID',
+            'Count_Group_ID',
+            'Phasing',
+        ])
+        self.assertEqual(tableschemas.LIKELIHOOD_CONTEXT_TABLE_COLUMNS, [
+            'Sample_ID',
+            'Likelihood_Context_ID',
+            'Major_CN',
+            'Minor_CN',
+            'Normal_Total_CN',
+        ])
+        self.assertEqual(tableschemas.SEGMENT_CONTEXT_TABLE_COLUMNS, [
+            'Sample_ID',
+            'Segment_ID',
+            'Likelihood_Context_ID',
+        ])
+        self.assertEqual(
+            tableschemas.COUNT_GROUP_LIKELIHOOD_BASE_COLUMNS,
+            [
+                'Sample_ID',
+                'Likelihood_Context_ID',
+                'Count_Group_ID',
+            ],
+        )
+        self.assertEqual(tableschemas.SEGMENT_GROUP_TABLE_COLUMNS, [
+            'Sample_ID',
+            'Segment_ID',
+            'Phase_Group_ID',
+            'N_Mutations',
+        ])
         self.assertEqual(tableschemas.GAIN_TIMING_TABLE_COLUMNS, [
             'Sample_ID',
             'Segment_ID',
@@ -98,6 +136,12 @@ class TableSchemaContractTest(unittest.TestCase):
 
     def test_every_concrete_schema_has_unique_column_names(self):
         for name in (
+            'COUNT_GROUP_TABLE_COLUMNS',
+            'PHASE_GROUP_TABLE_COLUMNS',
+            'LIKELIHOOD_CONTEXT_TABLE_COLUMNS',
+            'SEGMENT_CONTEXT_TABLE_COLUMNS',
+            'COUNT_GROUP_LIKELIHOOD_BASE_COLUMNS',
+            'SEGMENT_GROUP_TABLE_COLUMNS',
             'SEGMENT_METADATA_COLUMNS',
             'ROUTE_TABLE_COLUMNS',
             'GAIN_TIMING_TABLE_COLUMNS',

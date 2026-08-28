@@ -5,14 +5,14 @@ import numpy as np
 from gritic import sampletools
 
 
-def reference_log_likelihood(mult_array, mult_states):
+def reference_log_likelihood(mult_array, mult_states, group_weights):
     likelihoods = np.zeros(mult_states.shape[0])
     for state_index in range(mult_states.shape[0]):
         mult_state = np.clip(mult_states[state_index], 0.0, 1.0)
         mutation_likelihoods = np.multiply(mult_state, mult_array)
         mutation_likelihoods = np.sum(mutation_likelihoods, axis=1)
         likelihoods[state_index] = np.sum(
-            np.log(mutation_likelihoods + 2.2e-300)
+            group_weights * np.log(mutation_likelihoods + 2.2e-300)
         )
     return likelihoods
 
@@ -21,6 +21,7 @@ def reference_array_likelihood(
     full_states,
     probability_array,
     reads_correction_array,
+    group_weights,
     tolerance=1e-8,
 ):
     corrected_states = np.multiply(full_states, reads_correction_array)
@@ -35,25 +36,33 @@ def reference_array_likelihood(
         & (probability_sums < 1.0 + tolerance)
     )
     probability_array = probability_array[valid_rows, :]
+    group_weights = group_weights[valid_rows]
     if probability_array.shape[0] == 0:
         return np.full(full_states.shape[0], np.nan)
-    return reference_log_likelihood(probability_array, corrected_states)
+    return reference_log_likelihood(
+        probability_array,
+        corrected_states,
+        group_weights,
+    )
 
 
 class FusedLikelihoodEquivalenceTest(unittest.TestCase):
     def test_fused_kernel_matches_allocation_based_reference(self):
         rng = np.random.default_rng(2197)
         probability_array = rng.dirichlet(np.ones(7), size=83)
+        group_weights = rng.integers(1, 20, size=83, dtype=np.int64)
         full_states = rng.normal(0.4, 0.7, size=(127, 7))
         full_states[0] = [-np.inf, -0.0, 0.0, 0.5, 1.0, 1.5, np.inf]
 
         expected = reference_log_likelihood(
             probability_array,
             full_states,
+            group_weights,
         )
         actual = sampletools.log_likelihood_numba_parallel(
             probability_array,
             full_states,
+            group_weights,
         )
 
         np.testing.assert_allclose(actual, expected, rtol=1e-13, atol=1e-13)
@@ -70,16 +79,19 @@ class FusedLikelihoodEquivalenceTest(unittest.TestCase):
             [0.00, 0.25, 0.50, 0.25],
         ])
         reads_correction_array = np.array([0.25, 0.75, 0.50, 1.00])
+        group_weights = np.array([4, 7, 11], dtype=np.int64)
 
         expected = reference_array_likelihood(
             full_states,
             probability_array,
             reads_correction_array,
+            group_weights,
         )
         actual = sampletools.evaluate_likelihood_array_numba(
             full_states,
             probability_array,
             reads_correction_array,
+            group_weights,
         )
 
         np.testing.assert_allclose(actual, expected, rtol=1e-13, atol=1e-13)
@@ -103,6 +115,12 @@ class FusedLikelihoodEquivalenceTest(unittest.TestCase):
             'Minor': np.array([0.35, 0.75, 0.60]),
             'All': np.array([0.30, 0.50, 0.70, 0.90]),
         }
+        weight_store = {
+            'Non_Phased': np.array([2, 3], dtype=np.int64),
+            'Major': np.array([5, 7], dtype=np.int64),
+            'Minor': np.array([11, 13], dtype=np.int64),
+            'All': np.array([2, 3], dtype=np.int64),
+        }
         store = sampletools.MultProbabilityStore(
             {
                 'Non_Phased': non_phased_array,
@@ -111,6 +129,7 @@ class FusedLikelihoodEquivalenceTest(unittest.TestCase):
                 'All': non_phased_array,
             },
             reads_correction_store,
+            weight_store,
             major_cn=3,
             minor_cn=2,
             n_subclones=1,
@@ -124,16 +143,19 @@ class FusedLikelihoodEquivalenceTest(unittest.TestCase):
             full_states[:, [0, 1, 2, 8]],
             non_phased_array,
             reads_correction_store['Non_Phased'],
+            weight_store['Non_Phased'],
         )
         expected += reference_array_likelihood(
             full_states[:, [3, 4, 5, 8]],
             major_array,
             reads_correction_store['Major'],
+            weight_store['Major'],
         )
         expected += reference_array_likelihood(
             full_states[:, [6, 7, 8]],
             minor_array,
             reads_correction_store['Minor'],
+            weight_store['Minor'],
         )
 
         actual = store.evaluate_likelihood_array(full_states)
@@ -148,6 +170,7 @@ class FusedLikelihoodEquivalenceTest(unittest.TestCase):
             full_states,
             probability_array,
             np.ones(2),
+            np.array([3, 5], dtype=np.int64),
         )
 
         self.assertTrue(np.isnan(actual).all())

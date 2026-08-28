@@ -30,9 +30,16 @@ def make_multiplicity_probabilities(*, minor_cn, n_subclones):
         'Minor': None,
         'All': np.ones(probabilities.shape[1]),
     }
+    weights = {
+        'Non_Phased': np.ones(probabilities.shape[0], dtype=np.int64),
+        'Major': None,
+        'Minor': None,
+        'All': np.ones(probabilities.shape[0], dtype=np.int64),
+    }
     return MultProbabilityStore(
         arrays,
         corrections,
+        weights,
         major_cn=1,
         minor_cn=minor_cn,
         n_subclones=n_subclones,
