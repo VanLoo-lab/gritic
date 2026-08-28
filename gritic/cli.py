@@ -287,11 +287,14 @@ def build_parser():
         ),
     )
     genome_and_input_arguments.add_argument(
-        '--merge-adjacent-segments',
-        action='store_true',
+        '--no-merge-adjacent-segments',
+        dest='merge_adjacent_segments',
+        action='store_false',
+        default=True,
         help=(
-            'Merge adjacent copy-number segments with identical Major_CN and '
-            'Minor_CN. Disabled by default.'
+            'Preserve adjacent copy-number segments as separate intervals. '
+            'By default, GRITIC merges coordinate-adjacent segments with '
+            'identical Major_CN and Minor_CN.'
         ),
     )
     mutation_arguments.add_argument(

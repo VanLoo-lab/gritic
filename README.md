@@ -38,7 +38,7 @@ restriction explicitly.
 - ```--drop-unmatched-chromosomes``` Drop copy-number and mutation rows whose chromosome is not one of the configured autosomes or present sex chromosomes, with warnings reporting the number of rows dropped. By default, any such chromosome is an error.
 - ```--drop-unmatched-snvs``` Drop mutation rows that cannot be associated with a copy-number segment by either supplied ```Segment_ID``` or genomic ```Position```, with one warning reporting the number dropped. By default, unmatched mutations raise an error.
 - ```--drop-unrecognized-phasing``` Drop mutation rows whose non-missing ```Phasing``` value is not ```major``` or ```minor```, with one warning reporting the number dropped. By default, unrecognized phasing labels raise an error.
-- ```--merge-adjacent-segments``` Merge coordinate-adjacent copy-number segments having identical ```Major_CN``` and ```Minor_CN```. This is disabled by default.
+- ```--no-merge-adjacent-segments``` Preserve adjacent copy-number segments as separate intervals. By default, GRITIC merges coordinate-adjacent segments having identical ```Major_CN``` and ```Minor_CN```.
 
 ### Mutation filtering and detection correction
 
@@ -113,7 +113,7 @@ sample = sampletools.Sample(
     subclone_table,
     sample_id='TEST_ID',
     purity=0.5,
-    merge_cn=False,
+    merge_cn=True,
     min_mutation_alt_count=3,
     min_mutation_coverage=10,
     coverage_vaf_quantile=0.9,
@@ -182,7 +182,7 @@ Programmatic callers enable the same behavior with ```drop_unmatched_snvs=True``
 ### Copy Number Table 
 The rounded allele-specific copy number profile for the sample. Requires the column names ```Chromosome```, ```Segment_Start```, ```Segment_End```, ```Major_CN``` & ```Minor_CN```. Chromosome labels follow the same rules as the mutation table. Segment coordinates are zero-based, half-open, non-negative signed-64-bit integers: ```Segment_Start``` is included, ```Segment_End``` is excluded, and ```Segment_End``` must be strictly greater than ```Segment_Start```. A one-base segment is therefore ```[a, a + 1)``` and has width ```Segment_End - Segment_Start```. Both allele-specific copy numbers must also be finite signed-64-bit integers and non-negative, and ```Major_CN``` must be greater than or equal to ```Minor_CN```. Violations raise an error. ```Segment_ID``` is optional and it is only used when it is also present in the mutation table. Mixed sex-chromosome systems make sex inference ambiguous, and numbered chromosomes above ```--autosome-count``` are unmatched.
 
-GRITIC orders copy-number rows by natural chromosome order, ```Segment_Start```, and ```Segment_End``` immediately after validating the input coordinates. Half-open intervals on the same chromosome must not overlap. By default GRITIC preserves separate copy-number segments and generates final segment IDs from ```Chromosome```, ```Segment_Start```, and ```Segment_End```. Supplying ```--merge-adjacent-segments``` (or ```merge_cn=True``` through the API) merges equal-copy-number intervals only when the following ```Segment_Start``` equals the preceding ```Segment_End```. Gapped intervals are not merged, and the resulting merged interval is revalidated against the same coordinate bounds.
+GRITIC orders copy-number rows by natural chromosome order, ```Segment_Start```, and ```Segment_End``` immediately after validating the input coordinates. Half-open intervals on the same chromosome must not overlap. By default GRITIC merges equal-copy-number intervals only when the following ```Segment_Start``` equals the preceding ```Segment_End```. Gapped intervals are not merged, and the resulting merged interval is revalidated against the same coordinate bounds. Supplying ```--no-merge-adjacent-segments``` (or ```merge_cn=False``` through the API) instead preserves each input copy-number segment and generates final segment IDs from ```Chromosome```, ```Segment_Start```, and ```Segment_End```.
 
 When sample sex is not supplied, an exact Y chromosome label implies ```XY``` and W implies ```ZW```; if neither is present, X implies ```XX``` and Z implies ```ZZ```. If no sex chromosome is represented, GRITIC defaults to ```XX```, so callers using another system should supply ```--sample-sex```. Inputs that mix the X/Y and Z/W systems cannot be inferred and fail. An explicit karyotype takes precedence. For ```XX```, X is present and Y is unmatched; for ```XY```, both X and Y are present. For ```ZZ```, Z is present and W is unmatched; for ```ZW```, both Z and W are present. Unmatched rows fail unless chromosome dropping is enabled. Normal-cell X/Y copy numbers are 2/0 for XX and 1/1 for XY; the corresponding Z/W values are 2/0 for ZZ and 1/1 for ZW. The ```autosome_count``` API argument and ```--autosome-count``` CLI option define the numbered autosomes and default to 22.
 ### Subclone Table (*Optional*)

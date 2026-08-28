@@ -367,7 +367,7 @@ class Sample:
         sample_id,
         purity,
         sex=None,
-        merge_cn=False,
+        merge_cn=True,
         apply_reads_correction=True,
         drop_unmatched_snvs=False,
         drop_unmatched_chromosomes=False,
