@@ -998,57 +998,21 @@ class RouteClassifier:
             )
         return timing_table
     
-    def get_timing_dict(self,n_samples = 5000):
+    def get_timing_dict(self):
+        """Return each route's fitted, aligned conditional particles."""
         timing_dict = {}
-        
-        for route, _ in self._get_output_routes():
-            mirror_source = getattr(route, 'unphased_mirror_source', None)
-            if mirror_source is not None:
-                if mirror_source.short_id not in timing_dict:
-                    raise ValueError(
-                        'An unphased mirror source must be serialized before '
-                        'its derived ordered route'
-                    )
-                source_samples = timing_dict[mirror_source.short_id]
-                node_map = _get_mirror_node_map(
-                    mirror_source.route_tree.main_tree,
-                    route.route_tree.main_tree,
-                )
-                n_subclones = (
-                    source_samples['Mult'].shape[1]
-                    - 3 * route.major_cn
-                )
-                route_samples = {
-                    'Timing': {
-                        'WGD': source_samples['Timing']['WGD'].copy(),
-                    },
-                    'Mult': route._transform_mirror_mult_store(
-                        source_samples['Mult'],
-                        n_subclones,
-                    ),
-                    'Raw_Samples': route.raw_samples,
-                }
-                for source_node, source_timing in source_samples[
-                    'Timing'
-                ].items():
-                    if source_node == 'WGD':
-                        continue
-                    route_samples['Timing'][node_map[source_node]] = (
-                        source_timing.copy()
-                    )
-                timing_dict[route.short_id] = route_samples
-                continue
 
-            route_samples = {'Timing':{}}
-            
-            wgd_timing_store =route.wgd_timing_store
-            random_indexes = np.random.randint(0,wgd_timing_store.size,size=n_samples)
-            route_samples['Timing']['WGD'] = wgd_timing_store[random_indexes]
-            
+        for route, _ in self._get_output_routes():
+            route_samples = {
+                'Timing': {
+                    'WGD': route.wgd_timing_store.copy(),
+                },
+            }
             for node in route.route_tree.timeable_nodes:
-                node_timing = route.get_node_timing(node)
-                route_samples['Timing'][node] = node_timing[random_indexes]
-            route_samples['Mult'] = route.mult_store[random_indexes]
+                route_samples['Timing'][node] = (
+                    route.get_node_timing(node).copy()
+                )
+            route_samples['Mult'] = route.mult_store.copy()
             route_samples['Raw_Samples'] = route.raw_samples
             timing_dict[route.short_id] = route_samples
         return timing_dict
