@@ -224,6 +224,13 @@ class TimingArchiveTest(unittest.TestCase):
             (
                 lambda manifest: manifest.__setitem__(
                     'version',
+                    timingio.TIMING_ARCHIVE_VERSION - 1,
+                ),
+                'Unsupported GRITIC timing archive version',
+            ),
+            (
+                lambda manifest: manifest.__setitem__(
+                    'version',
                     timingio.TIMING_ARCHIVE_VERSION + 1,
                 ),
                 'Unsupported GRITIC timing archive version',

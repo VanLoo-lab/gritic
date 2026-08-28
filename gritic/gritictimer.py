@@ -30,7 +30,10 @@ from gritic.intervaltools import (
 )
 from gritic.tableschemas import (
     GAIN_TIMING_TABLE_COLUMNS,
+    ROUTE_PARTICLES_REPRESENTATION,
     ROUTE_TABLE_COLUMNS,
+    TIMING_REPRESENTATION_COLUMN,
+    UNIFORM_NO_GAIN_REPRESENTATION,
 )
 from gritic.timingio import write_timing_archive
 
@@ -53,6 +56,7 @@ logger = logging.getLogger(__name__)
 
 MIN_WGD_MUTATIONS = 10
 ROUTE_CONDITIONAL_SAMPLE_COUNT = 1000
+NO_GAIN_CLONE_SHARE_PROPOSAL_COUNT = 50_500
 COMBINED_WGD_SAMPLE_COUNT = 500
 _INITIAL_DENSITY_EVALUATION_BATCH_COUNT = 101
 _MAX_DENSITY_RETRY_DELAY_SECONDS = 30.0
@@ -69,6 +73,26 @@ _MIRROR_ALLELE = {
     'Major': 'Minor',
     'Minor': 'Major',
 }
+
+
+def is_uniform_no_gain_route_tree(route_tree):
+    """Return whether every mutation-bearing copy spans the full [0, 1]."""
+    if route_tree.major_cn != 1 or route_tree.minor_cn not in (0, 1):
+        return False
+
+    nodes = list(route_tree.non_phased_node_order)
+    if not nodes or route_tree.timeable_nodes or route_tree.wgd_nodes:
+        return False
+
+    for node in nodes:
+        attributes = route_tree.node_attributes[node]
+        if (
+            attributes['Predecessor'] is not None
+            or attributes['Successors']
+            or attributes['Multiplicity'] != 1
+        ):
+            return False
+    return True
 
 
 def _density_evaluation_due(
@@ -249,6 +273,8 @@ class Route:
         self.wgd_timing_store = None
         self.n_events_store = None
         self.mult_store = None
+        self.clone_share_store = None
+        self.n_subclones = None
         self.unphased_mirror_source = None
         self.density = None
         self.density_high = None
@@ -258,6 +284,10 @@ class Route:
         if self.n_events_store is None:
             return np.nan
         return np.mean(self.n_events_store[event_type])
+
+    @property
+    def is_uniform_no_gain(self):
+        return is_uniform_no_gain_route_tree(self.route_tree)
 
     def get_node_timing(self, node):
         if self.node_timing is None:
@@ -282,6 +312,29 @@ class Route:
                 )
         return np.asarray(cumulative_timing)
 
+    @staticmethod
+    def get_weighted_sample_indices(
+        weights,
+        n_candidates,
+        n_samples=ROUTE_CONDITIONAL_SAMPLE_COUNT,
+    ):
+        weights = np.asarray(weights, dtype=float)
+        if np.isnan(weights).any():
+            return None
+        if weights.shape != (n_candidates,):
+            raise ValueError(
+                'Importance weights must contain one value per proposal'
+            )
+        assert (weights > -1e-80).all()
+        weights = np.clip(weights, 0, 1)
+        weights = weights / np.sum(weights)
+        return np.random.choice(
+            np.arange(n_candidates),
+            size=n_samples,
+            replace=True,
+            p=weights,
+        )
+
     def get_weighted_arrays(
         self,
         cumulative_timing,
@@ -290,7 +343,12 @@ class Route:
         weights,
         n_samples=ROUTE_CONDITIONAL_SAMPLE_COUNT,
     ):
-        if np.isnan(weights).any():
+        weighted_sample = self.get_weighted_sample_indices(
+            weights,
+            cumulative_timing.shape[1],
+            n_samples,
+        )
+        if weighted_sample is None:
             cumulative_timing = (
                 np.ones_like(cumulative_timing)[:, :n_samples] * np.nan
             )
@@ -299,15 +357,6 @@ class Route:
             )
             mult_store = np.ones_like(mult_store)[:n_samples, :] * np.nan
             return cumulative_timing, wgd_timing_store, mult_store
-        assert (weights > -1e-80).all()
-        weights = np.clip(weights, 0, 1)
-        weights = weights / np.sum(weights)
-        weighted_sample = np.random.choice(
-            np.arange(cumulative_timing.shape[1]),
-            size=n_samples,
-            replace=True,
-            p=weights,
-        )
         return (
             np.asarray(cumulative_timing)[:, weighted_sample],
             wgd_timing_store[weighted_sample],
@@ -514,6 +563,90 @@ class Route:
             axis=1,
         )
 
+    def _set_uniform_no_gain_event_store(self):
+        node_timing = np.ones(
+            (len(self.route_tree.non_phased_node_order), 1),
+            dtype=float,
+        )
+        wgd_timing = np.array(
+            [0.5 if self.wgd_status else np.nan],
+            dtype=float,
+        )
+        event_arrays = self.route_tree.get_n_events_batch(
+            node_timing,
+            wgd_timing,
+        )
+        self.n_events_store = {
+            event_type: values.tolist()
+            for event_type, values in zip(
+                ('N_Events', 'Pre_WGD_Losses', 'Post_WGD_Losses'),
+                event_arrays,
+            )
+        }
+
+    def run_uniform_no_gain_sampling(
+        self,
+        mult_probabilities,
+        alpha,
+        n_subclones,
+    ):
+        """Fit clone shares without constructing deterministic timing geometry."""
+        if not self.is_uniform_no_gain:
+            raise ValueError(
+                'Uniform no-gain sampling requires only independent terminal '
+                'multiplicity-one copies'
+            )
+
+        run_started = time.perf_counter()
+        self.n_subclones = n_subclones
+        if n_subclones == 0:
+            clone_share = np.ones((1, 1), dtype=float)
+        else:
+            clone_share = self.simulate_clone_share(
+                alpha,
+                NO_GAIN_CLONE_SHARE_PROPOSAL_COUNT,
+            )
+
+        n_proposals = clone_share.shape[0]
+        clonal_columns = 2 * self.major_cn + self.minor_cn
+        full_states = np.concatenate(
+            [
+                np.repeat(
+                    clone_share[:, :1],
+                    clonal_columns,
+                    axis=1,
+                ),
+                clone_share[:, 1:],
+            ],
+            axis=1,
+        )
+        ll_store = mult_probabilities.evaluate_likelihood_array(full_states)
+        if ll_store.size == 0:
+            raise ValueError('A route fit must contain at least one proposal')
+        self.log_evidence = logsumexp(ll_store) - np.log(ll_store.size)
+
+        if n_subclones > 0:
+            weights = np.exp(ll_store - np.max(ll_store))
+            weighted_sample = self.get_weighted_sample_indices(
+                weights,
+                n_proposals,
+            )
+            if weighted_sample is None:
+                self.clone_share_store = np.full(
+                    (ROUTE_CONDITIONAL_SAMPLE_COUNT, n_subclones + 1),
+                    np.nan,
+                )
+            else:
+                self.clone_share_store = clone_share[
+                    weighted_sample, :
+                ].copy()
+
+        self._set_uniform_no_gain_event_store()
+        self.density = 1.0
+        self.density_high = 1.0
+        self.run_time = time.perf_counter() - run_started
+        return None if n_subclones == 0 else clone_share
+
     def _validate_mirror_route(self, mirror_route):
         if mirror_route is None:
             return False
@@ -669,6 +802,7 @@ class Route:
         n_subclones = (
             0 if subclone_table is None else len(subclone_table.index)
         )
+        self.n_subclones = n_subclones
         if (
             not self._contains_phased_mutations(mult_probabilities)
             and mirror_route is not None
@@ -695,6 +829,13 @@ class Route:
                 sample_clone_fractions,
                 subclonal_correction_array,
                 subclone_fraction_prior,
+            )
+
+        if self.is_uniform_no_gain:
+            return self.run_uniform_no_gain_sampling(
+                mult_probabilities,
+                alpha,
+                n_subclones,
             )
 
         if proposal_geometry is None:
@@ -784,6 +925,20 @@ class RouteClassifier:
             route_id: Route(route_id, route_tree)
             for route_id, route_tree in route_trees.items()
         }
+        route_representations = {
+            (
+                UNIFORM_NO_GAIN_REPRESENTATION
+                if route.is_uniform_no_gain
+                else ROUTE_PARTICLES_REPRESENTATION
+            )
+            for route in self.routes.values()
+        }
+        if len(route_representations) != 1:
+            raise ValueError(
+                'Every route in a classifier must use the same timing '
+                'representation'
+            )
+        self.timing_representation = route_representations.pop()
 
         self.route_probabilities = {}
 
@@ -885,6 +1040,7 @@ class RouteClassifier:
     def get_route_table(self):
         route_table_data = {
             'Route': [],
+            TIMING_REPRESENTATION_COLUMN: [],
             'Probability': [],
             'Average_N_Events': [],
             'Average_Pre_WGD_Losses': [],
@@ -894,6 +1050,9 @@ class RouteClassifier:
         }
         for route, probability in self._get_output_routes():
             route_table_data['Route'].append(route.short_id)
+            route_table_data[TIMING_REPRESENTATION_COLUMN].append(
+                self.timing_representation
+            )
             route_table_data['Probability'].append(probability)
             route_table_data['Average_N_Events'].append(
                 route.get_average_events('N_Events')
@@ -973,7 +1132,36 @@ class RouteClassifier:
         return timing_table
     
     def get_timing_dict(self):
-        """Return each route's fitted, aligned conditional particles."""
+        """Return the fitted posterior payload, or None when none is needed."""
+        if self.timing_representation == UNIFORM_NO_GAIN_REPRESENTATION:
+            n_subclones = {
+                route.n_subclones for route, _ in self._get_output_routes()
+            }
+            if len(n_subclones) != 1 or None in n_subclones:
+                raise ValueError(
+                    'Uniform no-gain routes must have one fitted subclone '
+                    'count'
+                )
+            if n_subclones.pop() == 0:
+                return None
+
+            timing_dict = {}
+            for route, _ in self._get_output_routes():
+                clone_share_store = np.asarray(route.clone_share_store)
+                expected_shape = (
+                    ROUTE_CONDITIONAL_SAMPLE_COUNT,
+                    route.n_subclones + 1,
+                )
+                if clone_share_store.shape != expected_shape:
+                    raise ValueError(
+                        'Uniform no-gain Clone_Share must have shape '
+                        f'{expected_shape}'
+                    )
+                timing_dict[route.short_id] = {
+                    'Clone_Share': clone_share_store.copy(),
+                }
+            return timing_dict
+
         timing_dict = {}
 
         for route, _ in self._get_output_routes():
@@ -1102,13 +1290,16 @@ def fit_route_classifiers(classifier_jobs, wgd_timing_distribution):
                 'route classifier'
             )
 
-        geometry_started = time.perf_counter()
-        source_geometry = source_reference.run_geometry_sampling(
-            wgd_timing_distribution
-        )
-        shared_geometry_time = (
-            time.perf_counter() - geometry_started
-        ) / n_classifiers
+        source_geometry = None
+        shared_geometry_time = 0.0
+        if not source_reference.is_uniform_no_gain:
+            geometry_started = time.perf_counter()
+            source_geometry = source_reference.run_geometry_sampling(
+                wgd_timing_distribution
+            )
+            shared_geometry_time = (
+                time.perf_counter() - geometry_started
+            ) / n_classifiers
 
         has_distinct_mirror = mirror_route_id not in (None, source_route_id)
         target_geometry = None
@@ -1168,6 +1359,14 @@ def estimate_classifier_output_bytes(route_trees, n_subclones):
     """Estimate retained numeric posterior bytes for one fitted classifier."""
     total_bytes = 0
     for route_tree in route_trees.values():
+        if is_uniform_no_gain_route_tree(route_tree):
+            if n_subclones > 0:
+                total_bytes += 8 * ROUTE_CONDITIONAL_SAMPLE_COUNT * (
+                    n_subclones + 1
+                )
+            total_bytes += 8 * 3
+            continue
+
         mult_columns = (
             2 * route_tree.major_cn
             + route_tree.minor_cn
@@ -1736,11 +1935,12 @@ def _write_segment_results(
         interval=interval_config.route_gain,
     )
     timing_dict = classifier.get_timing_dict()
-    write_timing_archive(
-        timing_dict,
-        timing_dict_dir,
-        segment.segment_id,
-    )
+    if timing_dict is not None:
+        write_timing_archive(
+            timing_dict,
+            timing_dict_dir,
+            segment.segment_id,
+        )
 
     for key, val in segment.get_info_dict().items():
         segment_route_table[key] = val

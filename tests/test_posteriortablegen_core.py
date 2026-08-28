@@ -12,9 +12,12 @@ from gritic.intervaltools import IntervalSpec
 from gritic.tableschemas import (
     GAIN_DRAW_COLUMNS,
     GAIN_TIMING_TABLE_COLUMNS,
+    ROUTE_PARTICLES_REPRESENTATION,
     ROUTE_DRAW_COLUMNS,
     ROUTE_TABLE_COLUMNS,
     SUMMARY_COLUMNS,
+    TIMING_REPRESENTATION_COLUMN,
+    UNIFORM_NO_GAIN_REPRESENTATION,
 )
 from gritic.timingio import write_timing_archive
 
@@ -30,11 +33,13 @@ def make_route_row(
     chromosome='1',
     segment_start=10,
     segment_end=20,
+    timing_representation=ROUTE_PARTICLES_REPRESENTATION,
 ):
     return {
         'Sample_ID': sample_id,
         'Segment_ID': segment_id,
         'Route': route,
+        TIMING_REPRESENTATION_COLUMN: timing_representation,
         'Chromosome': chromosome,
         'Segment_Start': segment_start,
         'Segment_End': segment_end,
@@ -321,6 +326,34 @@ class InputTableValidationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Chromosome'):
             posteriortablegen._validate_route_table(table, 'sample')
 
+    def test_route_table_requires_valid_segment_constant_timing_representation(self):
+        for value in ('', 'uniform_no_gain', np.nan):
+            with self.subTest(value=value):
+                table = route_table([
+                    make_route_row(timing_representation=value),
+                ])
+                with self.assertRaisesRegex(
+                    ValueError,
+                    TIMING_REPRESENTATION_COLUMN,
+                ):
+                    posteriortablegen._validate_route_table(table, 'sample')
+
+        table = route_table([
+            make_route_row(
+                route='a',
+                timing_representation=UNIFORM_NO_GAIN_REPRESENTATION,
+            ),
+            make_route_row(
+                route='b',
+                timing_representation=ROUTE_PARTICLES_REPRESENTATION,
+            ),
+        ])
+        with self.assertRaisesRegex(
+            ValueError,
+            f'inconsistent segment metadata: {TIMING_REPRESENTATION_COLUMN}',
+        ):
+            posteriortablegen._validate_route_table(table, 'sample')
+
     def test_gain_timing_table_accepts_empty_schema_and_valid_rows(self):
         routes = route_table([make_route_row()])
         posteriortablegen._validate_gain_timing_table(
@@ -331,6 +364,48 @@ class InputTableValidationTest(unittest.TestCase):
         gains = timing_table([
             make_gain_timing_row(node=10, node_phasing='Major'),
             make_gain_timing_row(node=11, node_phasing='Minor'),
+        ])
+        posteriortablegen._validate_gain_timing_table(gains, routes, 'sample')
+
+    def test_uniform_no_gain_segments_require_empty_gain_rows(self):
+        uniform_routes = route_table([
+            make_route_row(
+                timing_representation=UNIFORM_NO_GAIN_REPRESENTATION,
+            ),
+        ])
+        posteriortablegen._validate_gain_timing_table(
+            timing_table([]),
+            uniform_routes,
+            'sample',
+        )
+        with self.assertRaisesRegex(
+            ValueError,
+            f'{UNIFORM_NO_GAIN_REPRESENTATION}.*must not have gain timing rows',
+        ):
+            posteriortablegen._validate_gain_timing_table(
+                timing_table([make_gain_timing_row()]),
+                uniform_routes,
+                'sample',
+            )
+
+    def test_mixed_timing_representations_allow_gains_only_for_particle_segments(self):
+        routes = route_table([
+            make_route_row(
+                segment_id='direct',
+                route='direct-route',
+                timing_representation=UNIFORM_NO_GAIN_REPRESENTATION,
+            ),
+            make_route_row(
+                segment_id='gained',
+                route='gained-route',
+                timing_representation=ROUTE_PARTICLES_REPRESENTATION,
+            ),
+        ])
+        gains = timing_table([
+            make_gain_timing_row(
+                segment_id='gained',
+                route='gained-route',
+            ),
         ])
         posteriortablegen._validate_gain_timing_table(gains, routes, 'sample')
 
@@ -629,6 +704,92 @@ class PosteriorSegmentGenerationTest(unittest.TestCase):
 
 
 class SamplePosteriorArchiveIntegrationTest(unittest.TestCase):
+    def test_uniform_no_gain_segment_skips_missing_timing_archive(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            route_path = root / 'routes.tsv'
+            timing_path = root / 'gains.tsv'
+            route_table([
+                make_route_row(
+                    timing_representation=UNIFORM_NO_GAIN_REPRESENTATION,
+                ),
+            ]).to_csv(route_path, sep='\t', index=False)
+            timing_table([]).to_csv(timing_path, sep='\t', index=False)
+
+            with mock.patch.object(
+                posteriortablegen,
+                'get_timing_archive_paths',
+                side_effect=AssertionError(
+                    'uniform timing must not resolve an archive'
+                ),
+            ):
+                gain_draws, route_draws = (
+                    posteriortablegen.get_sample_posterior_tables(
+                        route_path,
+                        timing_path,
+                        root,
+                        'sample',
+                    )
+                )
+
+        self.assertTrue(gain_draws.empty)
+        self.assertTrue(route_draws.empty)
+        self.assertEqual(list(gain_draws.columns), GAIN_DRAW_COLUMNS)
+        self.assertEqual(list(route_draws.columns), ROUTE_DRAW_COLUMNS)
+
+    def test_mixed_uniform_and_particle_segments_load_only_particle_archive(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            route_path = root / 'routes.tsv'
+            timing_path = root / 'gains.tsv'
+            route_table([
+                make_route_row(
+                    segment_id='direct',
+                    route='direct-route',
+                    timing_representation=UNIFORM_NO_GAIN_REPRESENTATION,
+                ),
+                make_route_row(
+                    segment_id='gained',
+                    route='gained-route',
+                    timing_representation=ROUTE_PARTICLES_REPRESENTATION,
+                ),
+            ]).to_csv(route_path, sep='\t', index=False)
+            timing_table([
+                make_gain_timing_row(
+                    segment_id='gained',
+                    route='gained-route',
+                ),
+            ]).to_csv(timing_path, sep='\t', index=False)
+            write_timing_archive({
+                'gained-route': {'Timing': {
+                    'WGD': np.array([0.5]),
+                    10: np.array([0.25]),
+                }},
+            }, root / 'sample_timing_dicts', 'gained')
+
+            with mock.patch.object(
+                posteriortablegen.np.random,
+                'choice',
+                return_value=np.array(['gained-route']),
+            ) as choice, mock.patch.object(
+                posteriortablegen.np.random,
+                'randint',
+                return_value=0,
+            ):
+                gain_draws, route_draws = (
+                    posteriortablegen.get_sample_posterior_tables(
+                        route_path,
+                        timing_path,
+                        root,
+                        'sample',
+                        n_posterior_samples=1,
+                    )
+                )
+
+        self.assertEqual(choice.call_count, 1)
+        self.assertEqual(gain_draws['Segment_ID'].tolist(), ['gained'])
+        self.assertEqual(route_draws['Segment_ID'].tolist(), ['gained'])
+
     def test_reads_tables_and_archives_for_multiple_segments(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -39,7 +39,11 @@ class TableSchemaContractTest(unittest.TestCase):
 
         route_table = tableschemas.ROUTE_TABLE_COLUMNS
         self.assertEqual(route_table[:3], tableschemas.ROUTE_KEY_COLUMNS)
-        self.assertEqual(route_table[3:11], metadata[2:-1])
+        self.assertEqual(
+            route_table[3],
+            tableschemas.TIMING_REPRESENTATION_COLUMN,
+        )
+        self.assertEqual(route_table[4:12], metadata[2:-1])
         self.assertEqual(route_table[-4], 'WGD_Status')
 
     def test_specialized_schema_tails_have_stable_semantic_order(self):

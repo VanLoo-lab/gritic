@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gritic"
-version = "0.1.0"
+version = "0.2.0"
 description = "A module to time complex copy number gains in cancer genomes"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -32,7 +32,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/VanLoo-lab/gritic"
-Download = "https://github.com/VanLoo-lab/gritic/archive/refs/tags/v0.1.0.tar.gz"
+Download = "https://github.com/VanLoo-lab/gritic/archive/refs/tags/v0.2.0.tar.gz"
 
 [project.scripts]
 gritic = "gritic.cli:main"

@@ -7,6 +7,11 @@ import numpy as np
 import pandas as pd
 
 from gritic import gritictimer, sampletools, tableschemas, timingio
+from gritic.tableschemas import (
+    ROUTE_PARTICLES_REPRESENTATION,
+    TIMING_REPRESENTATION_COLUMN,
+    UNIFORM_NO_GAIN_REPRESENTATION,
+)
 
 
 class ProcessSampleIntegrationTest(unittest.TestCase):
@@ -128,6 +133,10 @@ class ProcessSampleIntegrationTest(unittest.TestCase):
                 route_table.loc[0, 'Penalized_Probability'],
                 1.0,
             )
+            self.assertEqual(
+                route_table.loc[0, TIMING_REPRESENTATION_COLUMN],
+                UNIFORM_NO_GAIN_REPRESENTATION,
+            )
 
             gain_table = pd.read_csv(
                 output_directory / 'SMOKE_gain_timing_table.tsv',
@@ -192,14 +201,8 @@ class ProcessSampleIntegrationTest(unittest.TestCase):
                 output_directory / 'SMOKE_timing_dicts',
                 '1-0-1000',
             )
-            timing_hierarchy = timingio.load_timing_archive(
-                archive_path,
-                manifest_path,
-            )
-            self.assertEqual(
-                set(timing_hierarchy),
-                {route_table.loc[0, 'Route']},
-            )
+            self.assertFalse(archive_path.exists())
+            self.assertFalse(manifest_path.exists())
 
     def test_existing_sample_output_is_not_overwritten(self):
         sample = self.make_sample()
@@ -247,6 +250,10 @@ class ProcessSampleIntegrationTest(unittest.TestCase):
                 route_table['Segment_ID'].eq('1-1000-1200')
             ]
             self.assertEqual(len(gained_routes), 1)
+            self.assertEqual(
+                gained_routes.iloc[0][TIMING_REPRESENTATION_COLUMN],
+                ROUTE_PARTICLES_REPRESENTATION,
+            )
             route_id = gained_routes.iloc[0]['Route']
 
             gain_table = pd.read_csv(

@@ -1,6 +1,13 @@
 ROUTE_KEY_COLUMNS = ['Sample_ID', 'Segment_ID', 'Route']
 SEGMENT_KEY_COLUMNS = ['Sample_ID', 'Segment_ID']
 NODE_PHASING_LABELS = ('Major', 'Minor')
+TIMING_REPRESENTATION_COLUMN = 'Timing_Representation'
+UNIFORM_NO_GAIN_REPRESENTATION = 'Uniform_No_Gain'
+ROUTE_PARTICLES_REPRESENTATION = 'Route_Particles'
+TIMING_REPRESENTATIONS = (
+    UNIFORM_NO_GAIN_REPRESENTATION,
+    ROUTE_PARTICLES_REPRESENTATION,
+)
 
 SEGMENT_METADATA_COLUMNS = [
     'Sample_ID',
@@ -20,6 +27,7 @@ ROUTE_TABLE_COLUMNS = [
     'Sample_ID',
     'Segment_ID',
     'Route',
+    TIMING_REPRESENTATION_COLUMN,
     'Chromosome',
     'Segment_Start',
     'Segment_End',

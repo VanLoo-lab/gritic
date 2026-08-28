@@ -5,6 +5,7 @@ from unittest import mock
 import numpy as np
 
 from gritic import gritictimer
+from gritic.tableschemas import ROUTE_PARTICLES_REPRESENTATION
 
 
 class TimingOutputTest(unittest.TestCase):
@@ -32,6 +33,7 @@ class TimingOutputTest(unittest.TestCase):
         classifier = gritictimer.RouteClassifier.__new__(
             gritictimer.RouteClassifier
         )
+        classifier.timing_representation = ROUTE_PARTICLES_REPRESENTATION
         classifier._get_output_routes = mock.Mock(
             return_value=[(route, 1.0)]
         )

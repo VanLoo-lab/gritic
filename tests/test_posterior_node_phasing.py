@@ -4,7 +4,11 @@ import numpy as np
 import pandas as pd
 
 from gritic import posteriortablegen
-from gritic.tableschemas import GAIN_TIMING_TABLE_COLUMNS
+from gritic.tableschemas import (
+    GAIN_TIMING_TABLE_COLUMNS,
+    ROUTE_PARTICLES_REPRESENTATION,
+    TIMING_REPRESENTATION_COLUMN,
+)
 
 
 class PosteriorNodePhasingValidationTest(unittest.TestCase):
@@ -14,6 +18,9 @@ class PosteriorNodePhasingValidationTest(unittest.TestCase):
             'Sample_ID': ['sample'],
             'Segment_ID': ['segment'],
             'Route': ['route'],
+            TIMING_REPRESENTATION_COLUMN: [
+                ROUTE_PARTICLES_REPRESENTATION
+            ],
         })
 
     @staticmethod

@@ -11,6 +11,7 @@ from gritic.tableschemas import (
     GAIN_DRAW_COLUMNS,
     GAIN_TIMING_TABLE_COLUMNS,
     NODE_PHASING_LABELS,
+    ROUTE_PARTICLES_REPRESENTATION,
     ROUTE_DRAW_COLUMNS,
     ROUTE_KEY_COLUMNS,
     ROUTE_TABLE_COLUMNS,
@@ -18,12 +19,16 @@ from gritic.tableschemas import (
     SEGMENT_METADATA_COLUMNS,
     SUMMARY_COLUMNS,
     SUMMARY_VALUE_COLUMNS,
+    TIMING_REPRESENTATION_COLUMN,
+    TIMING_REPRESENTATIONS,
+    UNIFORM_NO_GAIN_REPRESENTATION,
 )
 from gritic.timingio import get_timing_archive_paths, load_timing_archive
 
 NON_PARSIMONY_PENALTY_COEFFICIENT = 2.7
 
 _SEGMENT_CONSTANT_COLUMNS = SEGMENT_METADATA_COLUMNS + [
+    TIMING_REPRESENTATION_COLUMN,
     'WGD_Timing',
     'WGD_Timing_CI_Low',
     'WGD_Timing_CI_High',
@@ -206,6 +211,24 @@ def _validate_route_table(route_table, sample_id):
     if (route_table['Average_N_Events'] < 0).any():
         raise ValueError('Average_N_Events values must be non-negative')
 
+    invalid_timing_representations = ~route_table[
+        TIMING_REPRESENTATION_COLUMN
+    ].isin(TIMING_REPRESENTATIONS)
+    if invalid_timing_representations.any():
+        invalid_values = sorted({
+            '<missing/NaN>' if pd.isna(value) else repr(value)
+            for value in route_table.loc[
+                invalid_timing_representations,
+                TIMING_REPRESENTATION_COLUMN,
+            ]
+        })
+        permitted_values = ', '.join(repr(value) for value in TIMING_REPRESENTATIONS)
+        raise ValueError(
+            f'{TIMING_REPRESENTATION_COLUMN} must contain one of the exact, '
+            f'case-sensitive values {permitted_values}; invalid value(s): '
+            + ', '.join(invalid_values)
+        )
+
     for segment_key, segment_table in route_table.groupby(
         SEGMENT_KEY_COLUMNS,
         sort=False,
@@ -299,6 +322,32 @@ def _validate_gain_timing_table(gain_timing_table, route_table, sample_id):
         raise ValueError(
             'The gain timing table contains routes absent from the route '
             f'table: {_format_keys(unexpected_routes)}'
+        )
+
+    uniform_segment_keys = set(
+        route_table.loc[
+            route_table[TIMING_REPRESENTATION_COLUMN].eq(
+                UNIFORM_NO_GAIN_REPRESENTATION
+            ),
+            SEGMENT_KEY_COLUMNS,
+        ].itertuples(index=False, name=None)
+    )
+    gain_segment_keys = set(
+        gain_timing_table[SEGMENT_KEY_COLUMNS].itertuples(
+            index=False,
+            name=None,
+        )
+    )
+    invalid_uniform_segments = sorted(
+        uniform_segment_keys & gain_segment_keys,
+        key=str,
+    )
+    if invalid_uniform_segments:
+        raise ValueError(
+            'Segments using the '
+            f'{UNIFORM_NO_GAIN_REPRESENTATION} timing representation must '
+            'not have gain timing rows: '
+            + _format_keys(invalid_uniform_segments)
         )
 
 
@@ -551,6 +600,23 @@ def get_sample_posterior_tables(
             (gain_timing_table['Sample_ID'] == str(sample_id))
             & (gain_timing_table['Segment_ID'] == segment_id)
         ]
+        timing_representation = segment_route_table[
+            TIMING_REPRESENTATION_COLUMN
+        ].iloc[0]
+        if timing_representation == UNIFORM_NO_GAIN_REPRESENTATION:
+            if not segment_timing_table.empty:
+                raise ValueError(
+                    'Segments using the '
+                    f'{UNIFORM_NO_GAIN_REPRESENTATION} timing '
+                    'representation must not have gain timing rows: '
+                    f'{sample_id}:{segment_id}'
+                )
+            continue
+        if timing_representation != ROUTE_PARTICLES_REPRESENTATION:
+            raise ValueError(
+                f'Unsupported {TIMING_REPRESENTATION_COLUMN} '
+                f'{timing_representation!r} for segment {segment_id}'
+            )
         timing_archive_path, timing_manifest_path = get_timing_archive_paths(
             timing_dict_dir,
             segment_id,

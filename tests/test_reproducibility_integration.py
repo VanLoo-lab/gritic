@@ -156,6 +156,13 @@ class SeededSubcloneProcessSampleTest(unittest.TestCase):
         )
         return timingio.load_timing_archive(archive_path, manifest_path)
 
+    def load_uniform_archive(self, output_directory):
+        archive_path, manifest_path = timingio.get_timing_archive_paths(
+            output_directory / 'SEEDED_SUBCLONE_timing_dicts',
+            '1-0-1000',
+        )
+        return timingio.load_timing_archive(archive_path, manifest_path)
+
     def test_subclonal_run_writes_nonempty_inferential_outputs(self):
         output_directory = self.output_directories[0]
         subclones = self.read_table(output_directory, 'subclone_table')
@@ -188,6 +195,19 @@ class SeededSubcloneProcessSampleTest(unittest.TestCase):
             self.assertTrue(np.isfinite(subclone_shares).all())
             self.assertTrue(((subclone_shares > 0) & (subclone_shares < 1)).all())
 
+        uniform_hierarchy = self.load_uniform_archive(output_directory)
+        self.assertEqual(len(uniform_hierarchy), 1)
+        uniform_route_samples = next(iter(uniform_hierarchy.values()))
+        self.assertEqual(set(uniform_route_samples), {'Clone_Share'})
+        clone_shares = uniform_route_samples['Clone_Share']
+        self.assertEqual(
+            clone_shares.shape,
+            (gritictimer.ROUTE_CONDITIONAL_SAMPLE_COUNT, 2),
+        )
+        self.assertTrue(np.isfinite(clone_shares).all())
+        self.assertTrue((clone_shares >= 0).all())
+        np.testing.assert_allclose(clone_shares.sum(axis=1), 1.0)
+
     def test_same_seed_reproduces_tables_and_full_timing_archive(self):
         first_output, second_output = self.output_directories
         table_suffixes = (
@@ -212,6 +232,10 @@ class SeededSubcloneProcessSampleTest(unittest.TestCase):
         self.assert_nested_exactly_equal(
             self.load_gain_archive(first_output),
             self.load_gain_archive(second_output),
+        )
+        self.assert_nested_exactly_equal(
+            self.load_uniform_archive(first_output),
+            self.load_uniform_archive(second_output),
         )
 
 
