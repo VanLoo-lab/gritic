@@ -55,6 +55,9 @@ MIN_WGD_MUTATIONS = 10
 ROUTE_CONDITIONAL_SAMPLE_COUNT = 1000
 RAW_ROUTE_SAMPLE_COUNT = 10_000
 COMBINED_WGD_SAMPLE_COUNT = 500
+_INITIAL_DENSITY_EVALUATION_BATCH_COUNT = 101
+_MAX_DENSITY_RETRY_DELAY_SECONDS = 30.0
+_DENSITY_RUNTIME_MULTIPLIER = 5.0
 # Bound simultaneous per-segment posterior output while still sharing costly
 # route geometry across high-copy-number segment pairs.
 SHARED_FIT_OUTPUT_MEMORY_BUDGET = 1_900_000_000
@@ -67,6 +70,37 @@ _MIRROR_ALLELE = {
     'Major': 'Minor',
     'Minor': 'Major',
 }
+
+
+def _density_evaluation_due(
+    batches_sampled,
+    sample_count,
+    max_samples,
+    *,
+    current_time=None,
+    next_evaluation_time=None,
+):
+    """Return whether route-proposal density should be evaluated now."""
+    if sample_count >= max_samples:
+        return True
+    if next_evaluation_time is None:
+        return batches_sampled >= _INITIAL_DENSITY_EVALUATION_BATCH_COUNT
+    if current_time is None:
+        raise ValueError(
+            'current_time is required after a density retry has been scheduled'
+        )
+    return current_time > next_evaluation_time
+
+
+def _density_retry_delay(sampling_time, density_time):
+    """Return the bounded delay before repeating a density diagnostic."""
+    return min(
+        max(
+            density_time * _DENSITY_RUNTIME_MULTIPLIER,
+            sampling_time,
+        ),
+        _MAX_DENSITY_RETRY_DELAY_SECONDS,
+    )
 
 
 def validate_subclone_fraction_prior(subclone_fraction_prior):
@@ -383,7 +417,7 @@ class Route:
 
         sampling_started = time.perf_counter()
         next_eval_time = None
-        eval_count = 0
+        batches_sampled = 0
         sample_count = 0
 
         while sample_count < max_samples:
@@ -397,34 +431,36 @@ class Route:
             wgd_timing_batches.append(
                 np.full(timing.shape[1], wgd_timing, dtype=float)
             )
+            batches_sampled += 1
             sample_count += timing.shape[1]
 
-            should_evaluate = (
-                eval_count == 100
-                or (
-                    next_eval_time is not None
-                    and time.perf_counter() > next_eval_time
-                )
-                or sample_count >= max_samples
+            current_time = (
+                None
+                if next_eval_time is None
+                else time.perf_counter()
+            )
+            should_evaluate = _density_evaluation_due(
+                batches_sampled,
+                sample_count,
+                max_samples,
+                current_time=current_time,
+                next_evaluation_time=next_eval_time,
             )
             if should_evaluate:
                 timing_test = np.concatenate(timing_batches, axis=1).T
                 sampling_time = time.perf_counter() - sampling_started
                 density_started = time.perf_counter()
                 density = np.asarray(self.get_density_estimate(timing_test))
-                density_time = time.perf_counter() - density_started
+                density_finished = time.perf_counter()
+                density_time = density_finished - density_started
                 del timing_test
-                if eval_count > 50:
-                    next_eval_time = time.perf_counter() + min(
-                        max(density_time * 5, sampling_time),
-                        30.0,
-                    )
-                else:
-                    next_eval_time = time.perf_counter() + 1.0
-                sampling_started = time.perf_counter()
+                next_eval_time = density_finished + _density_retry_delay(
+                    sampling_time,
+                    density_time,
+                )
+                sampling_started = density_finished
                 if density[0] >= density_cut_off:
                     break
-            eval_count += 1
 
         return ProposalGeometry(
             mult_store=np.concatenate(mult_batches, axis=0),
