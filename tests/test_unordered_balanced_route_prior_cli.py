@@ -43,7 +43,10 @@ class UnorderedBalancedRoutePriorCliTest(unittest.TestCase):
             routes={'route-id': route},
             fit_routes=mock.Mock(),
             get_route_table=mock.Mock(
-                return_value=pd.DataFrame({'Route': ['route-id']})
+                return_value=pd.DataFrame({
+                    'Route': ['route-id'],
+                    'Probability': [1.0],
+                })
             ),
             get_timing_table=mock.Mock(
                 return_value=pd.DataFrame({'Route': ['route-id']})

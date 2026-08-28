@@ -22,7 +22,7 @@ from gritic.sampletools import (
     get_major_cn_mode,
     validate_sample_id,
 )
-from gritic import dataloader
+from gritic import dataloader, timingio
 from gritic.intervaltools import (
     DEFAULT_TIMING_INTERVALS,
     TimingIntervalConfig,
@@ -61,6 +61,7 @@ COMBINED_WGD_SAMPLE_COUNT = 500
 _INITIAL_DENSITY_EVALUATION_BATCH_COUNT = 101
 _MAX_DENSITY_RETRY_DELAY_SECONDS = 30.0
 _DENSITY_RUNTIME_MULTIPLIER = 5.0
+_MULT_NEGATIVE_TOLERANCE = 1e-12
 # Bound simultaneous per-segment posterior output while still sharing costly
 # route geometry across high-copy-number segment pairs.
 SHARED_FIT_OUTPUT_MEMORY_BUDGET = 1_900_000_000
@@ -1131,8 +1132,210 @@ class RouteClassifier:
             )
         return timing_table
     
-    def get_timing_dict(self):
-        """Return the fitted posterior payload, or None when none is needed."""
+    @staticmethod
+    def _route_probability_mapping(values, routes, label):
+        if not isinstance(values, dict):
+            raise TypeError(f'{label} must be a dictionary keyed by Route')
+        expected_routes = {route.short_id for route in routes}
+        observed_routes = set(values)
+        if observed_routes != expected_routes:
+            missing_routes = sorted(expected_routes - observed_routes)
+            unexpected_routes = sorted(observed_routes - expected_routes)
+            details = []
+            if missing_routes:
+                details.append('missing: ' + ', '.join(missing_routes))
+            if unexpected_routes:
+                details.append('unexpected: ' + ', '.join(unexpected_routes))
+            raise ValueError(
+                f'{label} route coverage does not match fitted routes ('
+                + '; '.join(details)
+                + ')'
+            )
+
+        probabilities = {}
+        for route_id, probability in values.items():
+            if (
+                not isinstance(probability, Real)
+                or isinstance(probability, (bool, np.bool_))
+                or not np.isfinite(probability)
+                or probability < 0
+            ):
+                raise ValueError(
+                    f'{label} values must be finite and nonnegative'
+                )
+            probabilities[route_id] = float(probability)
+        total_probability = sum(probabilities.values())
+        if not np.isclose(total_probability, 1.0):
+            raise ValueError(f'{label} values must sum to one')
+        return probabilities
+
+    @staticmethod
+    def _get_route_interval_topology(route, representative_all_phasings):
+        route_tree = route.route_tree
+        node_attributes = route_tree.node_attributes
+        timing_nodes = list(route_tree.timeable_nodes)
+        if any(
+            isinstance(node, (bool, np.bool_)) or not isinstance(node, Integral)
+            for node in timing_nodes
+        ):
+            raise ValueError(
+                'Self-describing timing archives require integer timing-node '
+                'identifiers'
+            )
+        timing_column_by_node = {
+            node: timing_column
+            for timing_column, node in enumerate(timing_nodes)
+        }
+
+        def endpoint_source(node):
+            attributes = node_attributes[node]
+            if len(attributes['Successors']) == 0:
+                return timingio.TIMING_SOURCE_ONE
+            if attributes['WGD']:
+                return timingio.TIMING_SOURCE_WGD
+            if node not in timing_column_by_node:
+                raise ValueError(
+                    f'Nonterminal non-WGD route node {node!r} has no stored '
+                    'timing column'
+                )
+            return (
+                timingio.TIMING_SOURCE_COLUMN_OFFSET
+                + timing_column_by_node[node]
+            )
+
+        eligible_nodes = list(node_attributes)
+        if representative_all_phasings:
+            eligible_nodes = [
+                node for node in eligible_nodes
+                if node_attributes[node]['Phasing'] == 'Major'
+            ]
+        multiplicity_order = list(dict.fromkeys(
+            node_attributes[node]['Multiplicity']
+            for node in eligible_nodes
+        ))
+        ordered_nodes = [
+            node
+            for multiplicity in multiplicity_order
+            for node in eligible_nodes
+            if node_attributes[node]['Multiplicity'] == multiplicity
+        ]
+
+        start_sources = []
+        end_sources = []
+        multiplicities = []
+        phasing_masks = []
+        all_phasing_bits = np.uint8(
+            timingio.PHASING_BIT_NON_PHASED
+            | timingio.PHASING_BIT_MAJOR
+            | timingio.PHASING_BIT_MINOR
+        )
+        for node in ordered_nodes:
+            attributes = node_attributes[node]
+            predecessor = attributes['Predecessor']
+            start_sources.append(
+                timingio.TIMING_SOURCE_ZERO
+                if predecessor is None
+                else endpoint_source(predecessor)
+            )
+            end_sources.append(endpoint_source(node))
+            multiplicities.append(attributes['Multiplicity'])
+            if representative_all_phasings:
+                phasing_masks.append(all_phasing_bits)
+            else:
+                allele_bit = {
+                    'Major': timingio.PHASING_BIT_MAJOR,
+                    'Minor': timingio.PHASING_BIT_MINOR,
+                }.get(attributes['Phasing'])
+                if allele_bit is None:
+                    raise ValueError(
+                        'Every route node must have Major or Minor phasing'
+                    )
+                phasing_masks.append(np.uint8(
+                    timingio.PHASING_BIT_NON_PHASED | allele_bit
+                ))
+
+        return {
+            timingio.ROUTE_PARTICLE_TIMING_NODE_ID_KEY: np.asarray(
+                timing_nodes,
+                dtype=np.int64,
+            ),
+            timingio.ROUTE_PARTICLE_INTERVAL_START_SOURCE_KEY: np.asarray(
+                start_sources,
+                dtype=np.int64,
+            ),
+            timingio.ROUTE_PARTICLE_INTERVAL_END_SOURCE_KEY: np.asarray(
+                end_sources,
+                dtype=np.int64,
+            ),
+            timingio.ROUTE_PARTICLE_INTERVAL_MULTIPLICITY_KEY: np.asarray(
+                multiplicities,
+                dtype=np.int64,
+            ),
+            timingio.ROUTE_PARTICLE_INTERVAL_PHASING_KEY: np.asarray(
+                phasing_masks,
+                dtype=np.uint8,
+            ),
+        }
+
+    @staticmethod
+    def _get_route_state_columns(route, representative_all_phasings):
+        major_cn = route.major_cn
+        minor_cn = route.minor_cn
+        n_subclones = route.n_subclones
+        n_columns = 2 * major_cn + minor_cn + n_subclones
+        subclone_columns = np.arange(
+            n_columns - n_subclones,
+            n_columns,
+            dtype=np.int64,
+        )
+        state_columns = (
+            np.concatenate([
+                np.arange(major_cn, dtype=np.int64),
+                subclone_columns,
+            ]),
+            np.concatenate([
+                np.arange(major_cn, 2 * major_cn, dtype=np.int64),
+                subclone_columns,
+            ]),
+            np.concatenate([
+                np.arange(
+                    2 * major_cn,
+                    2 * major_cn + minor_cn,
+                    dtype=np.int64,
+                ),
+                subclone_columns,
+            ]),
+        )
+        if representative_all_phasings:
+            representative_columns = state_columns[1]
+            state_columns = (
+                representative_columns,
+                representative_columns,
+                representative_columns,
+            )
+
+        offsets = np.zeros(
+            len(timingio.ROUTE_PARTICLE_PHASING_ORDER) + 1,
+            dtype=np.int64,
+        )
+        offsets[1:] = np.cumsum([columns.size for columns in state_columns])
+        return {
+            timingio.ROUTE_PARTICLE_STATE_COLUMN_OFFSETS_KEY: offsets,
+            timingio.ROUTE_PARTICLE_STATE_COLUMNS_KEY: np.concatenate(
+                state_columns
+            ),
+        }
+
+    def get_timing_dict(
+        self,
+        penalized_probabilities=None,
+        *,
+        target_major_cn=None,
+        target_minor_cn=None,
+        target_wgd_status=None,
+        archive_kind=timingio.ROUTE_PARTICLE_ARCHIVE_KIND_SEGMENT,
+    ):
+        """Return the fitted self-describing posterior payload, if needed."""
         if self.timing_representation == UNIFORM_NO_GAIN_REPRESENTATION:
             n_subclones = {
                 route.n_subclones for route, _ in self._get_output_routes()
@@ -1162,19 +1365,231 @@ class RouteClassifier:
                 }
             return timing_dict
 
-        timing_dict = {}
+        output_routes = [route for route, _ in self._get_output_routes()]
+        ordinary_probabilities = self._route_probability_mapping(
+            {
+                route.short_id: self.route_probabilities[route.route_id]
+                for route in output_routes
+            },
+            output_routes,
+            'Probability',
+        )
+        penalized_probabilities = self._route_probability_mapping(
+            penalized_probabilities,
+            output_routes,
+            'Penalized_Probability',
+        )
 
-        for route, _ in self._get_output_routes():
-            route_samples = {
-                'Timing': {
-                    'WGD': route.wgd_timing_store.copy(),
-                },
-            }
-            for node in route.route_tree.timeable_nodes:
-                route_samples['Timing'][node] = (
-                    route.get_node_timing(node).copy()
+        model_major_cn = self.major_cn
+        model_minor_cn = self.minor_cn
+        model_wgd_status = bool(self.wgd_status)
+        if target_major_cn is None:
+            target_major_cn = model_major_cn
+        if target_minor_cn is None:
+            target_minor_cn = model_minor_cn
+        if target_wgd_status is None:
+            target_wgd_status = model_wgd_status
+        if (
+            isinstance(target_major_cn, (bool, np.bool_))
+            or not isinstance(target_major_cn, Integral)
+            or target_major_cn < 1
+            or isinstance(target_minor_cn, (bool, np.bool_))
+            or not isinstance(target_minor_cn, Integral)
+            or target_minor_cn < 0
+            or not isinstance(target_wgd_status, (bool, np.bool_))
+        ):
+            raise ValueError('Target copy-number/WGD metadata is invalid')
+        representative_all_phasings = bool(
+            target_wgd_status
+            and target_major_cn == 2
+            and target_minor_cn == 2
+            and model_major_cn == 2
+            and model_minor_cn == 0
+            and not model_wgd_status
+        )
+        if archive_kind not in (
+            timingio.ROUTE_PARTICLE_ARCHIVE_KIND_SEGMENT,
+            timingio.ROUTE_PARTICLE_ARCHIVE_KIND_POOLED_WGD,
+        ):
+            raise ValueError('archive_kind must identify a segment or pooled WGD')
+        target_model = (
+            int(target_major_cn),
+            int(target_minor_cn),
+            bool(target_wgd_status),
+        )
+        fitted_model = (
+            int(model_major_cn),
+            int(model_minor_cn),
+            bool(model_wgd_status),
+        )
+        if (
+            archive_kind == timingio.ROUTE_PARTICLE_ARCHIVE_KIND_SEGMENT
+            and target_model != fitted_model
+        ):
+            raise ValueError(
+                'Segment archive target metadata must match its fitted model'
+            )
+        if archive_kind == timingio.ROUTE_PARTICLE_ARCHIVE_KIND_POOLED_WGD:
+            expected_fitted_model = (
+                2,
+                0 if target_minor_cn == 2 else int(target_minor_cn),
+                False,
+            )
+            if (
+                target_major_cn != 2
+                or target_minor_cn not in (0, 1, 2)
+                or not target_wgd_status
+                or fitted_model != expected_fitted_model
+                or len(output_routes) != 1
+                or ordinary_probabilities[output_routes[0].short_id] != 1.0
+                or penalized_probabilities[output_routes[0].short_id] != 1.0
+            ):
+                raise ValueError(
+                    'Pooled WGD archives require one unit-probability 2+m '
+                    'target with the corresponding non-WGD fitted model'
                 )
-            route_samples['Mult'] = route.mult_store.copy()
+
+        timing_dict = {}
+        for route in output_routes:
+            mult_store = np.array(
+                route.mult_store,
+                dtype=np.float64,
+                order='C',
+                copy=True,
+            )
+            if (
+                not np.all(np.isfinite(mult_store))
+                or np.any(mult_store < -_MULT_NEGATIVE_TOLERANCE)
+            ):
+                raise ValueError(
+                    'Self-describing route particles require finite Mult '
+                    'values without material negative mass'
+                )
+            np.maximum(mult_store, 0.0, out=mult_store)
+            wgd_timing = np.ascontiguousarray(
+                route.wgd_timing_store,
+                dtype=np.float64,
+            )
+            n_particles = mult_store.shape[0]
+            timing_nodes = list(route.route_tree.timeable_nodes)
+            if timing_nodes:
+                timing = np.ascontiguousarray(np.column_stack([
+                    route.get_node_timing(node) for node in timing_nodes
+                ]), dtype=np.float64)
+            else:
+                timing = np.empty((n_particles, 0), dtype=np.float64)
+            if (
+                mult_store.ndim != 2
+                or n_particles == 0
+                or wgd_timing.shape != (n_particles,)
+                or timing.shape != (n_particles, len(timing_nodes))
+            ):
+                raise ValueError(
+                    'Aligned Timing, WGD_Timing, and Mult particles must '
+                    'contain the same nonzero number of rows'
+                )
+            expected_mult_columns = (
+                2 * model_major_cn
+                + model_minor_cn
+                + route.n_subclones
+            )
+            if (
+                mult_store.shape[1] != expected_mult_columns
+                or not np.all(np.isfinite(timing))
+            ):
+                raise ValueError(
+                    'Self-describing route particles require finite Timing '
+                    'and finite nonnegative Mult values with the modelled '
+                    'state-column count'
+                )
+            subclone_start = 2 * model_major_cn + model_minor_cn
+            subclone_share = np.sum(
+                mult_store[:, subclone_start:],
+                axis=1,
+            )
+            clonal_blocks = (
+                mult_store[:, :model_major_cn],
+                mult_store[:, model_major_cn:2 * model_major_cn],
+            )
+            if model_minor_cn:
+                clonal_blocks += (
+                    mult_store[
+                        :,
+                        2 * model_major_cn:subclone_start,
+                    ],
+                )
+            if any(
+                not np.allclose(
+                    np.sum(clonal_block, axis=1) + subclone_share,
+                    1.0,
+                    rtol=1e-7,
+                    atol=1e-8,
+                )
+                for clonal_block in clonal_blocks
+            ):
+                raise ValueError(
+                    'Every Mult phasing block plus the shared subclone '
+                    'columns must sum to one'
+                )
+            if model_wgd_status:
+                if not np.all(np.isfinite(wgd_timing)):
+                    raise ValueError(
+                        'WGD route particles require finite WGD_Timing values'
+                    )
+            elif not np.all(np.isnan(wgd_timing)):
+                raise ValueError(
+                    'Non-WGD route particles require NaN WGD_Timing values'
+                )
+
+            route_samples = {
+                timingio.ROUTE_PARTICLE_PROBABILITY_KEY: np.asarray(
+                    [ordinary_probabilities[route.short_id]],
+                    dtype=np.float64,
+                ),
+                timingio.ROUTE_PARTICLE_PENALIZED_PROBABILITY_KEY: np.asarray(
+                    [penalized_probabilities[route.short_id]],
+                    dtype=np.float64,
+                ),
+                timingio.ROUTE_PARTICLE_TIMING_KEY: timing.copy(),
+                timingio.ROUTE_PARTICLE_WGD_TIMING_KEY: wgd_timing.copy(),
+                timingio.ROUTE_PARTICLE_MULT_KEY: mult_store.copy(),
+                timingio.ROUTE_PARTICLE_TARGET_MAJOR_CN_KEY: np.asarray(
+                    [target_major_cn], dtype=np.int64
+                ),
+                timingio.ROUTE_PARTICLE_TARGET_MINOR_CN_KEY: np.asarray(
+                    [target_minor_cn], dtype=np.int64
+                ),
+                timingio.ROUTE_PARTICLE_N_SUBCLONES_KEY: np.asarray(
+                    [route.n_subclones], dtype=np.int64
+                ),
+                timingio.ROUTE_PARTICLE_TARGET_WGD_STATUS_KEY: np.asarray(
+                    [target_wgd_status], dtype=np.uint8
+                ),
+                timingio.ROUTE_PARTICLE_MODEL_MAJOR_CN_KEY: np.asarray(
+                    [model_major_cn], dtype=np.int64
+                ),
+                timingio.ROUTE_PARTICLE_MODEL_MINOR_CN_KEY: np.asarray(
+                    [model_minor_cn], dtype=np.int64
+                ),
+                timingio.ROUTE_PARTICLE_MODEL_WGD_STATUS_KEY: np.asarray(
+                    [model_wgd_status], dtype=np.uint8
+                ),
+                timingio.ROUTE_PARTICLE_ARCHIVE_KIND_KEY: np.asarray(
+                    [archive_kind], dtype=np.uint8
+                ),
+            }
+            route_samples.update(self._get_route_interval_topology(
+                route,
+                representative_all_phasings,
+            ))
+            route_samples.update(self._get_route_state_columns(
+                route,
+                representative_all_phasings,
+            ))
+            if set(route_samples) != timingio.ROUTE_PARTICLE_ARCHIVE_FIELDS:
+                raise AssertionError(
+                    'Self-describing route-particle fields are incomplete'
+                )
             timing_dict[route.short_id] = route_samples
         return timing_dict
 
@@ -1520,9 +1935,17 @@ def _get_wgd_timing_model(segment):
 
     pseudo_minor_cn = 0
 
-    combined_array = mult_probabilities.combined_array
-    combined_correction = (
-        mult_probabilities.reads_correction_combined_array
+    # The balanced likelihood matrix is assembled column-wise and can be
+    # Fortran-contiguous.  The cached Numba likelihood kernel requires the
+    # mutation-by-state input to be C-contiguous; passing the transposed layout
+    # can crash inside compiled code rather than raising a Python exception.
+    combined_array = np.ascontiguousarray(
+        mult_probabilities.combined_array,
+        dtype=np.float64,
+    )
+    combined_correction = np.ascontiguousarray(
+        mult_probabilities.reads_correction_combined_array,
+        dtype=np.float64,
     )
     combined_array_store = {
         'Non_Phased': combined_array,
@@ -1743,7 +2166,20 @@ def _time_combined_wgd_segment(
         None,
     )
 
-    timing_dict = classifier.get_timing_dict()
+    pooled_route_table = classifier.get_route_table()
+    if (
+        len(pooled_route_table) != 1
+        or not np.isclose(pooled_route_table.iloc[0]['Probability'], 1.0)
+    ):
+        raise ValueError('Pooled WGD timing must have exactly one route')
+    pooled_route_id = pooled_route_table.iloc[0]['Route']
+    timing_dict = classifier.get_timing_dict(
+        {pooled_route_id: 1.0},
+        target_major_cn=2,
+        target_minor_cn=minor_cn,
+        target_wgd_status=True,
+        archive_kind=timingio.ROUTE_PARTICLE_ARCHIVE_KIND_POOLED_WGD,
+    )
     write_timing_archive(
         timing_dict,
         timing_dict_dir,
@@ -1934,14 +2370,6 @@ def _write_segment_results(
     segment_timing_table = classifier.get_timing_table(
         interval=interval_config.route_gain,
     )
-    timing_dict = classifier.get_timing_dict()
-    if timing_dict is not None:
-        write_timing_archive(
-            timing_dict,
-            timing_dict_dir,
-            segment.segment_id,
-        )
-
     for key, val in segment.get_info_dict().items():
         segment_route_table[key] = val
     segment_route_table = add_wgd_info_to_route_table(
@@ -1953,6 +2381,23 @@ def _write_segment_results(
     segment_route_table = posteriortablegen.add_penalized_probability(
         segment_route_table
     )
+
+    penalized_probabilities = dict(zip(
+        segment_route_table['Route'],
+        segment_route_table['Penalized_Probability'],
+    ))
+    timing_dict = classifier.get_timing_dict(
+        penalized_probabilities,
+        target_major_cn=segment.major_cn,
+        target_minor_cn=segment.minor_cn,
+        target_wgd_status=wgd_status,
+    )
+    if timing_dict is not None:
+        write_timing_archive(
+            timing_dict,
+            timing_dict_dir,
+            segment.segment_id,
+        )
 
     segment_timing_table['Segment_ID'] = segment.segment_id
     segment_timing_table['Sample_ID'] = sample_id

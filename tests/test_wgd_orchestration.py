@@ -188,7 +188,7 @@ class AutomaticWGDIntegrationTest(unittest.TestCase):
             )
             self.assertEqual(set(timing_hierarchy), set(route_table['Route']))
             for route_timing in timing_hierarchy.values():
-                wgd_timing = route_timing['Timing']['WGD']
+                wgd_timing = route_timing['WGD_Timing']
                 self.assertEqual(
                     wgd_timing.shape,
                     (gritictimer.ROUTE_CONDITIONAL_SAMPLE_COUNT,),

@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from gritic import timingio
 from gritic.intervaltools import DEFAULT_TIMING_INTERVALS, get_interval_bounds
 from gritic.tableschemas import (
     GAIN_DRAW_COLUMNS,
@@ -351,18 +352,18 @@ def _validate_gain_timing_table(gain_timing_table, route_table, sample_id):
         )
 
 
-def _validate_timing_array(array, segment_id, route, label):
+def _validate_timing_array(array, segment_id, route, label, ndim):
     if not isinstance(array, np.ndarray):
         raise ValueError(
             f'Timing dictionary {label} for segment {segment_id}, route '
             f'{route} must be a numpy array'
         )
-    if array.ndim != 1:
+    if array.ndim != ndim:
         raise ValueError(
             f'Timing dictionary {label} for segment {segment_id}, route '
-            f'{route} must be one-dimensional'
+            f'{route} must be {ndim}-dimensional'
         )
-    if array.size == 0:
+    if array.shape[0] == 0:
         raise ValueError(
             f'Timing dictionary {label} for segment {segment_id}, route '
             f'{route} must not be empty'
@@ -372,6 +373,199 @@ def _validate_timing_array(array, segment_id, route, label):
             f'Timing dictionary {label} for segment {segment_id}, route '
             f'{route} must be numeric'
         )
+
+
+def _validate_route_particle_entry(
+    route_entry,
+    route_row,
+    route_timing_metadata,
+    segment_id,
+    route,
+):
+    if set(route_entry) != timingio.ROUTE_PARTICLE_ARCHIVE_FIELDS:
+        missing = sorted(
+            timingio.ROUTE_PARTICLE_ARCHIVE_FIELDS - set(route_entry)
+        )
+        unexpected = sorted(
+            set(route_entry) - timingio.ROUTE_PARTICLE_ARCHIVE_FIELDS
+        )
+        details = []
+        if missing:
+            details.append('missing: ' + ', '.join(missing))
+        if unexpected:
+            details.append('unexpected: ' + ', '.join(unexpected))
+        raise ValueError(
+            f'Self-describing timing dictionary entry for segment '
+            f'{segment_id}, route {route} has invalid fields ('
+            + '; '.join(details)
+            + ')'
+        )
+
+    timing = route_entry[timingio.ROUTE_PARTICLE_TIMING_KEY]
+    wgd_timing = route_entry[timingio.ROUTE_PARTICLE_WGD_TIMING_KEY]
+    mult = route_entry[timingio.ROUTE_PARTICLE_MULT_KEY]
+    timing_node_ids = route_entry[
+        timingio.ROUTE_PARTICLE_TIMING_NODE_ID_KEY
+    ]
+    _validate_timing_array(timing, segment_id, route, 'Timing', 2)
+    _validate_timing_array(wgd_timing, segment_id, route, 'WGD_Timing', 1)
+    _validate_timing_array(mult, segment_id, route, 'Mult', 2)
+    _validate_timing_array(
+        timing_node_ids,
+        segment_id,
+        route,
+        'Timing_Node_ID',
+        1,
+    )
+    if not np.issubdtype(timing_node_ids.dtype, np.integer):
+        raise ValueError('Timing_Node_ID must contain integer node identifiers')
+    if np.unique(timing_node_ids).size != timing_node_ids.size:
+        raise ValueError('Timing_Node_ID values must be unique within a route')
+    if timing.shape[1] != timing_node_ids.size:
+        raise ValueError(
+            'Timing must have one column per Timing_Node_ID value'
+        )
+    if timing.shape[0] != wgd_timing.size or timing.shape[0] != mult.shape[0]:
+        raise ValueError(
+            f'Aligned Timing, WGD_Timing, and Mult arrays for segment '
+            f'{segment_id}, route {route} must have the same row count'
+        )
+
+    metadata_nodes = set(route_timing_metadata['Node'])
+    archive_nodes = set(timing_node_ids.tolist())
+    missing_nodes = sorted(metadata_nodes - archive_nodes, key=str)
+    unexpected_nodes = sorted(archive_nodes - metadata_nodes, key=str)
+    if missing_nodes or unexpected_nodes:
+        details = []
+        if missing_nodes:
+            details.append(
+                f"missing: {', '.join(map(str, missing_nodes))}"
+            )
+        if unexpected_nodes:
+            details.append(
+                f"unexpected: {', '.join(map(str, unexpected_nodes))}"
+            )
+        raise ValueError(
+            'Timing_Node_ID coverage does not match the gain timing table '
+            f'for segment {segment_id}, route {route} '
+            f"({'; '.join(details)})"
+        )
+
+    for archive_key, table_column in (
+        (timingio.ROUTE_PARTICLE_PROBABILITY_KEY, 'Probability'),
+        (
+            timingio.ROUTE_PARTICLE_PENALIZED_PROBABILITY_KEY,
+            'Penalized_Probability',
+        ),
+    ):
+        value = route_entry[archive_key]
+        if (
+            not isinstance(value, np.ndarray)
+            or value.shape != (1,)
+            or not np.issubdtype(value.dtype, np.floating)
+            or not np.isfinite(value[0])
+            or value[0] < 0
+        ):
+            raise ValueError(f'{archive_key} must be one finite float value')
+        if not np.isclose(
+            float(value[0]),
+            float(route_row[table_column]),
+            rtol=1e-12,
+            atol=1e-15,
+        ):
+            raise ValueError(
+                f'{archive_key} in the timing archive must match the route '
+                'table'
+            )
+
+    scalar_integer_keys = (
+        timingio.ROUTE_PARTICLE_TARGET_MAJOR_CN_KEY,
+        timingio.ROUTE_PARTICLE_TARGET_MINOR_CN_KEY,
+        timingio.ROUTE_PARTICLE_N_SUBCLONES_KEY,
+        timingio.ROUTE_PARTICLE_TARGET_WGD_STATUS_KEY,
+        timingio.ROUTE_PARTICLE_MODEL_MAJOR_CN_KEY,
+        timingio.ROUTE_PARTICLE_MODEL_MINOR_CN_KEY,
+        timingio.ROUTE_PARTICLE_MODEL_WGD_STATUS_KEY,
+        timingio.ROUTE_PARTICLE_ARCHIVE_KIND_KEY,
+    )
+    for archive_key in scalar_integer_keys:
+        value = route_entry[archive_key]
+        if (
+            not isinstance(value, np.ndarray)
+            or value.shape != (1,)
+            or not np.issubdtype(value.dtype, np.integer)
+        ):
+            raise ValueError(f'{archive_key} must be one integer value')
+
+    interval_keys = (
+        timingio.ROUTE_PARTICLE_INTERVAL_START_SOURCE_KEY,
+        timingio.ROUTE_PARTICLE_INTERVAL_END_SOURCE_KEY,
+        timingio.ROUTE_PARTICLE_INTERVAL_MULTIPLICITY_KEY,
+        timingio.ROUTE_PARTICLE_INTERVAL_PHASING_KEY,
+    )
+    interval_count = None
+    for archive_key in interval_keys:
+        value = route_entry[archive_key]
+        if (
+            not isinstance(value, np.ndarray)
+            or value.ndim != 1
+            or not np.issubdtype(value.dtype, np.integer)
+        ):
+            raise ValueError(f'{archive_key} must be an integer vector')
+        if interval_count is None:
+            interval_count = value.size
+        elif value.size != interval_count:
+            raise ValueError(
+                'Every interval descriptor must contain the same number of '
+                'values'
+            )
+    if interval_count == 0:
+        raise ValueError('A gained route must describe at least one interval')
+
+    max_source = timingio.TIMING_SOURCE_COLUMN_OFFSET + timing.shape[1] - 1
+    for archive_key in (
+        timingio.ROUTE_PARTICLE_INTERVAL_START_SOURCE_KEY,
+        timingio.ROUTE_PARTICLE_INTERVAL_END_SOURCE_KEY,
+    ):
+        sources = route_entry[archive_key]
+        if np.any(sources < 0) or np.any(sources > max_source):
+            raise ValueError(f'{archive_key} contains an unknown timing source')
+    if np.any(
+        route_entry[timingio.ROUTE_PARTICLE_INTERVAL_MULTIPLICITY_KEY] <= 0
+    ):
+        raise ValueError('Interval_Multiplicity values must be positive')
+    valid_phasing_bits = int(
+        timingio.PHASING_BIT_NON_PHASED
+        | timingio.PHASING_BIT_MAJOR
+        | timingio.PHASING_BIT_MINOR
+    )
+    phasing_masks = route_entry[
+        timingio.ROUTE_PARTICLE_INTERVAL_PHASING_KEY
+    ]
+    if np.any(phasing_masks <= 0) or np.any(phasing_masks > valid_phasing_bits):
+        raise ValueError('Interval_Phasing contains an unknown phasing mask')
+
+    offsets = route_entry[
+        timingio.ROUTE_PARTICLE_STATE_COLUMN_OFFSETS_KEY
+    ]
+    state_columns = route_entry[timingio.ROUTE_PARTICLE_STATE_COLUMNS_KEY]
+    if (
+        not isinstance(offsets, np.ndarray)
+        or offsets.shape != (4,)
+        or not np.issubdtype(offsets.dtype, np.integer)
+        or offsets[0] != 0
+        or np.any(np.diff(offsets) < 0)
+        or not isinstance(state_columns, np.ndarray)
+        or state_columns.ndim != 1
+        or not np.issubdtype(state_columns.dtype, np.integer)
+        or offsets[-1] != state_columns.size
+    ):
+        raise ValueError(
+            'State_Column_Offsets and State_Columns have invalid shapes or '
+            'offsets'
+        )
+    if np.any(state_columns < 0) or np.any(state_columns >= mult.shape[1]):
+        raise ValueError('State_Columns contains an unknown Mult column')
 
 
 def _validate_segment_timing_dict(
@@ -409,52 +603,19 @@ def _validate_segment_timing_dict(
                 f'Timing dictionary entry for segment {segment_id}, route '
                 f'{route} must be a mapping'
             )
-        route_timing = route_entry.get('Timing')
-        if not isinstance(route_timing, Mapping):
-            raise ValueError(
-                f'Timing dictionary entry for segment {segment_id}, route '
-                f'{route} must contain a Timing mapping'
-            )
-        if 'WGD' not in route_timing:
-            raise ValueError(
-                f'Timing dictionary for segment {segment_id}, route {route} '
-                'is missing the WGD array'
-            )
-
         route_timing_metadata = segment_timing_table.loc[
             segment_timing_table['Route'] == route
         ]
-        metadata_nodes = set(route_timing_metadata['Node'])
-        dictionary_nodes = set(route_timing) - {'WGD'}
-        missing_nodes = sorted(metadata_nodes - dictionary_nodes, key=str)
-        unexpected_nodes = sorted(dictionary_nodes - metadata_nodes, key=str)
-        if missing_nodes or unexpected_nodes:
-            details = []
-            if missing_nodes:
-                details.append(
-                    f"missing: {', '.join(map(str, missing_nodes))}"
-                )
-            if unexpected_nodes:
-                details.append(
-                    f"unexpected: {', '.join(map(str, unexpected_nodes))}"
-                )
-            raise ValueError(
-                'Timing dictionary node coverage does not match the gain '
-                f'timing table for segment {segment_id}, route {route} '
-                f"({'; '.join(details)})"
-            )
-
-        expected_length = None
-        for label in ['WGD', *route_timing_metadata['Node'].tolist()]:
-            array = route_timing[label]
-            _validate_timing_array(array, segment_id, route, label)
-            if expected_length is None:
-                expected_length = array.size
-            elif array.size != expected_length:
-                raise ValueError(
-                    'All timing arrays for segment '
-                    f'{segment_id}, route {route} must have the same length'
-                )
+        route_row = segment_route_table.loc[
+            segment_route_table['Route'] == route
+        ].iloc[0]
+        _validate_route_particle_entry(
+            route_entry,
+            route_row,
+            route_timing_metadata,
+            segment_id,
+            route,
+        )
 
 
 def _normalized_route_probabilities(
@@ -483,18 +644,40 @@ def produce_timing_segment_tables(
     probability_column='Probability',
 ):
     """Draw routes once per posterior sample and timings jointly per route."""
-    _validate_segment_timing_dict(
-        segment_route_table,
-        segment_timing_table,
-        timing_dict,
-        segment_id,
-    )
     probabilities = _normalized_route_probabilities(
         segment_route_table,
         probability_column,
     )
     if probabilities is None:
         return None, None
+    _validate_segment_timing_dict(
+        segment_route_table,
+        segment_timing_table,
+        timing_dict,
+        segment_id,
+    )
+    archive_probability_key = {
+        'Probability': timingio.ROUTE_PARTICLE_PROBABILITY_KEY,
+        'Penalized_Probability': (
+            timingio.ROUTE_PARTICLE_PENALIZED_PROBABILITY_KEY
+        ),
+    }[probability_column]
+    archive_probabilities = np.asarray([
+        timing_dict[route][archive_probability_key][0]
+        for route in segment_route_table['Route']
+    ], dtype=np.float64)
+    archive_probability_sum = archive_probabilities.sum()
+    if (
+        not np.all(np.isfinite(archive_probabilities))
+        or np.any(archive_probabilities < 0)
+        or not np.isfinite(archive_probability_sum)
+        or archive_probability_sum <= 0
+    ):
+        raise ValueError(
+            f'Timing archive {archive_probability_key} values must contain '
+            'finite nonnegative mass'
+        )
+    probabilities = archive_probabilities / archive_probability_sum
 
     sampled_routes = np.random.choice(
         segment_route_table['Route'].to_numpy(),
@@ -516,12 +699,23 @@ def produce_timing_segment_tables(
     gain_draws = []
     route_draws = []
     for posterior_sample_index, route in enumerate(sampled_routes):
-        route_timing = timing_dict[route]['Timing']
+        route_entry = timing_dict[route]
+        route_timing = route_entry[timingio.ROUTE_PARTICLE_TIMING_KEY]
+        wgd_timing_store = route_entry[
+            timingio.ROUTE_PARTICLE_WGD_TIMING_KEY
+        ]
+        timing_node_ids = route_entry[
+            timingio.ROUTE_PARTICLE_TIMING_NODE_ID_KEY
+        ]
+        timing_column_by_node = {
+            node: column
+            for column, node in enumerate(timing_node_ids.tolist())
+        }
         timing_sample_index = np.random.randint(
             0,
-            route_timing['WGD'].size,
+            wgd_timing_store.size,
         )
-        wgd_timing = route_timing['WGD'][timing_sample_index]
+        wgd_timing = wgd_timing_store[timing_sample_index]
 
         route_draws.append({
             **segment_metadata,
@@ -533,7 +727,7 @@ def produce_timing_segment_tables(
         node_phasing = timing_metadata_by_route.get(route, {})
         nodes = list(node_phasing)
         gain_timings = np.asarray([
-            route_timing[node][timing_sample_index]
+            route_timing[timing_sample_index, timing_column_by_node[node]]
             for node in nodes
         ])
         timing_order = np.argsort(gain_timings, kind='stable')

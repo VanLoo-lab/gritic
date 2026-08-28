@@ -7,7 +7,7 @@ from unittest import mock
 import numpy as np
 import pandas as pd
 
-from gritic import posteriortablegen
+from gritic import posteriortablegen, timingio
 from gritic.intervaltools import IntervalSpec
 from gritic.tableschemas import (
     GAIN_DRAW_COLUMNS,
@@ -20,6 +20,88 @@ from gritic.tableschemas import (
     UNIFORM_NO_GAIN_REPRESENTATION,
 )
 from gritic.timingio import write_timing_archive
+
+
+def make_route_particle_entry(
+    timing_by_node,
+    wgd_timing,
+    *,
+    probability=1.0,
+    penalized_probability=1.0,
+):
+    """Build a compact valid v4 route entry for posterior-table tests."""
+    node_ids = np.asarray(list(timing_by_node), dtype=np.int64)
+    wgd_timing = np.asarray(wgd_timing, dtype=float)
+    if node_ids.size:
+        timing = np.column_stack([
+            np.asarray(timing_by_node[node], dtype=float)
+            for node in node_ids
+        ])
+    else:
+        timing = np.empty((wgd_timing.size, 0), dtype=float)
+    interval_count = max(1, node_ids.size)
+    end_sources = (
+        timingio.TIMING_SOURCE_COLUMN_OFFSET
+        + np.arange(interval_count, dtype=np.int64)
+        if node_ids.size
+        else np.asarray([timingio.TIMING_SOURCE_ONE], dtype=np.int64)
+    )
+    return {
+        timingio.ROUTE_PARTICLE_PROBABILITY_KEY: np.asarray(
+            [probability], dtype=float
+        ),
+        timingio.ROUTE_PARTICLE_PENALIZED_PROBABILITY_KEY: np.asarray(
+            [penalized_probability], dtype=float
+        ),
+        timingio.ROUTE_PARTICLE_TIMING_KEY: timing,
+        timingio.ROUTE_PARTICLE_TIMING_NODE_ID_KEY: node_ids,
+        timingio.ROUTE_PARTICLE_WGD_TIMING_KEY: wgd_timing,
+        timingio.ROUTE_PARTICLE_MULT_KEY: np.full(
+            (wgd_timing.size, 5), 0.2, dtype=float
+        ),
+        timingio.ROUTE_PARTICLE_INTERVAL_START_SOURCE_KEY: np.zeros(
+            interval_count, dtype=np.int64
+        ),
+        timingio.ROUTE_PARTICLE_INTERVAL_END_SOURCE_KEY: end_sources,
+        timingio.ROUTE_PARTICLE_INTERVAL_MULTIPLICITY_KEY: np.ones(
+            interval_count, dtype=np.int64
+        ),
+        timingio.ROUTE_PARTICLE_INTERVAL_PHASING_KEY: np.full(
+            interval_count,
+            timingio.PHASING_BIT_NON_PHASED | timingio.PHASING_BIT_MAJOR,
+            dtype=np.uint8,
+        ),
+        timingio.ROUTE_PARTICLE_STATE_COLUMN_OFFSETS_KEY: np.asarray(
+            [0, 2, 4, 5], dtype=np.int64
+        ),
+        timingio.ROUTE_PARTICLE_STATE_COLUMNS_KEY: np.arange(
+            5, dtype=np.int64
+        ),
+        timingio.ROUTE_PARTICLE_TARGET_MAJOR_CN_KEY: np.asarray(
+            [2], dtype=np.int64
+        ),
+        timingio.ROUTE_PARTICLE_TARGET_MINOR_CN_KEY: np.asarray(
+            [1], dtype=np.int64
+        ),
+        timingio.ROUTE_PARTICLE_N_SUBCLONES_KEY: np.asarray(
+            [0], dtype=np.int64
+        ),
+        timingio.ROUTE_PARTICLE_TARGET_WGD_STATUS_KEY: np.asarray(
+            [1], dtype=np.uint8
+        ),
+        timingio.ROUTE_PARTICLE_MODEL_MAJOR_CN_KEY: np.asarray(
+            [2], dtype=np.int64
+        ),
+        timingio.ROUTE_PARTICLE_MODEL_MINOR_CN_KEY: np.asarray(
+            [1], dtype=np.int64
+        ),
+        timingio.ROUTE_PARTICLE_MODEL_WGD_STATUS_KEY: np.asarray(
+            [1], dtype=np.uint8
+        ),
+        timingio.ROUTE_PARTICLE_ARCHIVE_KIND_KEY: np.asarray(
+            [timingio.ROUTE_PARTICLE_ARCHIVE_KIND_SEGMENT], dtype=np.uint8
+        ),
+    }
 
 
 def make_route_row(
@@ -501,15 +583,13 @@ class TimingDictionaryValidationTest(unittest.TestCase):
             make_gain_timing_row(route='b', node=20),
         ])
         self.valid = {
-            'a': {'Timing': {
-                'WGD': np.array([0.5, 0.6]),
+            'a': make_route_particle_entry({
                 10: np.array([0.2, 0.3]),
                 11: np.array([0.4, 0.1]),
-            }},
-            'b': {'Timing': {
-                'WGD': np.array([0.7, 0.8]),
+            }, [0.5, 0.6], probability=0.5, penalized_probability=1.0),
+            'b': make_route_particle_entry({
                 20: np.array([0.6, 0.9]),
-            }},
+            }, [0.7, 0.8], probability=0.5, penalized_probability=1.0),
         }
 
     def validate(self, timing_dict):
@@ -520,7 +600,7 @@ class TimingDictionaryValidationTest(unittest.TestCase):
             'segment',
         )
 
-    def test_accepts_complete_numeric_one_dimensional_arrays(self):
+    def test_accepts_complete_self_describing_route_entries(self):
         self.validate(self.valid)
 
     def test_rejects_non_mapping_root_and_route_entry(self):
@@ -542,34 +622,36 @@ class TimingDictionaryValidationTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, message):
                     self.validate(value)
 
-    def test_rejects_missing_timing_mapping_and_wgd_array(self):
-        cases = (
-            ({**self.valid, 'a': {}}, 'contain a Timing mapping'),
-            (
-                {**self.valid, 'a': {'Timing': {10: np.array([0.2])}}},
-                'missing the WGD array',
-            ),
-        )
-        for value, message in cases:
+    def test_rejects_missing_or_unexpected_route_fields(self):
+        missing = self.valid['a'].copy()
+        missing.pop(timingio.ROUTE_PARTICLE_WGD_TIMING_KEY)
+        unexpected = {**self.valid['a'], 'Legacy_Field': np.asarray([1])}
+        for route_entry, message in (
+            (missing, 'missing: WGD_Timing'),
+            (unexpected, 'unexpected: Legacy_Field'),
+        ):
             with self.subTest(message=message):
                 with self.assertRaisesRegex(ValueError, message):
-                    self.validate(value)
+                    self.validate({**self.valid, 'a': route_entry})
 
     def test_rejects_missing_and_unexpected_node_arrays(self):
-        missing = {
-            **self.valid,
-            'a': {'Timing': {
-                'WGD': np.array([0.5, 0.6]),
-                10: np.array([0.2, 0.3]),
-            }},
-        }
-        unexpected = {
-            **self.valid,
-            'a': {'Timing': {
-                **self.valid['a']['Timing'],
-                99: np.array([0.1, 0.2]),
-            }},
-        }
+        missing_entry = self.valid['a'].copy()
+        missing_entry[timingio.ROUTE_PARTICLE_TIMING_NODE_ID_KEY] = np.asarray(
+            [10], dtype=np.int64
+        )
+        missing_entry[timingio.ROUTE_PARTICLE_TIMING_KEY] = self.valid['a'][
+            timingio.ROUTE_PARTICLE_TIMING_KEY
+        ][:, :1]
+        missing = {**self.valid, 'a': missing_entry}
+        unexpected_entry = self.valid['a'].copy()
+        unexpected_entry[timingio.ROUTE_PARTICLE_TIMING_NODE_ID_KEY] = (
+            np.asarray([10, 11, 99], dtype=np.int64)
+        )
+        unexpected_entry[timingio.ROUTE_PARTICLE_TIMING_KEY] = np.column_stack([
+            self.valid['a'][timingio.ROUTE_PARTICLE_TIMING_KEY],
+            np.asarray([0.1, 0.2]),
+        ])
+        unexpected = {**self.valid, 'a': unexpected_entry}
         for value, message in (
             (missing, 'missing: 11'),
             (unexpected, 'unexpected: 99'),
@@ -578,34 +660,30 @@ class TimingDictionaryValidationTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, message):
                     self.validate(value)
 
-    def test_rejects_invalid_array_types_shapes_sizes_and_dtypes(self):
+    def test_rejects_invalid_timing_array_types_shapes_sizes_and_dtypes(self):
         invalid_arrays = (
-            ([0.5, 0.6], 'numpy array'),
-            (np.array([[0.5, 0.6]]), 'one-dimensional'),
-            (np.array([], dtype=float), 'must not be empty'),
-            (np.array(['a', 'b']), 'must be numeric'),
+            ([[0.2], [0.3]], 'numpy array'),
+            (np.array([0.2, 0.3]), '2-dimensional'),
+            (np.empty((0, 2), dtype=float), 'must not be empty'),
+            (np.array([['a'], ['b']]), 'must be numeric'),
         )
         for invalid_array, message in invalid_arrays:
             with self.subTest(message=message):
-                value = {
-                    **self.valid,
-                    'a': {'Timing': {
-                        **self.valid['a']['Timing'],
-                        10: invalid_array,
-                    }},
-                }
+                invalid_entry = self.valid['a'].copy()
+                invalid_entry[timingio.ROUTE_PARTICLE_TIMING_KEY] = (
+                    invalid_array
+                )
+                value = {**self.valid, 'a': invalid_entry}
                 with self.assertRaisesRegex(ValueError, message):
                     self.validate(value)
 
-    def test_rejects_different_array_lengths_within_route(self):
-        value = {
-            **self.valid,
-            'a': {'Timing': {
-                **self.valid['a']['Timing'],
-                10: np.array([0.2]),
-            }},
-        }
-        with self.assertRaisesRegex(ValueError, 'same length'):
+    def test_rejects_different_particle_row_counts_within_route(self):
+        invalid_entry = self.valid['a'].copy()
+        invalid_entry[timingio.ROUTE_PARTICLE_WGD_TIMING_KEY] = np.asarray(
+            [0.5]
+        )
+        value = {**self.valid, 'a': invalid_entry}
+        with self.assertRaisesRegex(ValueError, 'same row count'):
             self.validate(value)
 
 
@@ -621,15 +699,13 @@ class PosteriorSegmentGenerationTest(unittest.TestCase):
             make_gain_timing_row(route='b', node=20, node_phasing='Major'),
         ])
         self.timing_dict = {
-            'a': {'Timing': {
-                'WGD': np.array([0.5, 0.6]),
+            'a': make_route_particle_entry({
                 10: np.array([0.2, 0.3]),
                 11: np.array([0.2, 0.1]),
-            }},
-            'b': {'Timing': {
-                'WGD': np.array([0.7, 0.8]),
+            }, [0.5, 0.6], probability=0.25),
+            'b': make_route_particle_entry({
                 20: np.array([0.9, 0.4]),
-            }},
+            }, [0.7, 0.8], probability=0.75),
         }
 
     def test_probability_normalization(self):
@@ -646,6 +722,13 @@ class PosteriorSegmentGenerationTest(unittest.TestCase):
                 )
 
     def test_draws_route_once_and_uses_one_joint_timing_index(self):
+        archive_delta = 5e-14
+        self.timing_dict['a']['Probability'] = np.asarray([
+            0.25 + archive_delta
+        ])
+        self.timing_dict['b']['Probability'] = np.asarray([
+            0.75 - archive_delta
+        ])
         with mock.patch.object(
             posteriortablegen.np.random,
             'choice',
@@ -665,7 +748,10 @@ class PosteriorSegmentGenerationTest(unittest.TestCase):
                 )
             )
 
-        np.testing.assert_allclose(choice.call_args.kwargs['p'], [0.25, 0.75])
+        np.testing.assert_array_equal(
+            choice.call_args.kwargs['p'],
+            [0.25 + archive_delta, 0.75 - archive_delta],
+        )
         self.assertEqual(randint.call_count, 2)
         self.assertEqual(route_draws['Route'].tolist(), ['b', 'a'])
         self.assertEqual(route_draws['WGD_Timing'].tolist(), [0.8, 0.5])
@@ -683,6 +769,17 @@ class PosteriorSegmentGenerationTest(unittest.TestCase):
         )
         self.assertEqual(list(gain_draws.columns), GAIN_DRAW_COLUMNS)
         self.assertEqual(list(route_draws.columns), ROUTE_DRAW_COLUMNS)
+
+    def test_rejects_archive_probability_that_disagrees_with_route_table(self):
+        self.timing_dict['a']['Probability'] = np.asarray([0.3])
+        with self.assertRaisesRegex(ValueError, 'must match the route table'):
+            posteriortablegen.produce_timing_segment_tables(
+                self.routes,
+                self.gains,
+                self.timing_dict,
+                'segment',
+                n_samples=1,
+            )
 
     def test_invalid_probabilities_return_pair_of_none(self):
         self.routes['Probability'] = 0
@@ -761,10 +858,9 @@ class SamplePosteriorArchiveIntegrationTest(unittest.TestCase):
                 ),
             ]).to_csv(timing_path, sep='\t', index=False)
             write_timing_archive({
-                'gained-route': {'Timing': {
-                    'WGD': np.array([0.5]),
+                'gained-route': make_route_particle_entry({
                     10: np.array([0.25]),
-                }},
+                }, [0.5]),
             }, root / 'sample_timing_dicts', 'gained')
 
             with mock.patch.object(
@@ -825,16 +921,14 @@ class SamplePosteriorArchiveIntegrationTest(unittest.TestCase):
             gains.to_csv(timing_path, sep='\t', index=False)
             archive_dir = root / '001_timing_dicts'
             write_timing_archive({
-                'r2': {'Timing': {
-                    'WGD': np.array([0.6, 0.7]),
+                'r2': make_route_particle_entry({
                     20: np.array([0.3, 0.4]),
-                }},
+                }, [0.6, 0.7]),
             }, archive_dir, '0002')
             write_timing_archive({
-                'r1': {'Timing': {
-                    'WGD': np.array([0.8, 0.9]),
+                'r1': make_route_particle_entry({
                     10: np.array([0.1, 0.2]),
-                }},
+                }, [0.8, 0.9]),
             }, archive_dir, '0001')
 
             with mock.patch.object(
@@ -888,14 +982,12 @@ class SamplePosteriorArchiveIntegrationTest(unittest.TestCase):
                 make_gain_timing_row(route='b', node=2),
             ]).to_csv(timing_path, sep='\t', index=False)
             write_timing_archive({
-                'a': {'Timing': {
-                    'WGD': np.array([0.5]),
+                'a': make_route_particle_entry({
                     1: np.array([0.2]),
-                }},
-                'b': {'Timing': {
-                    'WGD': np.array([0.5]),
+                }, [0.5], probability=0.9, penalized_probability=0.2),
+                'b': make_route_particle_entry({
                     2: np.array([0.3]),
-                }},
+                }, [0.5], probability=0.1, penalized_probability=0.8),
             }, root / 'sample_timing_dicts', 'segment')
 
             with mock.patch.object(
@@ -955,10 +1047,9 @@ class SamplePosteriorArchiveIntegrationTest(unittest.TestCase):
                 timing_path, sep='\t', index=False
             )
             write_timing_archive({
-                'route-a': {'Timing': {
-                    'WGD': np.array([0.5]),
+                'route-a': make_route_particle_entry({
                     10: np.array([0.2]),
-                }},
+                }, [0.5]),
             }, root / 'sample_timing_dicts', 'segment')
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter('always')

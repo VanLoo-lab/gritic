@@ -34,14 +34,26 @@ class BalancedMirrorReuseTest(unittest.TestCase):
     def proposal_geometry(route, offset=0.0):
         n_proposals = 3
         n_nodes = len(route.route_tree.non_phased_node_order)
-        n_mult_columns = 2 * route.major_cn + route.minor_cn
-        mult_store = (
-            np.arange(n_proposals * n_mult_columns, dtype=float).reshape(
-                n_proposals,
-                n_mult_columns,
+        mult_blocks = []
+        column_offset = 0
+        for block_size in (
+            route.major_cn,
+            route.major_cn,
+            route.minor_cn,
+        ):
+            block = (
+                np.arange(
+                    n_proposals * block_size,
+                    dtype=float,
+                ).reshape(n_proposals, block_size)
+                + 1.0
+                + offset
+                + column_offset
             )
-            + offset
-        )
+            block /= np.sum(block, axis=1, keepdims=True)
+            mult_blocks.append(block)
+            column_offset += block_size
+        mult_store = np.concatenate(mult_blocks, axis=1)
         timing_store = (
             np.arange(n_nodes * n_proposals, dtype=float).reshape(
                 n_nodes,
@@ -53,7 +65,7 @@ class BalancedMirrorReuseTest(unittest.TestCase):
         return gritictimer.ProposalGeometry(
             mult_store=mult_store,
             timing_store=timing_store,
-            wgd_timing_store=np.array([0.2, 0.4, 0.6]) + offset,
+            wgd_timing_store=np.full(n_proposals, np.nan),
             density=np.array([0.91, 0.82]) + offset,
         )
 
@@ -77,7 +89,7 @@ class BalancedMirrorReuseTest(unittest.TestCase):
             n_nodes * n_weighted,
             dtype=float,
         ).reshape(n_nodes, n_weighted)
-        route.wgd_timing_store = np.linspace(0.2, 0.8, n_weighted)
+        route.wgd_timing_store = np.full(n_weighted, np.nan)
         route.mult_store = np.arange(
             n_weighted * n_mult_columns,
             dtype=float,
@@ -402,7 +414,10 @@ class BalancedMirrorReuseTest(unittest.TestCase):
         self.assertEqual(target.log_evidence, source.log_evidence)
         self.assertFalse(hasattr(source, 'll_store'))
 
-        timing_dict = classifier.get_timing_dict()
+        timing_dict = classifier.get_timing_dict({
+            route.short_id: classifier.route_probabilities[route.route_id]
+            for route in classifier.routes.values()
+        })
         with tempfile.TemporaryDirectory() as directory:
             archive_path, manifest_path = timingio.write_timing_archive(
                 timing_dict,
@@ -416,8 +431,14 @@ class BalancedMirrorReuseTest(unittest.TestCase):
 
         source_archive = archived[source.short_id]
         target_archive = archived[target.short_id]
-        self.assertEqual(set(source_archive), {'Timing', 'Mult'})
-        self.assertEqual(set(target_archive), {'Timing', 'Mult'})
+        self.assertEqual(
+            set(source_archive),
+            timingio.ROUTE_PARTICLE_ARCHIVE_FIELDS,
+        )
+        self.assertEqual(
+            set(target_archive),
+            timingio.ROUTE_PARTICLE_ARCHIVE_FIELDS,
+        )
         np.testing.assert_array_equal(
             target_archive['Mult'],
             self.expected_mirror_mult(
@@ -426,17 +447,25 @@ class BalancedMirrorReuseTest(unittest.TestCase):
             ),
         )
         np.testing.assert_array_equal(
-            target_archive['Timing']['WGD'],
-            source_archive['Timing']['WGD'],
+            target_archive['WGD_Timing'],
+            source_archive['WGD_Timing'],
         )
         node_map = gritictimer._get_mirror_node_map(
             source.route_tree.main_tree,
             target.route_tree.main_tree,
         )
+        source_columns = dict(zip(
+            source_archive['Timing_Node_ID'].tolist(),
+            source_archive['Timing'].T,
+        ))
+        target_columns = dict(zip(
+            target_archive['Timing_Node_ID'].tolist(),
+            target_archive['Timing'].T,
+        ))
         for source_node in source.route_tree.timeable_nodes:
             np.testing.assert_array_equal(
-                target_archive['Timing'][node_map[source_node]],
-                source_archive['Timing'][source_node],
+                target_columns[node_map[source_node]],
+                source_columns[source_node],
             )
 
     def test_repeated_fit_replaces_scalar_evidence_and_stale_probabilities(self):

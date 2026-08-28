@@ -87,6 +87,25 @@ class WgdTimingModelTest(unittest.TestCase):
         np.testing.assert_allclose(likelihood, [expected])
         self.assertTrue(np.isfinite(likelihood).all())
 
+    def test_balanced_compiled_likelihood_uses_c_contiguous_arrays(self):
+        segment = self.make_segment(
+            2,
+            [np.nan, 'major', 'minor'] * 4,
+        )
+        _, wgd_store = gritictimer._get_wgd_timing_model(segment)
+
+        self.assertTrue(wgd_store.non_phased_array.flags.c_contiguous)
+        self.assertTrue(wgd_store.combined_array.flags.c_contiguous)
+        self.assertTrue(
+            wgd_store.reads_correction_non_phased_array.flags.c_contiguous
+        )
+
+        full_states = np.tile([0.6, 0.4, 0.6, 0.4], (32, 1))
+        likelihood = wgd_store.evaluate_likelihood_array(full_states)
+
+        self.assertEqual(likelihood.shape, (32,))
+        self.assertTrue(np.isfinite(likelihood).all())
+
     def test_non_balanced_segment_reuses_original_model(self):
         segment = self.make_segment(1, [np.nan, 'major', 'minor'])
         source_store = segment.multiplicity_probabilities

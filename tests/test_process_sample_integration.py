@@ -309,12 +309,13 @@ class ProcessSampleIntegrationTest(unittest.TestCase):
             expected_shape = (
                 gritictimer.ROUTE_CONDITIONAL_SAMPLE_COUNT,
             )
-            self.assertEqual(route_timing['Timing'][node].shape, expected_shape)
+            self.assertEqual(route_timing['Timing'].shape, (expected_shape[0], 1))
+            np.testing.assert_array_equal(route_timing['Timing_Node_ID'], [node])
             self.assertEqual(
-                route_timing['Timing']['WGD'].shape,
+                route_timing['WGD_Timing'].shape,
                 expected_shape,
             )
-            self.assertTrue(np.isnan(route_timing['Timing']['WGD']).all())
+            self.assertTrue(np.isnan(route_timing['WGD_Timing']).all())
             self.assertEqual(
                 route_timing['Mult'].shape[0],
                 gritictimer.ROUTE_CONDITIONAL_SAMPLE_COUNT,
@@ -396,17 +397,12 @@ class ProcessSampleIntegrationTest(unittest.TestCase):
                 gritictimer.ROUTE_CONDITIONAL_SAMPLE_COUNT,
             )
             self.assertEqual(
-                route_timing['Timing']['WGD'].shape,
+                route_timing['WGD_Timing'].shape,
                 expected_shape,
             )
-            self.assertTrue(np.isnan(route_timing['Timing']['WGD']).all())
-            node_keys = [
-                key
-                for key in route_timing['Timing']
-                if isinstance(key, int)
-            ]
-            self.assertEqual(len(node_keys), 1)
-            pooled_wgd_node_timing = route_timing['Timing'][node_keys[0]]
+            self.assertTrue(np.isnan(route_timing['WGD_Timing']).all())
+            self.assertEqual(route_timing['Timing_Node_ID'].shape, (1,))
+            pooled_wgd_node_timing = route_timing['Timing'][:, 0]
             self.assertEqual(pooled_wgd_node_timing.shape, expected_shape)
             self.assertTrue(np.isfinite(pooled_wgd_node_timing).all())
             self.assertTrue(
@@ -415,6 +411,13 @@ class ProcessSampleIntegrationTest(unittest.TestCase):
                     & (pooled_wgd_node_timing <= 1)
                 ).all()
             )
+            np.testing.assert_array_equal(route_timing['Archive_Kind'], [1])
+            np.testing.assert_array_equal(route_timing['Target_Major_CN'], [2])
+            np.testing.assert_array_equal(route_timing['Target_Minor_CN'], [1])
+            np.testing.assert_array_equal(route_timing['Target_WGD_Status'], [1])
+            np.testing.assert_array_equal(route_timing['Model_Major_CN'], [2])
+            np.testing.assert_array_equal(route_timing['Model_Minor_CN'], [1])
+            np.testing.assert_array_equal(route_timing['Model_WGD_Status'], [0])
 
 
 if __name__ == '__main__':
