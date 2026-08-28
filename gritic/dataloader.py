@@ -1227,8 +1227,8 @@ def assign_cn_to_snv(
     snv_table = snv_table.copy()
 
     if use_supplied_segment_ids:
-        cn_table.loc[:, 'Segment_ID'] = cn_table['Segment_ID'].astype(str)
-        snv_table.loc[:, 'Segment_ID'] = snv_table['Segment_ID'].astype(str)
+        cn_table['Segment_ID'] = cn_table['Segment_ID'].astype(str)
+        snv_table['Segment_ID'] = snv_table['Segment_ID'].astype(str)
     else:
         cn_table = generate_segment_ids(cn_table)
         snv_table.loc[:, 'Segment_ID'] = "None"

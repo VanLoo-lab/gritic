@@ -1,6 +1,7 @@
 import networkx as nx
 import itertools
 import hashlib
+import random
 import warnings
 
 from gritic.tableschemas import NODE_PHASING_LABELS
