@@ -8,47 +8,12 @@ from gritic import gritictimer
 
 
 class TimingOutputTest(unittest.TestCase):
-    def test_top_level_omits_ll_while_raw_samples_remain_aligned(self):
+    def test_serializes_only_aligned_conditional_particles(self):
         node = 7
         route = gritictimer.Route.__new__(gritictimer.Route)
         route.route_tree = SimpleNamespace(
             timeable_nodes=[node],
             non_phased_node_order=[node],
-        )
-
-        source_mult = np.array([
-            [1.0, 11.0],
-            [2.0, 12.0],
-            [3.0, 13.0],
-        ])
-        source_timing = np.array([[0.1, 0.2, 0.3]])
-        source_wgd = np.array([0.4, 0.5, 0.6])
-        source_ll = -10.0 * source_mult[:, 0]
-        raw_indexes = np.array([2, 0, 1])
-        with mock.patch.object(
-            gritictimer.np.random,
-            'randint',
-            return_value=raw_indexes,
-        ):
-            route.raw_samples = route.get_raw_samples_store(
-                source_mult,
-                source_timing,
-                source_wgd,
-                source_ll,
-                n_samples=raw_indexes.size,
-            )
-
-        np.testing.assert_array_equal(
-            route.raw_samples['LL'],
-            -10.0 * route.raw_samples['Mult'][:, 0],
-        )
-        np.testing.assert_array_equal(
-            route.raw_samples['Timing'][node],
-            source_timing[0, raw_indexes],
-        )
-        np.testing.assert_array_equal(
-            route.raw_samples['WGD_Timing'],
-            source_wgd[raw_indexes],
         )
 
         route.short_id = 'route-one'
@@ -72,17 +37,15 @@ class TimingOutputTest(unittest.TestCase):
         )
         with mock.patch.object(
             gritictimer.np.random,
-            'randint',
+            'choice',
             side_effect=AssertionError(
                 'Timing serialization must not resample fitted particles'
             ),
         ):
             output = classifier.get_timing_dict()[route.short_id]
 
-        self.assertNotIn('LL', output)
+        self.assertEqual(set(output), {'Timing', 'Mult'})
         self.assertFalse(hasattr(route, 'll_store'))
-        self.assertIs(output['Raw_Samples'], route.raw_samples)
-        self.assertIn('LL', output['Raw_Samples'])
         np.testing.assert_array_equal(
             output['Timing']['WGD'],
             route.wgd_timing_store,
@@ -94,6 +57,14 @@ class TimingOutputTest(unittest.TestCase):
         np.testing.assert_array_equal(
             output['Mult'],
             route.mult_store,
+        )
+        self.assertEqual(
+            output['Mult'].shape[0],
+            output['Timing']['WGD'].shape[0],
+        )
+        self.assertEqual(
+            output['Mult'].shape[0],
+            output['Timing'][node].shape[0],
         )
         self.assertFalse(np.shares_memory(
             output['Timing']['WGD'],

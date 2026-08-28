@@ -38,7 +38,6 @@ class CloneFractionAndRouteBasicsTest(unittest.TestCase):
             'wgd_timing_store',
             'n_events_store',
             'mult_store',
-            'raw_samples',
             'unphased_mirror_source',
             'density',
             'density_high',
@@ -278,7 +277,6 @@ class RouteClassifierOutputTest(unittest.TestCase):
         ])
         route.wgd_timing_store = np.full(3, np.nan)
         route.mult_store = np.ones((3, 5))
-        route.raw_samples = {}
         route.n_events_store = {
             'N_Events': [1, 2],
             'Pre_WGD_Losses': [np.nan, np.nan],
@@ -405,13 +403,12 @@ class TimerHelperTest(unittest.TestCase):
             {'route': tree},
             n_subclones=2,
         )
-        expected_raw_values = gritictimer.RAW_ROUTE_SAMPLE_COUNT * (2 + 9 + 2)
         expected_conditional_values = (
             gritictimer.ROUTE_CONDITIONAL_SAMPLE_COUNT * (5 + 9 + 1)
         )
         self.assertEqual(
             result,
-            8 * (expected_raw_values + expected_conditional_values + 900),
+            8 * (expected_conditional_values + 900),
         )
         self.assertEqual(gritictimer.estimate_classifier_output_bytes({}, 5), 0)
 

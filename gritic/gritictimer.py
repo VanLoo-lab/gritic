@@ -53,7 +53,6 @@ logger = logging.getLogger(__name__)
 
 MIN_WGD_MUTATIONS = 10
 ROUTE_CONDITIONAL_SAMPLE_COUNT = 1000
-RAW_ROUTE_SAMPLE_COUNT = 10_000
 COMBINED_WGD_SAMPLE_COUNT = 500
 _INITIAL_DENSITY_EVALUATION_BATCH_COUNT = 101
 _MAX_DENSITY_RETRY_DELAY_SECONDS = 30.0
@@ -250,7 +249,6 @@ class Route:
         self.wgd_timing_store = None
         self.n_events_store = None
         self.mult_store = None
-        self.raw_samples = None
         self.unphased_mirror_source = None
         self.density = None
         self.density_high = None
@@ -602,37 +600,6 @@ class Route:
             density=np.asarray(geometry.density).copy(),
         )
 
-    def get_raw_samples_store(
-        self,
-        mult_store,
-        timing_store,
-        wgd_timing_store,
-        ll_store,
-        n_samples=RAW_ROUTE_SAMPLE_COUNT,
-    ):
-        random_indexes = np.random.randint(
-            0,
-            mult_store.shape[0],
-            size=n_samples,
-        )
-        raw_samples_store = {
-            'Timing': {},
-            'Mult': mult_store[random_indexes, :].copy(),
-            'WGD_Timing': wgd_timing_store[random_indexes].copy(),
-            'LL': ll_store[random_indexes].copy(),
-        }
-        node_positions = {
-            node: position
-            for position, node in enumerate(
-                self.route_tree.non_phased_node_order
-            )
-        }
-        for node in self.route_tree.timeable_nodes:
-            raw_samples_store['Timing'][node] = timing_store[
-                node_positions[node], random_indexes
-            ].copy()
-        return raw_samples_store
-
     @staticmethod
     def _contains_phased_mutations(mult_probabilities):
         return bool(
@@ -649,7 +616,6 @@ class Route:
             'node_timing',
             'wgd_timing_store',
             'mult_store',
-            'raw_samples',
             'n_events_store',
             'density',
             'density_high',
@@ -682,28 +648,6 @@ class Route:
         self.density = mirror_route.density
         self.density_high = mirror_route.density_high
         self.unphased_mirror_source = mirror_route
-
-        node_map = _get_mirror_node_map(
-            mirror_route.route_tree.main_tree,
-            self.route_tree.main_tree,
-        )
-        source_raw_samples = mirror_route.raw_samples
-        self.raw_samples = {
-            'Timing': {
-                node_map[source_node]: np.asarray(node_timing).copy()
-                for source_node, node_timing in source_raw_samples[
-                    'Timing'
-                ].items()
-            },
-            'Mult': self._transform_mirror_mult_store(
-                source_raw_samples['Mult'],
-                n_subclones,
-            ),
-            'WGD_Timing': np.asarray(
-                source_raw_samples['WGD_Timing']
-            ).copy(),
-            'LL': source_raw_samples['LL'],
-        }
 
     def run_sampling(
         self,
@@ -775,12 +719,6 @@ class Route:
         if ll_store.size == 0:
             raise ValueError('A route fit must contain at least one proposal')
         self.log_evidence = logsumexp(ll_store) - np.log(ll_store.size)
-        self.raw_samples = self.get_raw_samples_store(
-            mult_store,
-            timing_store,
-            wgd_timing_store,
-            ll_store,
-        )
 
         weights = np.exp(ll_store - np.max(ll_store))
         node_timing, wgd_timing_store, mult_store = (
@@ -1049,7 +987,6 @@ class RouteClassifier:
                     route.get_node_timing(node).copy()
                 )
             route_samples['Mult'] = route.mult_store.copy()
-            route_samples['Raw_Samples'] = route.raw_samples
             timing_dict[route.short_id] = route_samples
         return timing_dict
 
@@ -1236,11 +1173,6 @@ def estimate_classifier_output_bytes(route_trees, n_subclones):
             + route_tree.minor_cn
             + n_subclones
         )
-        raw_values = RAW_ROUTE_SAMPLE_COUNT * (
-            len(route_tree.timeable_nodes)
-            + mult_columns
-            + 2  # WGD timing and raw likelihood
-        )
         conditional_values = ROUTE_CONDITIONAL_SAMPLE_COUNT * (
             len(route_tree.non_phased_node_order)
             + mult_columns
@@ -1248,7 +1180,7 @@ def estimate_classifier_output_bytes(route_trees, n_subclones):
         )
         event_values = 3 * 300
         total_bytes += 8 * (
-            raw_values + conditional_values + event_values
+            conditional_values + event_values
         )
     return total_bytes
 

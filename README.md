@@ -211,7 +211,7 @@ In WGD tumours, the number of gains that arise independently of the WGD will var
 
 Two summary tables are produced for every run that produces timing output, including non-WGD runs. The filename ending in ```_penalty_False.tsv``` summarizes draws using ```Probability``` from the route table. The filename ending in ```_penalty_True.tsv``` summarizes a second set of draws using ```Penalized_Probability```. No command-line option is required to produce either result.
 
-The gain-draw and route-ledger data frames used to calculate these summaries are internal. GRITIC no longer writes the legacy ```_posterior_timing_table_penalty_<True|False>.tsv``` or ```_posterior_route_draw_table_penalty_<True|False>.tsv``` files. Raw route-conditional timing samples remain available in the timing stores.
+The gain-draw and route-ledger data frames used to calculate these summaries are internal. GRITIC no longer writes the legacy ```_posterior_timing_table_penalty_<True|False>.tsv``` or ```_posterior_route_draw_table_penalty_<True|False>.tsv``` files. The original aligned route-conditional ```Timing``` and ```Mult``` particles remain available in the timing stores.
 
 ### _route_table.tsv
 This table contains exactly one row for each possible route of each timed segment. Its first three columns and key are ```(Sample_ID, Segment_ID, Route)```. It stores both the ordinary ```Probability``` and post-hoc ```Penalized_Probability```, average event and loss counts, timing-geometry proposal density and runtime, and the segment and WGD metadata. The density diagnostic covers the hit-and-run timing coordinates; independently sampled Dirichlet clone shares are not chain dimensions. Routes with no independently timeable gains are retained here. Its ```WGD_Timing``` interval fields exactly repeat the configured sample-level WGD summary written to the calling-info JSON.
@@ -288,10 +288,10 @@ timing_dict = load_timing_archive(
 
 ```
 
-The reconstructed dictionary keys correspond to the routes for the sample. Within each route there are ```Timing```, ```Mult```, and ```Raw_Samples``` keys. The ```Timing``` entry gives raw stored timing distributions for independent gains indexed by the corresponding structural node in the tree; it does not store a chronological ```Gain_Index```. A WGD timing entry is also given if applicable. No credible interval is applied to timing stores: consumers choose their own interval width and method from the stored samples.
+The reconstructed dictionary keys correspond to the routes for the sample. Each route contains exactly ```Timing``` and ```Mult``` entries. The ```Timing``` entry gives the stored timing distributions for independent gains indexed by the corresponding structural node in the tree; it does not store a chronological ```Gain_Index```. A WGD timing entry is also given if applicable. No credible interval is applied to timing stores: consumers choose their own interval width and method from the stored samples.
 
 Each route's ```Timing``` and ```Mult``` entries contain the original 1,000 likelihood-resampled route-conditional particles produced during fitting. Serialization does not resample or duplicate these particles. Rows remain aligned across every timing array and ```Mult```, so consumers must use the same row index for all values in one joint posterior draw.
 
-The ```Mult``` entry gives the multiplicity proportions corresponding to each timing sample. It is a N_SamplesxN_Multiplicities numpy array. Across the columns, the multiplicities are orderred from 1 to the major copy number of the segment, followed by the subclonal multiplicity probabilities.
+The ```Mult``` entry gives the multiplicity proportions corresponding to each timing sample. It is a N_SamplesxN_Multiplicities numpy array. Across the columns, the multiplicities are ordered from 1 to the major copy number of the segment, followed by the subclonal multiplicity probabilities.
 
-```Raw_Samples``` contains the aligned proposal-sampling ```Timing```, ```Mult```, ```WGD_Timing```, and ```LL``` arrays used before likelihood resampling. The likelihood-resampled route output does not contain an ```LL``` array.
+Version 2 removes the former ```Raw_Samples``` proposal snapshot as an intentional breaking change to the timing-store payload. Existing timing stores that contain ```Raw_Samples``` must not be mixed with current route or gain timing tables; regenerate the complete sample output together.

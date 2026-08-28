@@ -70,7 +70,6 @@ class BalancedMirrorReuseTest(unittest.TestCase):
 
     def populate_fitted_route(self, route, n_subclones=1):
         n_weighted = 4
-        n_raw = 5
         n_nodes = len(route.route_tree.non_phased_node_order)
         n_mult_columns = 3 * route.major_cn + n_subclones
         route.log_evidence = -3.5
@@ -90,20 +89,6 @@ class BalancedMirrorReuseTest(unittest.TestCase):
         }
         route.density = 0.93
         route.density_high = 0.81
-        route.raw_samples = {
-            'Timing': {
-                node: np.arange(n_raw, dtype=float) + position * 10
-                for position, node in enumerate(
-                    route.route_tree.timeable_nodes
-                )
-            },
-            'Mult': np.arange(
-                n_raw * n_mult_columns,
-                dtype=float,
-            ).reshape(n_raw, n_mult_columns),
-            'WGD_Timing': np.linspace(0.1, 0.9, n_raw),
-            'LL': np.linspace(-9.0, -1.0, n_raw),
-        }
 
     def test_mirror_geometry_is_transformed_in_memory(self):
         source, target = self.get_mirror_pair()
@@ -304,9 +289,17 @@ class BalancedMirrorReuseTest(unittest.TestCase):
         expected = np.log(np.mean(np.exp(likelihoods)))
         self.assertAlmostEqual(route.log_evidence, expected)
         self.assertFalse(hasattr(route, 'll_store'))
-        self.assertEqual(route.raw_samples['LL'].shape, (10_000,))
-        self.assertTrue(
-            set(np.unique(route.raw_samples['LL'])).issubset(likelihoods)
+        np.testing.assert_array_equal(
+            route.node_timing,
+            geometry.timing_store,
+        )
+        np.testing.assert_array_equal(
+            route.wgd_timing_store,
+            geometry.wgd_timing_store,
+        )
+        np.testing.assert_array_equal(
+            route.mult_store,
+            geometry.mult_store,
         )
 
     def test_unphased_fitted_mirror_reuses_scalar_and_swaps_outputs(self):
@@ -335,17 +328,9 @@ class BalancedMirrorReuseTest(unittest.TestCase):
 
         self.assertEqual(target.log_evidence, source.log_evidence)
         self.assertFalse(hasattr(target, 'll_store'))
-        self.assertIs(target.raw_samples['LL'], source.raw_samples['LL'])
         np.testing.assert_array_equal(
             target.mult_store,
             self.expected_mirror_mult(source.mult_store, source.major_cn),
-        )
-        np.testing.assert_array_equal(
-            target.raw_samples['Mult'],
-            self.expected_mirror_mult(
-                source.raw_samples['Mult'],
-                source.major_cn,
-            ),
         )
         np.testing.assert_array_equal(
             target.wgd_timing_store,
@@ -431,6 +416,8 @@ class BalancedMirrorReuseTest(unittest.TestCase):
 
         source_archive = archived[source.short_id]
         target_archive = archived[target.short_id]
+        self.assertEqual(set(source_archive), {'Timing', 'Mult'})
+        self.assertEqual(set(target_archive), {'Timing', 'Mult'})
         np.testing.assert_array_equal(
             target_archive['Mult'],
             self.expected_mirror_mult(
@@ -439,16 +426,18 @@ class BalancedMirrorReuseTest(unittest.TestCase):
             ),
         )
         np.testing.assert_array_equal(
-            target_archive['Raw_Samples']['Mult'],
-            self.expected_mirror_mult(
-                source_archive['Raw_Samples']['Mult'],
-                source.major_cn,
-            ),
+            target_archive['Timing']['WGD'],
+            source_archive['Timing']['WGD'],
         )
-        np.testing.assert_array_equal(
-            target_archive['Raw_Samples']['LL'],
-            source_archive['Raw_Samples']['LL'],
+        node_map = gritictimer._get_mirror_node_map(
+            source.route_tree.main_tree,
+            target.route_tree.main_tree,
         )
+        for source_node in source.route_tree.timeable_nodes:
+            np.testing.assert_array_equal(
+                target_archive['Timing'][node_map[source_node]],
+                source_archive['Timing'][source_node],
+            )
 
     def test_repeated_fit_replaces_scalar_evidence_and_stale_probabilities(self):
         classifier, source, target = self.get_classifier_and_mirror_pair()

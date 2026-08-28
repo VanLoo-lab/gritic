@@ -133,7 +133,6 @@ class MirrorRouteGuardTest(unittest.TestCase):
             'node_timing': np.empty((1, 1)),
             'wgd_timing_store': np.empty(1),
             'mult_store': np.empty((1, 12)),
-            'raw_samples': {},
             'n_events_store': {},
             'density': 1.0,
             'density_high': 1.0,

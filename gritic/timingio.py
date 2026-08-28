@@ -13,7 +13,8 @@ import numpy as np
 
 
 TIMING_ARCHIVE_FORMAT = 'gritic_timing_archive'
-TIMING_ARCHIVE_VERSION = 1
+# Version 2 stores only fitted, aligned conditional route particles.
+TIMING_ARCHIVE_VERSION = 2
 TIMING_ARCHIVE_SUFFIX = '_timing_dict.npz'
 TIMING_MANIFEST_SUFFIX = '_timing_dict.manifest.json'
 
