@@ -1499,15 +1499,22 @@ class RouteClassifier:
                 + model_minor_cn
                 + route.n_subclones
             )
+            if mult_store.shape[1] != expected_mult_columns:
+                raise ValueError(
+                    'Self-describing route particles require Mult values '
+                    'with the modelled state-column count'
+                )
+            timing_tolerance = timingio.ROUTE_PARTICLE_TIMING_TOLERANCE
             if (
-                mult_store.shape[1] != expected_mult_columns
-                or not np.all(np.isfinite(timing))
+                not np.all(np.isfinite(timing))
+                or np.any(timing < -timing_tolerance)
+                or np.any(timing > 1.0 + timing_tolerance)
             ):
                 raise ValueError(
                     'Self-describing route particles require finite Timing '
-                    'and finite nonnegative Mult values with the modelled '
-                    'state-column count'
+                    'values within numerical tolerance of zero and one'
                 )
+            timing = np.clip(timing, 0.0, 1.0)
             subclone_start = 2 * model_major_cn + model_minor_cn
             subclone_share = np.sum(
                 mult_store[:, subclone_start:],
@@ -1538,10 +1545,16 @@ class RouteClassifier:
                     'columns must sum to one'
                 )
             if model_wgd_status:
-                if not np.all(np.isfinite(wgd_timing)):
+                if (
+                    not np.all(np.isfinite(wgd_timing))
+                    or np.any(wgd_timing < -timing_tolerance)
+                    or np.any(wgd_timing > 1.0 + timing_tolerance)
+                ):
                     raise ValueError(
-                        'WGD route particles require finite WGD_Timing values'
+                        'WGD route particles require finite WGD_Timing '
+                        'values within numerical tolerance of zero and one'
                     )
+                wgd_timing = np.clip(wgd_timing, 0.0, 1.0)
             elif not np.all(np.isnan(wgd_timing)):
                 raise ValueError(
                     'Non-WGD route particles require NaN WGD_Timing values'

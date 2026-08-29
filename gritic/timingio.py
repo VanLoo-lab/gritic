@@ -20,6 +20,11 @@ TIMING_ARCHIVE_VERSION = 4
 TIMING_ARCHIVE_SUFFIX = '_timing_dict.npz'
 TIMING_MANIFEST_SUFFIX = '_timing_dict.manifest.json'
 
+# Finite route-particle timings within this absolute distance of the unit
+# interval are numerical boundary noise.  GRITIC serialization and MUTIC
+# ingestion canonicalize accepted values to [0, 1].
+ROUTE_PARTICLE_TIMING_TOLERANCE = 1e-12
+
 ROUTE_PARTICLE_PROBABILITY_KEY = 'Probability'
 ROUTE_PARTICLE_PENALIZED_PROBABILITY_KEY = 'Penalized_Probability'
 ROUTE_PARTICLE_TIMING_KEY = 'Timing'

@@ -383,7 +383,13 @@ class BalancedMirrorReuseTest(unittest.TestCase):
                 return np.array([-3.0, -1.0, -2.0])
 
         def sample_geometry(route, _wgd_distribution):
-            return self.proposal_geometry(route)
+            geometry = self.proposal_geometry(route)
+            geometry.timing_store[:] = np.linspace(
+                0.1,
+                0.9,
+                geometry.timing_store.size,
+            ).reshape(geometry.timing_store.shape)
+            return geometry
 
         with mock.patch.object(
             gritictimer.Route,

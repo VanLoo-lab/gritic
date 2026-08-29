@@ -13,6 +13,7 @@ from gritic import (
     hitandrun,
     posteriortablegen,
     sampletools,
+    timingio,
 )
 
 
@@ -245,10 +246,25 @@ class HighCopyNumberFitTest(unittest.TestCase):
             self.assertTrue(np.isfinite(route.node_timing).all())
             self.assertTrue(
                 (
-                    (route.node_timing >= -1e-12)
-                    & (route.node_timing <= 1 + 1e-12)
+                    (
+                        route.node_timing
+                        >= -timingio.ROUTE_PARTICLE_TIMING_TOLERANCE
+                    )
+                    & (
+                        route.node_timing
+                        <= 1 + timingio.ROUTE_PARTICLE_TIMING_TOLERANCE
+                    )
                 ).all()
             )
+
+        timing_dict = classifier.get_timing_dict({
+            route.short_id: classifier.route_probabilities[route.route_id]
+            for route in classifier.routes.values()
+        })
+        for route_entry in timing_dict.values():
+            timing = route_entry[timingio.ROUTE_PARTICLE_TIMING_KEY]
+            self.assertTrue((timing >= 0.0).all())
+            self.assertTrue((timing <= 1.0).all())
 
 
 class EmptyProposalValidationTest(unittest.TestCase):

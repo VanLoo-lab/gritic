@@ -8,6 +8,36 @@ from gritic.tableschemas import ROUTE_PARTICLES_REPRESENTATION
 
 
 class TimingOutputTest(unittest.TestCase):
+    @staticmethod
+    def fitted_classifier(*, wgd_status, n_particles=2):
+        classifier = gritictimer.RouteClassifier(
+            2,
+            0,
+            wgd_status,
+            'WGD' if wgd_status else 'No_WGD',
+        )
+        route = next(iter(classifier.routes.values()))
+        route.node_timing = np.full(
+            (len(route.route_tree.non_phased_node_order), n_particles),
+            0.4,
+            dtype=np.float64,
+        )
+        route.wgd_timing_store = np.full(
+            n_particles,
+            0.5 if wgd_status else np.nan,
+            dtype=np.float64,
+        )
+        route.mult_store = np.tile(
+            np.array([0.5, 0.5, 0.5, 0.5], dtype=np.float64),
+            (n_particles, 1),
+        )
+        route.n_subclones = 0
+        classifier.route_probabilities = {route.route_id: 1.0}
+        classifier._get_output_routes = mock.Mock(
+            return_value=[(route, 1.0)]
+        )
+        return classifier, route
+
     def test_serializes_only_aligned_conditional_particles(self):
         classifier = gritictimer.RouteClassifier(2, 0, False, 'No_WGD')
         route = next(iter(classifier.routes.values()))
@@ -171,6 +201,67 @@ class TimingOutputTest(unittest.TestCase):
         route.mult_store[0, 0] = -2e-12
         with self.assertRaisesRegex(ValueError, 'material negative mass'):
             classifier.get_timing_dict({route.short_id: 1.0})
+
+    def test_timing_serialization_uses_shared_boundary_tolerance(self):
+        classifier, route = self.fitted_classifier(wgd_status=False)
+        tolerance = timingio.ROUTE_PARTICLE_TIMING_TOLERANCE
+        node = route.route_tree.timeable_nodes[0]
+        node_index = route.route_tree.non_phased_node_order.index(node)
+        route.node_timing[node_index] = np.array([
+            -0.5 * tolerance,
+            np.nextafter(1.0, np.inf),
+        ])
+        original_timing = route.node_timing.copy()
+
+        output = classifier.get_timing_dict(
+            {route.short_id: 1.0}
+        )[route.short_id]
+
+        np.testing.assert_array_equal(output['Timing'][:, 0], [0.0, 1.0])
+        np.testing.assert_array_equal(route.node_timing, original_timing)
+
+        for invalid_value in (
+            -2.0 * tolerance,
+            1.0 + 2.0 * tolerance,
+            np.nan,
+            np.inf,
+            -np.inf,
+        ):
+            with self.subTest(invalid_value=invalid_value):
+                route.node_timing[node_index] = [invalid_value, 0.4]
+                with self.assertRaisesRegex(ValueError, 'finite Timing'):
+                    classifier.get_timing_dict({route.short_id: 1.0})
+
+    def test_wgd_timing_serialization_uses_shared_boundary_tolerance(self):
+        classifier, route = self.fitted_classifier(wgd_status=True)
+        tolerance = timingio.ROUTE_PARTICLE_TIMING_TOLERANCE
+        route.wgd_timing_store = np.array([
+            -0.5 * tolerance,
+            1.0 + 0.5 * tolerance,
+        ])
+        original_wgd_timing = route.wgd_timing_store.copy()
+
+        output = classifier.get_timing_dict(
+            {route.short_id: 1.0}
+        )[route.short_id]
+
+        np.testing.assert_array_equal(output['WGD_Timing'], [0.0, 1.0])
+        np.testing.assert_array_equal(
+            route.wgd_timing_store,
+            original_wgd_timing,
+        )
+
+        for invalid_value in (
+            -2.0 * tolerance,
+            1.0 + 2.0 * tolerance,
+            np.nan,
+            np.inf,
+            -np.inf,
+        ):
+            with self.subTest(invalid_value=invalid_value):
+                route.wgd_timing_store = np.array([invalid_value, 0.5])
+                with self.assertRaisesRegex(ValueError, 'finite WGD_Timing'):
+                    classifier.get_timing_dict({route.short_id: 1.0})
 
 
 if __name__ == '__main__':
