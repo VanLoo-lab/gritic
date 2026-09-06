@@ -38,21 +38,44 @@ class SegmentMergingTest(unittest.TestCase):
             **kwargs,
         )
 
-    def test_default_merges_only_exactly_adjacent_equal_cn_segments(self):
+    def test_default_merges_consecutive_equal_cn_segments_across_gaps(self):
         sample = self.make_sample()
 
         self.assertEqual(
             sample.copy_number_table['Segment_ID'].tolist(),
-            ['1-0-200', '1-250-350'],
+            ['1-0-350'],
         )
         self.assertEqual(
             sample.supplied_segment_id_map,
             {
-                'left': '1-0-200',
-                'right': '1-0-200',
-                'gapped': '1-250-350',
+                'left': '1-0-350',
+                'right': '1-0-350',
+                'gapped': '1-0-350',
             },
         )
+
+    def test_max_merge_gap_is_inclusive_and_zero_requires_touching(self):
+        cases = (
+            (0, ['1-0-200', '1-250-350']),
+            (49, ['1-0-200', '1-250-350']),
+            (50, ['1-0-350']),
+        )
+        for max_merge_gap, expected_segment_ids in cases:
+            with self.subTest(max_merge_gap=max_merge_gap):
+                sample = self.make_sample(max_merge_gap=max_merge_gap)
+                self.assertEqual(
+                    sample.copy_number_table['Segment_ID'].tolist(),
+                    expected_segment_ids,
+                )
+
+    def test_max_merge_gap_rejects_invalid_programmatic_values(self):
+        for max_merge_gap in (-1, 1.0, True, '50'):
+            with self.subTest(max_merge_gap=max_merge_gap):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    'max_merge_gap must be None or a non-negative integer',
+                ):
+                    self.make_sample(max_merge_gap=max_merge_gap)
 
     def test_programmatic_opt_out_preserves_input_segments(self):
         sample = self.make_sample(merge_cn=False)

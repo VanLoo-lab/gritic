@@ -112,6 +112,21 @@ def validate_autosome_count(autosome_count):
     return int(autosome_count)
 
 
+def validate_max_merge_gap(max_merge_gap):
+    """Return an optional non-negative gap between merged CN segments."""
+    if max_merge_gap is None:
+        return None
+    if (
+        isinstance(max_merge_gap, (bool, np.bool_))
+        or not isinstance(max_merge_gap, Integral)
+        or max_merge_gap < 0
+    ):
+        raise ValueError(
+            'max_merge_gap must be None or a non-negative integer'
+        )
+    return int(max_merge_gap)
+
+
 def validate_purity(value):
     """Return a finite purity in the biologically meaningful ``(0, 1]``."""
     if isinstance(value, (bool, np.bool_)):
@@ -1158,10 +1173,12 @@ def merge_segments(
     cn_table,
     return_segment_id_map=False,
     *,
+    max_merge_gap=None,
     _validated=False,
 ):
-    """Merge equal-CN segments that share a half-open interval boundary."""
+    """Merge consecutive equal-CN segments within an optional maximum gap."""
 
+    max_merge_gap = validate_max_merge_gap(max_merge_gap)
     if _validated:
         cn_table = cn_table.copy()
     else:
@@ -1184,11 +1201,14 @@ def merge_segments(
                 chr_data.loc[index, 'Gain_Type']
                 == chr_data.loc[forward_index, 'Gain_Type']
             )
-            coordinate_adjacent = (
+            gap = (
                 int(chr_data.loc[forward_index, 'Segment_Start'])
-                == int(chr_data.loc[index, 'Segment_End'])
+                - int(chr_data.loc[index, 'Segment_End'])
             )
-            if equal_copy_number and coordinate_adjacent:
+            within_maximum_gap = (
+                max_merge_gap is None or gap <= max_merge_gap
+            )
+            if equal_copy_number and within_maximum_gap:
                 
                 indexes_to_delete.append(index)
                 cn_table.loc[forward_index,'Segment_Start'] = cn_table.loc[index,'Segment_Start']

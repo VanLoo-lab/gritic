@@ -19,6 +19,7 @@ DEFAULT_MIN_SUBCLONE_CCF = 0.01
 DEFAULT_MAX_SUBCLONE_CCF = 0.9
 DEFAULT_MIN_SUBCLONE_FRACTION = 0.1
 DEFAULT_AUTOSOME_COUNT = 22
+DEFAULT_MAX_MERGE_GAP = None
 
 PHASE_GROUP_ORDER = {
     'non_phased': 0,
@@ -825,6 +826,7 @@ class Sample:
         min_subclone_fraction=DEFAULT_MIN_SUBCLONE_FRACTION,
         autosome_count=DEFAULT_AUTOSOME_COUNT,
         *,
+        max_merge_gap=DEFAULT_MAX_MERGE_GAP,
         clip_subclone_ccf=False,
         drop_unrecognized_phasing=False,
         _validation_token=None,
@@ -838,6 +840,7 @@ class Sample:
         )
         self.autosomes = dataloader.get_autosome_labels(self.autosome_count)
         self.merge_cn = merge_cn
+        self.max_merge_gap = dataloader.validate_max_merge_gap(max_merge_gap)
         self.apply_reads_correction = apply_reads_correction
         self.drop_unmatched_snvs = drop_unmatched_snvs
         self.drop_unmatched_chromosomes = drop_unmatched_chromosomes
@@ -1118,12 +1121,14 @@ class Sample:
                     dataloader.merge_segments(
                         cn_table,
                         return_segment_id_map=True,
+                        max_merge_gap=self.max_merge_gap,
                         _validated=_validated,
                     )
                 )
             else:
                 cn_table = dataloader.merge_segments(
                     cn_table,
+                    max_merge_gap=self.max_merge_gap,
                     _validated=_validated,
                 )
         else:

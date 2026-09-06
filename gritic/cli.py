@@ -306,9 +306,20 @@ def build_parser():
         action='store_false',
         default=True,
         help=(
-            'Preserve adjacent copy-number segments as separate intervals. '
-            'By default, GRITIC merges coordinate-adjacent segments with '
-            'identical Major_CN and Minor_CN.'
+            'Preserve neighboring copy-number segments as separate '
+            'intervals. By default, GRITIC merges consecutive segments on '
+            'the same chromosome with identical Major_CN and Minor_CN.'
+        ),
+    )
+    genome_and_input_arguments.add_argument(
+        '--max-merge-gap',
+        type=nonnegative_integer,
+        default=sampletools.DEFAULT_MAX_MERGE_GAP,
+        metavar='BASES',
+        help=(
+            'Maximum gap in bases between consecutive equal-copy-number '
+            'segments that may be merged. By default there is no maximum; '
+            'use 0 to merge only intervals that touch.'
         ),
     )
     mutation_arguments.add_argument(
@@ -521,6 +532,7 @@ def main(argv=None):
         args.purity,
         sex=args.sample_sex,
         merge_cn=args.merge_adjacent_segments,
+        max_merge_gap=args.max_merge_gap,
         min_mutation_alt_count=args.min_mutation_alt_count,
         min_mutation_coverage=args.min_mutation_coverage,
         coverage_vaf_quantile=args.coverage_vaf_quantile,

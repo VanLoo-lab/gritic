@@ -24,6 +24,7 @@ class CliHelpTest(unittest.TestCase):
                 '--drop-unmatched-snvs',
                 '--drop-unrecognized-phasing',
                 '--no-merge-adjacent-segments',
+                '--max-merge-gap',
             ),
         ),
         (

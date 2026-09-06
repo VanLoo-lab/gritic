@@ -144,6 +144,18 @@ class CliParserBoundaryTest(CliArgumentFixture, unittest.TestCase):
                     message,
                 )
 
+    def test_max_merge_gap_rejects_negative_and_noninteger_values(self):
+        for value in ('-1', '1.5'):
+            with self.subTest(value=value):
+                self.assert_parse_error(
+                    [
+                        *self.required_arguments(),
+                        '--max-merge-gap',
+                        value,
+                    ],
+                    'must be a non-negative integer',
+                )
+
     def test_parser_defaults_match_library_defaults(self):
         args = cli.build_parser().parse_args(self.required_arguments())
 
@@ -153,6 +165,10 @@ class CliParserBoundaryTest(CliArgumentFixture, unittest.TestCase):
         self.assertFalse(args.drop_unmatched_snvs)
         self.assertFalse(args.drop_unrecognized_phasing)
         self.assertTrue(args.merge_adjacent_segments)
+        self.assertIs(
+            args.max_merge_gap,
+            sampletools.DEFAULT_MAX_MERGE_GAP,
+        )
         self.assertEqual(
             args.min_mutation_alt_count,
             sampletools.DEFAULT_MIN_MUTATION_ALT_COUNT,
@@ -326,6 +342,7 @@ class CliMainTest(CliArgumentFixture, unittest.TestCase):
             '--drop-unmatched-snvs',
             '--drop-unrecognized-phasing',
             '--no-merge-adjacent-segments',
+            '--max-merge-gap', '50',
             '--min-mutation-alt-count', '4',
             '--min-mutation-coverage', '11',
             '--coverage-vaf-quantile', '0.8',
@@ -369,6 +386,7 @@ class CliMainTest(CliArgumentFixture, unittest.TestCase):
             0.8,
             sex='ZW',
             merge_cn=False,
+            max_merge_gap=50,
             min_mutation_alt_count=4,
             min_mutation_coverage=11,
             coverage_vaf_quantile=0.8,
