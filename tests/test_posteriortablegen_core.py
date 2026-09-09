@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from gritic import posteriortablegen, timingio
-from gritic.intervaltools import IntervalSpec
+from gritic.distributiontools import IntervalSpec
 from gritic.tableschemas import (
     GAIN_DRAW_COLUMNS,
     GAIN_TIMING_TABLE_COLUMNS,

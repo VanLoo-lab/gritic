@@ -1,5 +1,6 @@
 """Shared scalar argument checks; table and model validation stay with callers."""
 
+import argparse
 from numbers import Integral, Real
 
 import numpy as np
@@ -51,6 +52,16 @@ def validate_proportion(value, parameter_name, *, allow_zero=True):
     ):
         raise ValueError(f'{parameter_name} must be a finite number {bounds}')
     return float(value)
+
+
+def positive_unit_interval_number(value):
+    """Parse an argparse value as a finite number in (0, 1]."""
+    try:
+        return validate_proportion(float(value), 'value', allow_zero=False)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise argparse.ArgumentTypeError(
+            'must be a finite number greater than 0 and at most 1'
+        ) from error
 
 
 def validate_boolean(value, parameter_name):

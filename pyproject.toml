@@ -7,7 +7,7 @@ name = "gritic"
 version = "0.1.0"
 description = "A module to time complex copy number gains in cancer genomes"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = "AGPL-3.0-only"
 license-files = ["LICENSE"]
 authors = [
@@ -21,6 +21,7 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
+    "arviz-stats>=1.3,<2",
     "numpy",
     "pandas",
     "matplotlib",

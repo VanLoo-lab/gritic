@@ -4,7 +4,7 @@ from contextlib import contextmanager
 
 import pandas as pd
 
-from gritic import dataloader, gritictimer, intervaltools, sampletools, validation
+from gritic import dataloader, gritictimer, distributiontools, sampletools, validation
 
 
 @contextmanager
@@ -64,67 +64,25 @@ def unit_interval_number(value):
         ) from error
 
 
-def positive_unit_interval_number(value):
-    try:
-        return validation.validate_proportion(
-            float(value), 'value', allow_zero=False,
-        )
-    except (TypeError, ValueError, OverflowError) as error:
-        raise argparse.ArgumentTypeError(
-            'must be a finite number greater than 0 and at most 1'
-        ) from error
-
-
-def _add_interval_arguments(
-    argument_group,
-    option_name,
-    destination,
-    default_interval,
-    description,
-):
-    argument_group.add_argument(
-        f'--{option_name}-interval-width',
-        dest=f'{destination}_interval_width',
-        type=positive_unit_interval_number,
-        default=default_interval.width,
-        metavar='PROPORTION',
-        help=(
-            f'{description} interval width as a proportion greater than 0 '
-            'and at most 1 '
-            f'(default: {default_interval.width:g}).'
-        ),
-    )
-    argument_group.add_argument(
-        f'--{option_name}-interval-method',
-        dest=f'{destination}_interval_method',
-        choices=intervaltools.INTERVAL_METHODS,
-        default=default_interval.method,
-        help=(
-            f'{description} interval method; HPD is the shortest contiguous '
-            'empirical interval (default: hpd).'
-        ),
-    )
-
-
 def build_interval_config(args):
-    return intervaltools.TimingIntervalConfig(
-        route_gain=intervaltools.IntervalSpec(
+    return distributiontools.TimingIntervalConfig(
+        route_gain=distributiontools.IntervalSpec(
             args.route_gain_interval_width,
             args.route_gain_interval_method,
         ),
-        tree_gain=intervaltools.IntervalSpec(
+        tree_gain=distributiontools.IntervalSpec(
             args.tree_gain_interval_width,
             args.tree_gain_interval_method,
         ),
-        wgd_overlap=intervaltools.IntervalSpec(
+        wgd_overlap=distributiontools.IntervalSpec(
             args.wgd_overlap_interval_width,
             args.wgd_overlap_interval_method,
         ),
-        sample_wgd=intervaltools.IntervalSpec(
+        sample_wgd=distributiontools.IntervalSpec(
             args.wgd_timing_interval_width,
             args.wgd_timing_interval_method,
         ),
-        posterior_summary=intervaltools.IntervalSpec(
+        posterior_summary=distributiontools.IntervalSpec(
             args.posterior_summary_interval_width,
             args.posterior_summary_interval_method,
         ),
@@ -193,7 +151,7 @@ def build_parser():
     )
     required_arguments.add_argument(
         '--purity',
-        type=positive_unit_interval_number,
+        type=validation.positive_unit_interval_number,
         required=True,
         help=(
             'The purity of the sample as determined by the copy number '
@@ -356,7 +314,7 @@ def build_parser():
     )
     subclone_arguments.add_argument(
         '--min-subclone-ccf',
-        type=positive_unit_interval_number,
+        type=validation.positive_unit_interval_number,
         default=sampletools.DEFAULT_MIN_SUBCLONE_CCF,
         help=(
             'Minimum Subclone_CCF retained as a subclone, inclusive; it must '
@@ -417,13 +375,29 @@ def build_parser():
             'between 0 and 2**64 - 1. By default, no seed is imposed.'
         ),
     )
-    defaults = intervaltools.DEFAULT_TIMING_INTERVALS
-    _add_interval_arguments(
-        inference_arguments,
-        'wgd-overlap',
-        'wgd_overlap',
-        defaults.wgd_overlap,
-        'Hidden WGD-candidate overlap; changing this can change WGD inference',
+    defaults = distributiontools.DEFAULT_TIMING_INTERVALS
+    inference_arguments.add_argument(
+        '--wgd-overlap-interval-width',
+        dest='wgd_overlap_interval_width',
+        type=validation.positive_unit_interval_number,
+        default=defaults.wgd_overlap.width,
+        metavar='PROPORTION',
+        help=(
+            'Hidden WGD-candidate overlap; changing this can change WGD inference'
+            ' interval width as a proportion greater than 0 and at most 1 '
+            f'(default: {defaults.wgd_overlap.width:g}).'
+        ),
+    )
+    inference_arguments.add_argument(
+        '--wgd-overlap-interval-method',
+        dest='wgd_overlap_interval_method',
+        choices=distributiontools.INTERVAL_METHODS,
+        default=defaults.wgd_overlap.method,
+        help=(
+            'Hidden WGD-candidate overlap; changing this can change WGD inference'
+            ' interval method; HPD is the shortest contiguous credible '
+            f'interval (default: {defaults.wgd_overlap.method}).'
+        ),
     )
     inference_arguments.add_argument(
         '--unordered-balanced-route-prior',
@@ -439,26 +413,74 @@ def build_parser():
         ),
     )
 
-    _add_interval_arguments(
-        reported_interval_arguments,
-        'route-gain',
-        'route_gain',
-        defaults.route_gain,
-        'Route-conditional gain-table and WGD-candidate display',
+    reported_interval_arguments.add_argument(
+        '--route-gain-interval-width',
+        dest='route_gain_interval_width',
+        type=validation.positive_unit_interval_number,
+        default=defaults.route_gain.width,
+        metavar='PROPORTION',
+        help=(
+            'Route-conditional gain-table and WGD-candidate display'
+            ' interval width as a proportion greater than 0 and at most 1 '
+            f'(default: {defaults.route_gain.width:g}).'
+        ),
     )
-    _add_interval_arguments(
-        reported_interval_arguments,
-        'wgd-timing',
-        'wgd_timing',
-        defaults.sample_wgd,
-        'Final sample-level WGD timing',
+    reported_interval_arguments.add_argument(
+        '--route-gain-interval-method',
+        dest='route_gain_interval_method',
+        choices=distributiontools.INTERVAL_METHODS,
+        default=defaults.route_gain.method,
+        help=(
+            'Route-conditional gain-table and WGD-candidate display'
+            ' interval method; HPD is the shortest contiguous credible '
+            f'interval (default: {defaults.route_gain.method}).'
+        ),
     )
-    _add_interval_arguments(
-        reported_interval_arguments,
-        'posterior-summary',
-        'posterior_summary',
-        defaults.posterior_summary,
-        'Route-marginalized posterior summary',
+    reported_interval_arguments.add_argument(
+        '--wgd-timing-interval-width',
+        dest='wgd_timing_interval_width',
+        type=validation.positive_unit_interval_number,
+        default=defaults.sample_wgd.width,
+        metavar='PROPORTION',
+        help=(
+            'Final sample-level WGD timing'
+            ' interval width as a proportion greater than 0 and at most 1 '
+            f'(default: {defaults.sample_wgd.width:g}).'
+        ),
+    )
+    reported_interval_arguments.add_argument(
+        '--wgd-timing-interval-method',
+        dest='wgd_timing_interval_method',
+        choices=distributiontools.INTERVAL_METHODS,
+        default=defaults.sample_wgd.method,
+        help=(
+            'Final sample-level WGD timing'
+            ' interval method; HPD is the shortest contiguous credible '
+            f'interval (default: {defaults.sample_wgd.method}).'
+        ),
+    )
+    reported_interval_arguments.add_argument(
+        '--posterior-summary-interval-width',
+        dest='posterior_summary_interval_width',
+        type=validation.positive_unit_interval_number,
+        default=defaults.posterior_summary.width,
+        metavar='PROPORTION',
+        help=(
+            'Route-marginalized posterior summary'
+            ' interval width as a proportion greater than 0 and at most 1 '
+            f'(default: {defaults.posterior_summary.width:g}).'
+        ),
+    )
+    reported_interval_arguments.add_argument(
+        '--posterior-summary-interval-method',
+        dest='posterior_summary_interval_method',
+        choices=distributiontools.INTERVAL_METHODS,
+        default=defaults.posterior_summary.method,
+        help=(
+            'Route-marginalized posterior summary'
+            ' interval method; HPD is the shortest contiguous credible '
+            f'interval (default: {defaults.posterior_summary.method}).'
+        ),
     )
 
     tree_plot_arguments.add_argument(
@@ -466,12 +488,28 @@ def build_parser():
         action='store_true',
         help='Plot copy number trees. Default is False.',
     )
-    _add_interval_arguments(
-        tree_plot_arguments,
-        'tree-gain',
-        'tree_gain',
-        defaults.tree_gain,
-        'Blue gain-node tree label',
+    tree_plot_arguments.add_argument(
+        '--tree-gain-interval-width',
+        dest='tree_gain_interval_width',
+        type=validation.positive_unit_interval_number,
+        default=defaults.tree_gain.width,
+        metavar='PROPORTION',
+        help=(
+            'Blue gain-node tree label'
+            ' interval width as a proportion greater than 0 and at most 1 '
+            f'(default: {defaults.tree_gain.width:g}).'
+        ),
+    )
+    tree_plot_arguments.add_argument(
+        '--tree-gain-interval-method',
+        dest='tree_gain_interval_method',
+        choices=distributiontools.INTERVAL_METHODS,
+        default=defaults.tree_gain.method,
+        help=(
+            'Blue gain-node tree label'
+            ' interval method; HPD is the shortest contiguous credible '
+            f'interval (default: {defaults.tree_gain.method}).'
+        ),
     )
     return parser
 

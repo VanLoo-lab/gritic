@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 from gritic import gritictimer
-from gritic.intervaltools import IntervalSpec
+from gritic.distributiontools import IntervalSpec
 
 
 class CloneFractionAndRouteBasicsTest(unittest.TestCase):

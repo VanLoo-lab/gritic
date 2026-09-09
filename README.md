@@ -10,7 +10,7 @@ The method is described in [Baker et al. (2024), *The History of Chromosomal Ins
 
 ## Installation
 
-Python 3.10 or newer is required. Install the version documented here from this repository checkout:
+Python 3.12 or newer is required. Install the version documented here from this repository checkout:
 
 ```bash
 python -m pip install .
@@ -70,7 +70,7 @@ gritictimer.process_sample(
 )
 ```
 
-Python callers configure [timing intervals](#timing-intervals) through the `interval_config` argument to `process_sample`, using `intervaltools.TimingIntervalConfig` and `intervaltools.IntervalSpec`.
+Python callers configure [timing intervals](#timing-intervals) through the `interval_config` argument to `process_sample`, using `distributiontools.TimingIntervalConfig` and `distributiontools.IntervalSpec`.
 
 For unmatched-SNV dropping with supplied segment IDs, `dataloader.load_input_tables(..., drop_unmatched_snvs=True)` removes unmatched rows during loading. For position-based assignment, pass `drop_unmatched_snvs=True` to `sampletools.Sample`.
 
@@ -206,7 +206,9 @@ Every run requires configured autosomal segments with a segment-width-weighted m
 
 ### Timing intervals
 
-Posterior intervals default to contiguous empirical highest posterior density (HPD) intervals. Widths must be greater than 0; method options accept `hpd` or `equal-tailed`.
+Posterior intervals default to contiguous empirical highest posterior density (HPD) intervals. Widths are probability mass greater than 0 and at most 1; method options accept `hpd` or `equal-tailed`. MUTIC and SIGTIC use the same `--posterior-summary-interval-width` and `--posterior-summary-interval-method` options, also defaulting to 95% HPD summary intervals.
+
+Sample intervals are computed with the NumPy array interface of [ArviZ Stats](https://python.arviz.org/projects/stats/en/stable/array_stats_only.html): `hdi(method="nearest")` for HPD and `eti` for equal-tailed intervals. ArviZ's nearest HDI uses sorted endpoints `floor(width * number_of_draws)` indices apart; small-sample bounds can therefore differ from the previous implementation. A width of `1` uses the full observed range for either method.
 
 | Interval family | Options | Default width | Controls |
 | --- | --- | --- | --- |

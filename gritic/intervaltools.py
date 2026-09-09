@@ -29,6 +29,9 @@ class IntervalSpec:
             )
 
 
+DEFAULT_POSTERIOR_SUMMARY_INTERVAL = IntervalSpec(0.95)
+
+
 @dataclass(frozen=True)
 class TimingIntervalConfig:
     """All user-configurable intervals emitted or used by GRITIC."""
@@ -46,7 +49,7 @@ class TimingIntervalConfig:
         default_factory=lambda: IntervalSpec(0.9)
     )
     posterior_summary: IntervalSpec = field(
-        default_factory=lambda: IntervalSpec(0.95)
+        default_factory=lambda: DEFAULT_POSTERIOR_SUMMARY_INTERVAL
     )
 
     def __post_init__(self):

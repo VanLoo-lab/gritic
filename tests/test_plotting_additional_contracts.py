@@ -8,7 +8,7 @@ from unittest import mock
 import networkx as nx
 
 from gritic import gritictimer, treetools
-from gritic.intervaltools import IntervalSpec
+from gritic.distributiontools import IntervalSpec
 
 
 def make_plot_tree():

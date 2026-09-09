@@ -9,7 +9,7 @@ from unittest import mock
 
 import pandas as pd
 
-from gritic import cli, gritictimer, intervaltools, sampletools
+from gritic import cli, gritictimer, distributiontools, sampletools, validation
 
 
 class CliArgumentFixture:
@@ -84,8 +84,8 @@ class CliTypeValidationTest(unittest.TestCase):
 
     def test_number_types_translate_validation_errors(self):
         valid_cases = (
-            (cli.positive_unit_interval_number, '0.01', 0.01),
-            (cli.positive_unit_interval_number, '1', 1.0),
+            (validation.positive_unit_interval_number, '0.01', 0.01),
+            (validation.positive_unit_interval_number, '1', 1.0),
             (cli.unit_interval_number, '0', 0.0),
             (cli.unit_interval_number, '1', 1.0),
         )
@@ -94,10 +94,10 @@ class CliTypeValidationTest(unittest.TestCase):
                 self.assertEqual(converter(value), expected)
 
         invalid_cases = (
-            (cli.positive_unit_interval_number, '0', 'greater than 0'),
-            (cli.positive_unit_interval_number, 'nan', 'greater than 0'),
-            (cli.positive_unit_interval_number, 'inf', 'greater than 0'),
-            (cli.positive_unit_interval_number, None, 'greater than 0'),
+            (validation.positive_unit_interval_number, '0', 'greater than 0'),
+            (validation.positive_unit_interval_number, 'nan', 'greater than 0'),
+            (validation.positive_unit_interval_number, 'inf', 'greater than 0'),
+            (validation.positive_unit_interval_number, None, 'greater than 0'),
             (cli.unit_interval_number, '-0.1', 'between 0 and 1'),
             (cli.unit_interval_number, 'nan', 'between 0 and 1'),
             (cli.unit_interval_number, None, 'between 0 and 1'),
@@ -232,13 +232,13 @@ class CliParserBoundaryTest(CliArgumentFixture, unittest.TestCase):
 
         config = cli.build_interval_config(args)
 
-        self.assertEqual(config.route_gain, intervaltools.IntervalSpec(0.81, 'equal-tailed'))
-        self.assertEqual(config.tree_gain, intervaltools.IntervalSpec(0.82, 'hpd'))
-        self.assertEqual(config.wgd_overlap, intervaltools.IntervalSpec(0.83, 'equal-tailed'))
-        self.assertEqual(config.sample_wgd, intervaltools.IntervalSpec(0.84, 'hpd'))
+        self.assertEqual(config.route_gain, distributiontools.IntervalSpec(0.81, 'equal-tailed'))
+        self.assertEqual(config.tree_gain, distributiontools.IntervalSpec(0.82, 'hpd'))
+        self.assertEqual(config.wgd_overlap, distributiontools.IntervalSpec(0.83, 'equal-tailed'))
+        self.assertEqual(config.sample_wgd, distributiontools.IntervalSpec(0.84, 'hpd'))
         self.assertEqual(
             config.posterior_summary,
-            intervaltools.IntervalSpec(0.85, 'equal-tailed'),
+            distributiontools.IntervalSpec(0.85, 'equal-tailed'),
         )
 
     def test_subclone_loader_preserves_cluster_text(self):
@@ -419,12 +419,12 @@ class CliMainTest(CliArgumentFixture, unittest.TestCase):
             'output',
             plot_trees=True,
             wgd_count=1,
-            interval_config=intervaltools.TimingIntervalConfig(
-                route_gain=intervaltools.IntervalSpec(0.81, 'equal-tailed'),
-                tree_gain=intervaltools.IntervalSpec(0.82, 'hpd'),
-                wgd_overlap=intervaltools.IntervalSpec(0.83, 'equal-tailed'),
-                sample_wgd=intervaltools.IntervalSpec(0.84, 'hpd'),
-                posterior_summary=intervaltools.IntervalSpec(0.85, 'equal-tailed'),
+            interval_config=distributiontools.TimingIntervalConfig(
+                route_gain=distributiontools.IntervalSpec(0.81, 'equal-tailed'),
+                tree_gain=distributiontools.IntervalSpec(0.82, 'hpd'),
+                wgd_overlap=distributiontools.IntervalSpec(0.83, 'equal-tailed'),
+                sample_wgd=distributiontools.IntervalSpec(0.84, 'hpd'),
+                posterior_summary=distributiontools.IntervalSpec(0.85, 'equal-tailed'),
             ),
             subclone_fraction_prior='supplied',
             unordered_balanced_route_prior=True,

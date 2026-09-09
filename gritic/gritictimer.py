@@ -23,7 +23,7 @@ from gritic.sampletools import (
     validate_sample_id,
 )
 from gritic import dataloader, outputtools, timingio, validation
-from gritic.intervaltools import (
+from gritic.distributiontools import (
     DEFAULT_TIMING_INTERVALS,
     TimingIntervalConfig,
     get_interval_bounds,

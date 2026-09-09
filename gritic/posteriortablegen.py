@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 from gritic import timingio, validation
-from gritic.intervaltools import DEFAULT_TIMING_INTERVALS, get_interval_bounds
+from gritic.distributiontools import DEFAULT_TIMING_INTERVALS, get_interval_bounds
 from gritic.tableschemas import (
     GAIN_DRAW_COLUMNS,
     GAIN_TIMING_KEY_COLUMNS,
