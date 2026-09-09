@@ -28,8 +28,8 @@ class PosteriorNodePhasingValidationTest(unittest.TestCase):
         rows = []
         for node, label in enumerate(labels):
             rows.append({
-                'Sample_ID': 'sample',
-                'Segment_ID': 'segment',
+                'Sample': 'sample',
+                'Segment': 'segment',
                 'Route': 'route',
                 'Node': node,
                 'Node_Phasing': label,

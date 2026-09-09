@@ -10,7 +10,7 @@ class IntervalWidthValidationTest(unittest.TestCase):
     def test_valid_widths_are_returned_as_builtin_floats(self):
         for width in (1, 0.5, np.float64(0.125)):
             with self.subTest(width=width):
-                validated = intervaltools.validate_interval_width(width)
+                validated = intervaltools.IntervalSpec(width).width
                 self.assertIs(type(validated), float)
                 self.assertEqual(validated, float(width))
 
@@ -31,7 +31,7 @@ class IntervalWidthValidationTest(unittest.TestCase):
         for width in invalid_widths:
             with self.subTest(width=width):
                 with self.assertRaisesRegex(ValueError, 'interval width'):
-                    intervaltools.validate_interval_width(width)
+                    intervaltools.IntervalSpec(width).width
 
 
 class IntervalConfigurationTest(unittest.TestCase):

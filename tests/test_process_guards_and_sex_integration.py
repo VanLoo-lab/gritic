@@ -11,6 +11,18 @@ from gritic import gritictimer, sampletools
 
 
 class ProcessSampleGuardTest(unittest.TestCase):
+    def test_invalid_wgd_arguments_fail_before_sample_or_filesystem_access(self):
+        for name, values in (
+            ('wgd_count', (-1, 2, 0.0, True, '1')),
+            ('min_wgd_overlap', (-0.1, 1.1, float('nan'), True, '0.5')),
+        ):
+            for value in values:
+                with self.subTest(name=name, value=value):
+                    with self.assertRaisesRegex(ValueError, name):
+                        gritictimer.process_sample(
+                            object(), 'unused-output', **{name: value},
+                        )
+
     @staticmethod
     def lightweight_sample(sample_id):
         return SimpleNamespace(
@@ -229,7 +241,7 @@ class SexChromosomeProcessIntegrationTest(unittest.TestCase):
         x_routes = route_table.loc[route_table['Segment_ID'].eq('X-0-1000')]
         self.assertFalse(x_routes.empty)
         self.assertEqual(set(x_routes['Chromosome']), {'X'})
-        x_gains = gain_table.loc[gain_table['Segment_ID'].eq('X-0-1000')]
+        x_gains = gain_table.loc[gain_table['Segment'].eq('X-0-1000')]
         self.assertFalse(x_gains.empty)
         self.assertEqual(set(x_gains['Node_Phasing']), {'Major'})
         self.assertTrue(x_gains['Timing'].between(0, 1).all())

@@ -1,10 +1,11 @@
 import warnings
 from decimal import Decimal, InvalidOperation
-from numbers import Integral
 from urllib.parse import quote
 
 import numpy as np
 import pandas as pd
+
+from gritic import validation
 
 COPY_NUMBER_REQUIRED_COLUMNS = (
     'Chromosome',
@@ -101,53 +102,10 @@ def validate_sex_karyotype(sex):
     return sex
 
 
-def validate_autosome_count(autosome_count):
-    """Validate and return the number of numbered autosomes."""
-    if (
-        isinstance(autosome_count, bool)
-        or not isinstance(autosome_count, Integral)
-        or autosome_count <= 0
-    ):
-        raise ValueError('autosome_count must be a positive integer')
-    return int(autosome_count)
-
-
-def validate_max_merge_gap(max_merge_gap):
-    """Return an optional non-negative gap between merged CN segments."""
-    if max_merge_gap is None:
-        return None
-    if (
-        isinstance(max_merge_gap, (bool, np.bool_))
-        or not isinstance(max_merge_gap, Integral)
-        or max_merge_gap < 0
-    ):
-        raise ValueError(
-            'max_merge_gap must be None or a non-negative integer'
-        )
-    return int(max_merge_gap)
-
-
-def validate_purity(value):
-    """Return a finite purity in the biologically meaningful ``(0, 1]``."""
-    if isinstance(value, (bool, np.bool_)):
-        raise ValueError(
-            'Purity must be finite, greater than 0, and less than or equal to 1'
-        )
-    try:
-        parsed_value = float(value)
-    except (TypeError, ValueError, OverflowError) as error:
-        raise ValueError(
-            'Purity must be finite, greater than 0, and less than or equal to 1'
-        ) from error
-    if not np.isfinite(parsed_value) or not 0 < parsed_value <= 1:
-        raise ValueError(
-            'Purity must be finite, greater than 0, and less than or equal to 1'
-        )
-    return parsed_value
-
-
 def get_autosome_labels(autosome_count):
-    autosome_count = validate_autosome_count(autosome_count)
+    autosome_count = validation.validate_integer(
+        autosome_count, 'autosome_count', minimum=1,
+    )
     return tuple(map(str, range(1, autosome_count + 1)))
 
 
@@ -177,7 +135,9 @@ def normalize_chromosome_labels(table):
 
 def get_allowed_chromosome_labels(autosome_count, sex):
     """Return canonical chromosome labels permitted by a genome/karyotype."""
-    autosome_count = validate_autosome_count(autosome_count)
+    autosome_count = validation.validate_integer(
+        autosome_count, 'autosome_count', minimum=1,
+    )
     validate_sex_karyotype(sex)
     if sex is None:
         raise ValueError(
@@ -691,8 +651,9 @@ def validate_copy_number_values(copy_number_table):
 
 def validate_subclone_values(subclone_table, *, clip_subclone_ccf=False):
     """Validate and canonicalize the subclone table used as a mixture prior."""
-    if not isinstance(clip_subclone_ccf, (bool, np.bool_)):
-        raise ValueError('clip_subclone_ccf must be a boolean')
+    clip_subclone_ccf = validation.validate_boolean(
+        clip_subclone_ccf, 'clip_subclone_ccf',
+    )
     missing_columns = [
         column for column in SUBCLONE_REQUIRED_COLUMNS
         if column not in subclone_table.columns
@@ -1047,7 +1008,7 @@ def calculate_nrpcc(
     autosome_count=22,
     drop_unmatched_chromosomes=False,
 ):
-    purity = validate_purity(purity)
+    purity = validation.validate_proportion(purity, 'purity', allow_zero=False)
     cn_table, mutation_table, sex = validate_or_drop_input_chromosomes(
         cn_table,
         mutation_table,
@@ -1178,7 +1139,9 @@ def merge_segments(
 ):
     """Merge consecutive equal-CN segments within an optional maximum gap."""
 
-    max_merge_gap = validate_max_merge_gap(max_merge_gap)
+    max_merge_gap = validation.validate_integer(
+        max_merge_gap, 'max_merge_gap', allow_none=True,
+    )
     if _validated:
         cn_table = cn_table.copy()
     else:

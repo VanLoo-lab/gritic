@@ -22,7 +22,7 @@ from gritic.sampletools import (
     get_major_cn_mode,
     validate_sample_id,
 )
-from gritic import dataloader, timingio
+from gritic import dataloader, timingio, validation
 from gritic.intervaltools import (
     DEFAULT_TIMING_INTERVALS,
     TimingIntervalConfig,
@@ -140,12 +140,6 @@ def validate_subclone_fraction_prior(subclone_fraction_prior):
             f'subclone_fraction_prior must be one of: {permitted}'
         )
     return subclone_fraction_prior
-
-
-def validate_unordered_balanced_route_prior(unordered_balanced_route_prior):
-    if not isinstance(unordered_balanced_route_prior, (bool, np.bool_)):
-        raise ValueError('unordered_balanced_route_prior must be a boolean')
-    return bool(unordered_balanced_route_prior)
 
 
 def get_sample_clone_fractions(subclone_table):
@@ -912,8 +906,8 @@ class RouteClassifier:
             subclone_fraction_prior
         )
         self.unordered_balanced_route_prior = (
-            validate_unordered_balanced_route_prior(
-                unordered_balanced_route_prior
+            validation.validate_boolean(
+                unordered_balanced_route_prior, 'unordered_balanced_route_prior',
             )
         )
         if route_trees is None:
@@ -1832,7 +1826,10 @@ def _append_table(table, table_path, columns, column_dtypes=None):
     if os.path.exists(table_path):
         string_converters = {
             column: str
-            for column in ('Sample_ID', 'Segment_ID', 'Chromosome', 'Route')
+            for column in (
+                'Sample_ID', 'Segment_ID', 'Sample', 'Segment',
+                'Chromosome', 'Route',
+            )
             if column in columns
         }
         previous_table = pd.read_csv(
@@ -2814,8 +2811,8 @@ def time_wgd_major_cn_2(
     subclone_fraction_prior = validate_subclone_fraction_prior(
         subclone_fraction_prior
     )
-    unordered_balanced_route_prior = validate_unordered_balanced_route_prior(
-        unordered_balanced_route_prior
+    unordered_balanced_route_prior = validation.validate_boolean(
+        unordered_balanced_route_prior, 'unordered_balanced_route_prior',
     )
 
     wgd_timing_table_path = output_dir/f"{sample.sample_id}_gain_timing_table_wgd_segments.tsv"
@@ -3014,8 +3011,8 @@ def get_combined_segment_timing_cn_2(
     subclone_fraction_prior = validate_subclone_fraction_prior(
         subclone_fraction_prior
     )
-    unordered_balanced_route_prior = validate_unordered_balanced_route_prior(
-        unordered_balanced_route_prior
+    unordered_balanced_route_prior = validation.validate_boolean(
+        unordered_balanced_route_prior, 'unordered_balanced_route_prior',
     )
 
     mutation_tables = []
@@ -3213,8 +3210,8 @@ def _write_segment_results(
             segment.segment_id,
         )
 
-    segment_timing_table['Segment_ID'] = segment.segment_id
-    segment_timing_table['Sample_ID'] = sample_id
+    segment_timing_table['Segment'] = segment.segment_id
+    segment_timing_table['Sample'] = sample_id
 
     write_route_table(segment_route_table, route_table_path)
     write_gain_timing_table(segment_timing_table, timing_table_path)
@@ -3247,8 +3244,8 @@ def process_segments(
     subclone_fraction_prior = validate_subclone_fraction_prior(
         subclone_fraction_prior
     )
-    unordered_balanced_route_prior = validate_unordered_balanced_route_prior(
-        unordered_balanced_route_prior
+    unordered_balanced_route_prior = validation.validate_boolean(
+        unordered_balanced_route_prior, 'unordered_balanced_route_prior',
     )
 
     route_table_path = output_dir/f"{sample_id}_route_table.tsv"
@@ -3352,42 +3349,6 @@ def process_segments(
                 )
             del classifier_jobs
             del classifier
-
-def _validate_wgd_count(wgd_count):
-    if wgd_count is None:
-        return None
-    if isinstance(wgd_count, bool) or not isinstance(wgd_count, Integral):
-        raise ValueError('wgd_count must be None or an integer equal to 0 or 1')
-    if wgd_count not in (0, 1):
-        raise ValueError('wgd_count must be None or an integer equal to 0 or 1')
-    return int(wgd_count)
-
-
-def _validate_min_wgd_overlap(min_wgd_overlap):
-    if (
-        isinstance(min_wgd_overlap, (bool, np.bool_))
-        or not isinstance(min_wgd_overlap, Real)
-        or not np.isfinite(min_wgd_overlap)
-        or not 0 <= min_wgd_overlap <= 1
-    ):
-        raise ValueError(
-            'min_wgd_overlap must be a finite number between 0 and 1'
-        )
-    return float(min_wgd_overlap)
-
-
-def _validate_random_seed(random_seed):
-    if random_seed is None:
-        return None
-    if (
-        isinstance(random_seed, (bool, np.bool_))
-        or not isinstance(random_seed, Integral)
-        or not 0 <= random_seed <= np.iinfo(np.uint32).max
-    ):
-        raise ValueError(
-            'random_seed must be None or an integer between 0 and 2**32 - 1'
-        )
-    return int(random_seed)
 
 
 def _run_sample(
@@ -3551,12 +3512,18 @@ def process_sample(
     subclone_fraction_prior = validate_subclone_fraction_prior(
         subclone_fraction_prior
     )
-    unordered_balanced_route_prior = validate_unordered_balanced_route_prior(
-        unordered_balanced_route_prior
+    unordered_balanced_route_prior = validation.validate_boolean(
+        unordered_balanced_route_prior, 'unordered_balanced_route_prior',
     )
-    wgd_count = _validate_wgd_count(wgd_count)
-    min_wgd_overlap = _validate_min_wgd_overlap(min_wgd_overlap)
-    random_seed = _validate_random_seed(random_seed)
+    wgd_count = validation.validate_integer(
+        wgd_count, 'wgd_count', maximum=1, allow_none=True,
+    )
+    min_wgd_overlap = validation.validate_proportion(
+        min_wgd_overlap, 'min_wgd_overlap',
+    )
+    random_seed = validation.validate_integer(
+        random_seed, 'random_seed', maximum=2**32 - 1, allow_none=True,
+    )
     validate_sample_id(sample.sample_id)
     major_cn_mode = get_major_cn_mode(sample)
     if major_cn_mode not in (1, 2):

@@ -18,8 +18,12 @@ class TableSchemaContractTest(unittest.TestCase):
             tableschemas.ROUTE_KEY_COLUMNS,
         )
         self.assertEqual(
-            tableschemas.GAIN_TIMING_TABLE_COLUMNS[:3],
-            tableschemas.ROUTE_KEY_COLUMNS,
+            tableschemas.GAIN_TIMING_KEY_COLUMNS,
+            ['Sample', 'Segment', 'Route', 'Node'],
+        )
+        self.assertEqual(
+            tableschemas.GAIN_TIMING_TABLE_COLUMNS[:4],
+            tableschemas.GAIN_TIMING_KEY_COLUMNS,
         )
         self.assertEqual(
             tableschemas.SEGMENT_METADATA_COLUMNS[:2],
@@ -86,8 +90,8 @@ class TableSchemaContractTest(unittest.TestCase):
             'N_Mutations',
         ])
         self.assertEqual(tableschemas.GAIN_TIMING_TABLE_COLUMNS, [
-            'Sample_ID',
-            'Segment_ID',
+            'Sample',
+            'Segment',
             'Route',
             'Node',
             'Node_Phasing',

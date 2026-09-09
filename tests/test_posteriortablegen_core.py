@@ -153,8 +153,8 @@ def make_gain_timing_row(
     node_phasing='Major',
 ):
     return {
-        'Sample_ID': sample_id,
-        'Segment_ID': segment_id,
+        'Sample': sample_id,
+        'Segment': segment_id,
         'Route': route,
         'Node': node,
         'Node_Phasing': node_phasing,
@@ -504,8 +504,8 @@ class InputTableValidationTest(unittest.TestCase):
             )
 
         for column, value in (
-            ('Sample_ID', ''),
-            ('Segment_ID', None),
+            ('Sample', ''),
+            ('Segment', None),
             ('Route', ' '),
             ('Node', np.nan),
         ):
@@ -524,7 +524,7 @@ class InputTableValidationTest(unittest.TestCase):
         cases = []
         cases.append((
             timing_table([make_gain_timing_row(sample_id='other')]),
-            'other Sample_ID',
+            'other Sample',
         ))
         cases.append((
             timing_table([make_gain_timing_row(), make_gain_timing_row()]),
@@ -795,9 +795,9 @@ class PosteriorSegmentGenerationTest(unittest.TestCase):
         for value in (0, -1, 1.5, True, np.bool_(False), '2'):
             with self.subTest(value=value):
                 with self.assertRaisesRegex(ValueError, 'positive integer'):
-                    posteriortablegen._validate_n_posterior_samples(value)
-        for value in (1, np.int64(2)):
-            posteriortablegen._validate_n_posterior_samples(value)
+                    posteriortablegen.get_sample_posterior_tables(
+                        None, None, None, 'sample', n_posterior_samples=value,
+                    )
 
 
 class SamplePosteriorArchiveIntegrationTest(unittest.TestCase):

@@ -30,84 +30,20 @@ def make_segment_mutation_table(
     })
 
 
-class ScalarParameterValidationTest(unittest.TestCase):
-    def test_non_negative_integer_validation(self):
-        for value in (0, 7, np.int64(3)):
-            with self.subTest(valid=value):
-                validated = sampletools._validate_non_negative_integer(
-                    value,
-                    'count',
-                )
-                self.assertIs(type(validated), int)
-                self.assertEqual(validated, int(value))
+class PurityValidationTest(unittest.TestCase):
+    def test_sample_and_segment_reject_numeric_strings(self):
+        with self.assertRaisesRegex(ValueError, 'purity must be a finite number'):
+            sampletools.Sample(
+                None, None, None, sample_id='TEST', purity='0.8',
+            )
+        with self.assertRaisesRegex(ValueError, 'purity must be a finite number'):
+            sampletools.Segment(
+                make_segment_mutation_table(), None, purity='0.8', sex=None,
+            )
 
-        for value in (-1, 1.0, True, np.bool_(False), '3', None):
-            with self.subTest(invalid=value):
-                with self.assertRaisesRegex(
-                    ValueError,
-                    'count must be a non-negative integer',
-                ):
-                    sampletools._validate_non_negative_integer(value, 'count')
 
-    def test_closed_unit_interval_validation(self):
-        for value in (0, 1, 0.125, np.float64(0.75)):
-            with self.subTest(valid=value):
-                self.assertEqual(
-                    sampletools._validate_unit_interval_number(
-                        value,
-                        'fraction',
-                    ),
-                    float(value),
-                )
-
-        for value in (
-            -0.01,
-            1.01,
-            True,
-            np.nan,
-            np.inf,
-            -np.inf,
-            '0.5',
-            None,
-        ):
-            with self.subTest(invalid=value):
-                with self.assertRaisesRegex(ValueError, 'between 0 and 1'):
-                    sampletools._validate_unit_interval_number(
-                        value,
-                        'fraction',
-                    )
-
-    def test_minimum_subclone_ccf_uses_open_lower_bound(self):
-        for value in (1e-12, 0.5, 1):
-            with self.subTest(valid=value):
-                self.assertEqual(
-                    sampletools.validate_min_subclone_ccf(value),
-                    float(value),
-                )
-
-        for value in (0, -0.1, 1.1, True, np.nan, np.inf, '0.1'):
-            with self.subTest(invalid=value):
-                with self.assertRaisesRegex(ValueError, 'greater than 0'):
-                    sampletools.validate_min_subclone_ccf(value)
-
-    def test_coverage_quantile_accepts_both_endpoints(self):
-        self.assertEqual(sampletools.validate_coverage_vaf_quantile(0), 0.0)
-        self.assertEqual(sampletools.validate_coverage_vaf_quantile(1), 1.0)
-
-        for value in (-0.1, 1.1, True, np.nan, np.inf, '0.9'):
-            with self.subTest(invalid=value):
-                with self.assertRaisesRegex(ValueError, 'between 0 and 1'):
-                    sampletools.validate_coverage_vaf_quantile(value)
-
-    def test_shared_biology_validators_delegate_to_dataloader(self):
-        with mock.patch.object(
-            sampletools.dataloader,
-            'validate_purity',
-            return_value=0.7,
-        ) as purity_mock:
-            self.assertEqual(sampletools.validate_purity('input'), 0.7)
-        purity_mock.assert_called_once_with('input')
-
+class NormalCopyNumberTest(unittest.TestCase):
+    def test_normal_copy_number_delegates_to_dataloader(self):
         with mock.patch.object(
             sampletools.dataloader,
             'get_normal_total_copy_number',

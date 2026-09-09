@@ -1,15 +1,16 @@
 import warnings
 from collections.abc import Mapping
-from numbers import Integral, Real
+from numbers import Integral
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from gritic import timingio
+from gritic import timingio, validation
 from gritic.intervaltools import DEFAULT_TIMING_INTERVALS, get_interval_bounds
 from gritic.tableschemas import (
     GAIN_DRAW_COLUMNS,
+    GAIN_TIMING_KEY_COLUMNS,
     GAIN_TIMING_TABLE_COLUMNS,
     NODE_PHASING_LABELS,
     ROUTE_PARTICLES_REPRESENTATION,
@@ -175,6 +176,8 @@ def _read_table(path, table_name):
             dtype={
                 'Sample_ID': str,
                 'Segment_ID': str,
+                'Sample': str,
+                'Segment': str,
                 'Route': str,
                 'Chromosome': str,
             },
@@ -258,16 +261,16 @@ def _validate_gain_timing_table(gain_timing_table, route_table, sample_id):
 
     _validate_identifiers(
         gain_timing_table,
-        ROUTE_KEY_COLUMNS + ['Node'],
+        GAIN_TIMING_KEY_COLUMNS,
         'gain timing table',
     )
     unexpected_sample_ids = sorted(
-        set(gain_timing_table['Sample_ID']) - {str(sample_id)}
+        set(gain_timing_table['Sample']) - {str(sample_id)}
     )
     if unexpected_sample_ids:
         raise ValueError(
             f'The gain timing table for sample {sample_id} contains other '
-            f"Sample_ID values: {', '.join(unexpected_sample_ids)}"
+            f"Sample values: {', '.join(unexpected_sample_ids)}"
         )
 
     invalid_node_phasing = ~gain_timing_table['Node_Phasing'].isin(
@@ -295,13 +298,13 @@ def _validate_gain_timing_table(gain_timing_table, route_table, sample_id):
         )
 
     duplicate_nodes = gain_timing_table.duplicated(
-        subset=ROUTE_KEY_COLUMNS + ['Node'],
+        subset=GAIN_TIMING_KEY_COLUMNS,
         keep=False,
     )
     if duplicate_nodes.any():
         duplicate_table = gain_timing_table.loc[
             duplicate_nodes,
-            ROUTE_KEY_COLUMNS + ['Node'],
+            GAIN_TIMING_KEY_COLUMNS,
         ].drop_duplicates()
         keys = duplicate_table.itertuples(index=False, name=None)
         raise ValueError(
@@ -313,7 +316,7 @@ def _validate_gain_timing_table(gain_timing_table, route_table, sample_id):
         route_table[ROUTE_KEY_COLUMNS].itertuples(index=False, name=None)
     )
     timing_route_keys = set(
-        gain_timing_table[ROUTE_KEY_COLUMNS].itertuples(
+        gain_timing_table[GAIN_TIMING_KEY_COLUMNS[:3]].itertuples(
             index=False,
             name=None,
         )
@@ -334,7 +337,7 @@ def _validate_gain_timing_table(gain_timing_table, route_table, sample_id):
         ].itertuples(index=False, name=None)
     )
     gain_segment_keys = set(
-        gain_timing_table[SEGMENT_KEY_COLUMNS].itertuples(
+        gain_timing_table[['Sample', 'Segment']].itertuples(
             index=False,
             name=None,
         )
@@ -750,15 +753,6 @@ def produce_timing_segment_tables(
     )
 
 
-def _validate_n_posterior_samples(n_posterior_samples):
-    if (
-        isinstance(n_posterior_samples, (bool, np.bool_))
-        or not isinstance(n_posterior_samples, Integral)
-        or n_posterior_samples <= 0
-    ):
-        raise ValueError('n_posterior_samples must be a positive integer')
-
-
 def get_sample_posterior_tables(
     route_table_path,
     timing_table_path,
@@ -768,9 +762,10 @@ def get_sample_posterior_tables(
     apply_penalty: bool = False,
 ):
     """Return gain draws and the one-row-per-draw route ledger."""
-    if not isinstance(apply_penalty, (bool, np.bool_)):
-        raise ValueError('apply_penalty must be a boolean')
-    _validate_n_posterior_samples(n_posterior_samples)
+    apply_penalty = validation.validate_boolean(apply_penalty, 'apply_penalty')
+    n_posterior_samples = validation.validate_integer(
+        n_posterior_samples, 'n_posterior_samples', minimum=1,
+    )
 
     route_table = _read_table(route_table_path, 'route table')
     gain_timing_table = _read_table(
@@ -791,8 +786,8 @@ def get_sample_posterior_tables(
         sort=False,
     ):
         segment_timing_table = gain_timing_table.loc[
-            (gain_timing_table['Sample_ID'] == str(sample_id))
-            & (gain_timing_table['Segment_ID'] == segment_id)
+            (gain_timing_table['Sample'] == str(sample_id))
+            & (gain_timing_table['Segment'] == segment_id)
         ]
         timing_representation = segment_route_table[
             TIMING_REPRESENTATION_COLUMN
@@ -1011,14 +1006,9 @@ def get_sample_posterior_table_summary(
     interval=DEFAULT_TIMING_INTERVALS.posterior_summary,
 ):
     """Summarize gain draws with route-ledger draw counts as denominators."""
-    if (
-        isinstance(min_proportion_threshold, (bool, np.bool_))
-        or not isinstance(min_proportion_threshold, Real)
-        or not 0 <= min_proportion_threshold <= 1
-    ):
-        raise ValueError(
-            'min_proportion_threshold must be a number between 0 and 1'
-        )
+    min_proportion_threshold = validation.validate_proportion(
+        min_proportion_threshold, 'min_proportion_threshold',
+    )
     _validate_draw_tables(gain_draw_table, route_draw_table)
     if route_draw_table.empty:
         return pd.DataFrame(columns=SUMMARY_COLUMNS)

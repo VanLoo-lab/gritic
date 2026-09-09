@@ -1,11 +1,10 @@
 import argparse
 import logging
-import math
 from contextlib import contextmanager
 
 import pandas as pd
 
-from gritic import dataloader, gritictimer, intervaltools, sampletools
+from gritic import dataloader, gritictimer, intervaltools, sampletools, validation
 
 
 @contextmanager
@@ -33,79 +32,46 @@ def _cli_progress_logging():
 
 def nonnegative_integer(value):
     try:
-        parsed_value = int(value)
-    except (TypeError, ValueError) as error:
+        return validation.validate_integer(int(value), 'value')
+    except (TypeError, ValueError, OverflowError) as error:
         raise argparse.ArgumentTypeError('must be a non-negative integer') from error
-    if parsed_value < 0:
-        raise argparse.ArgumentTypeError('must be a non-negative integer')
-    return parsed_value
 
 
 def positive_integer(value):
     try:
-        parsed_value = int(value)
-    except (TypeError, ValueError) as error:
+        return validation.validate_integer(int(value), 'value', minimum=1)
+    except (TypeError, ValueError, OverflowError) as error:
         raise argparse.ArgumentTypeError('must be a positive integer') from error
-    if parsed_value <= 0:
-        raise argparse.ArgumentTypeError('must be a positive integer')
-    return parsed_value
 
 
 def random_seed(value):
     try:
-        parsed_value = int(value)
-    except (TypeError, ValueError) as error:
+        return validation.validate_integer(
+            int(value), 'random_seed', maximum=2**32 - 1,
+        )
+    except (TypeError, ValueError, OverflowError) as error:
         raise argparse.ArgumentTypeError(
             'must be an integer between 0 and 2**32 - 1'
         ) from error
-    if not 0 <= parsed_value <= 2**32 - 1:
-        raise argparse.ArgumentTypeError(
-            'must be an integer between 0 and 2**32 - 1'
-        )
-    return parsed_value
 
 
 def unit_interval_number(value):
     try:
-        parsed_value = float(value)
-    except (TypeError, ValueError) as error:
+        return validation.validate_proportion(float(value), 'value')
+    except (TypeError, ValueError, OverflowError) as error:
         raise argparse.ArgumentTypeError(
             'must be a finite number between 0 and 1'
         ) from error
-    if not math.isfinite(parsed_value) or not 0 <= parsed_value <= 1:
-        raise argparse.ArgumentTypeError(
-            'must be a finite number between 0 and 1'
-        )
-    return parsed_value
 
 
-def minimum_subclone_ccf(value):
+def positive_unit_interval_number(value):
     try:
-        parsed_value = float(value)
-        return sampletools.validate_min_subclone_ccf(parsed_value)
-    except (TypeError, ValueError) as error:
+        return validation.validate_proportion(
+            float(value), 'value', allow_zero=False,
+        )
+    except (TypeError, ValueError, OverflowError) as error:
         raise argparse.ArgumentTypeError(
             'must be a finite number greater than 0 and at most 1'
-        ) from error
-
-
-def quantile(value):
-    try:
-        parsed_value = float(value)
-        return sampletools.validate_coverage_vaf_quantile(parsed_value)
-    except (TypeError, ValueError) as error:
-        raise argparse.ArgumentTypeError(
-            'must be a finite number between 0 and 1'
-        ) from error
-
-
-def interval_width(value):
-    try:
-        parsed_value = float(value)
-        return intervaltools.validate_interval_width(parsed_value)
-    except (TypeError, ValueError) as error:
-        raise argparse.ArgumentTypeError(
-            'must be a finite proportion greater than 0 and at most 1'
         ) from error
 
 
@@ -119,7 +85,7 @@ def _add_interval_arguments(
     argument_group.add_argument(
         f'--{option_name}-interval-width',
         dest=f'{destination}_interval_width',
-        type=interval_width,
+        type=positive_unit_interval_number,
         default=default_interval.width,
         metavar='PROPORTION',
         help=(
@@ -226,7 +192,7 @@ def build_parser():
     )
     required_arguments.add_argument(
         '--purity',
-        type=sampletools.validate_purity,
+        type=positive_unit_interval_number,
         required=True,
         help=(
             'The purity of the sample as determined by the copy number '
@@ -342,7 +308,7 @@ def build_parser():
     )
     mutation_arguments.add_argument(
         '--coverage-vaf-quantile',
-        type=quantile,
+        type=unit_interval_number,
         default=sampletools.DEFAULT_COVERAGE_VAF_QUANTILE,
         metavar='QUANTILE',
         help=(
@@ -379,7 +345,7 @@ def build_parser():
     )
     subclone_arguments.add_argument(
         '--min-subclone-ccf',
-        type=minimum_subclone_ccf,
+        type=positive_unit_interval_number,
         default=sampletools.DEFAULT_MIN_SUBCLONE_CCF,
         help=(
             'Minimum Subclone_CCF retained as a subclone, inclusive; it must '

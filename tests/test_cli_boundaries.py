@@ -82,29 +82,25 @@ class CliTypeValidationTest(unittest.TestCase):
                 ):
                     cli.unit_interval_number(value)
 
-    def test_domain_specific_number_types_translate_validation_errors(self):
+    def test_number_types_translate_validation_errors(self):
         valid_cases = (
-            (cli.minimum_subclone_ccf, '0.01', 0.01),
-            (cli.minimum_subclone_ccf, '1', 1.0),
-            (cli.quantile, '0', 0.0),
-            (cli.quantile, '1', 1.0),
-            (cli.interval_width, '0.01', 0.01),
-            (cli.interval_width, '1', 1.0),
+            (cli.positive_unit_interval_number, '0.01', 0.01),
+            (cli.positive_unit_interval_number, '1', 1.0),
+            (cli.unit_interval_number, '0', 0.0),
+            (cli.unit_interval_number, '1', 1.0),
         )
         for converter, value, expected in valid_cases:
             with self.subTest(converter=converter.__name__, value=value):
                 self.assertEqual(converter(value), expected)
 
         invalid_cases = (
-            (cli.minimum_subclone_ccf, '0', 'greater than 0'),
-            (cli.minimum_subclone_ccf, 'nan', 'greater than 0'),
-            (cli.minimum_subclone_ccf, None, 'greater than 0'),
-            (cli.quantile, '-0.1', 'between 0 and 1'),
-            (cli.quantile, 'nan', 'between 0 and 1'),
-            (cli.quantile, None, 'between 0 and 1'),
-            (cli.interval_width, '0', 'greater than 0'),
-            (cli.interval_width, 'inf', 'greater than 0'),
-            (cli.interval_width, None, 'greater than 0'),
+            (cli.positive_unit_interval_number, '0', 'greater than 0'),
+            (cli.positive_unit_interval_number, 'nan', 'greater than 0'),
+            (cli.positive_unit_interval_number, 'inf', 'greater than 0'),
+            (cli.positive_unit_interval_number, None, 'greater than 0'),
+            (cli.unit_interval_number, '-0.1', 'between 0 and 1'),
+            (cli.unit_interval_number, 'nan', 'between 0 and 1'),
+            (cli.unit_interval_number, None, 'between 0 and 1'),
         )
         for converter, value, message in invalid_cases:
             with self.subTest(converter=converter.__name__, value=value):
@@ -113,6 +109,23 @@ class CliTypeValidationTest(unittest.TestCase):
 
 
 class CliParserBoundaryTest(CliArgumentFixture, unittest.TestCase):
+    def test_purity_is_parsed_as_a_positive_proportion(self):
+        parser = cli.build_parser()
+        for value in ('0.25', '1'):
+            with self.subTest(valid=value):
+                args = parser.parse_args([
+                    *self.required_arguments(), '--purity', value,
+                ])
+                self.assertIs(type(args.purity), float)
+                self.assertEqual(args.purity, float(value))
+        for value in ('0', '-0.1', '1.01', 'nan', 'inf', 'bad'):
+            with self.subTest(invalid=value):
+                self.assert_parse_error(
+                    [*self.required_arguments(), '--purity', value],
+                    'argument --purity: must be a finite number greater than 0 '
+                    'and at most 1',
+                )
+
     def test_required_arguments_are_enforced(self):
         self.assert_parse_error([], 'the following arguments are required:')
         self.assert_parse_error(

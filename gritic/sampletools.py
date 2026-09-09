@@ -1,6 +1,5 @@
 import warnings
 import unicodedata
-from numbers import Integral, Real
 
 import numpy as np
 import pandas as pd
@@ -10,6 +9,7 @@ from numba import njit,prange
 
 import gritic.multiplicityoptimiser as multiplicityoptimiser
 import gritic.dataloader as dataloader
+from gritic import validation
 
 
 DEFAULT_MIN_MUTATION_ALT_COUNT = 3
@@ -53,63 +53,6 @@ _LONGEST_SAMPLE_ID_OUTPUT_SUFFIX = (
 )
 
 
-def _validate_non_negative_integer(value, parameter_name):
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, Integral)
-        or value < 0
-    ):
-        raise ValueError(f'{parameter_name} must be a non-negative integer')
-    return int(value)
-
-
-def _validate_unit_interval_number(value, parameter_name):
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, Real)
-        or not np.isfinite(value)
-        or not 0 <= value <= 1
-    ):
-        raise ValueError(
-            f'{parameter_name} must be a finite number between 0 and 1'
-        )
-    return float(value)
-
-
-def validate_min_subclone_ccf(value):
-    """Return a finite lower subclone-CCF bound in ``(0, 1]``."""
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, Real)
-        or not np.isfinite(value)
-        or not 0 < value <= 1
-    ):
-        raise ValueError(
-            'min_subclone_ccf must be a finite number greater than 0 and '
-            'at most 1'
-        )
-    return float(value)
-
-
-def validate_coverage_vaf_quantile(value):
-    """Return a finite VAF quantile in the NumPy-supported ``[0, 1]``."""
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, Real)
-        or not np.isfinite(value)
-        or not 0 <= value <= 1
-    ):
-        raise ValueError(
-            'coverage_vaf_quantile must be a finite number between 0 and 1'
-        )
-    return float(value)
-
-
-def validate_purity(value):
-    """Return a finite purity in the biologically meaningful ``(0, 1]``."""
-    return dataloader.validate_purity(value)
-
-
 def frequency_weighted_quantile(values, frequencies, quantile):
     """Return NumPy's linear quantile of an integer-frequency sample.
 
@@ -120,7 +63,7 @@ def frequency_weighted_quantile(values, frequencies, quantile):
     """
     values = np.asarray(values, dtype=np.float64)
     frequencies = np.asarray(frequencies, dtype=np.int64)
-    quantile = validate_coverage_vaf_quantile(quantile)
+    quantile = validation.validate_proportion(quantile, 'quantile')
     if values.ndim != 1 or frequencies.ndim != 1:
         raise ValueError('values and frequencies must be one-dimensional')
     if values.size == 0 or values.size != frequencies.size:
@@ -833,33 +776,37 @@ class Sample:
     ):
 
         self.sample_id = validate_sample_id(sample_id)
-        self.purity = validate_purity(purity)
+        self.purity = validation.validate_proportion(
+            purity, 'purity', allow_zero=False,
+        )
         sex = dataloader.validate_sex_karyotype(sex)
-        self.autosome_count = dataloader.validate_autosome_count(
-            autosome_count,
+        self.autosome_count = validation.validate_integer(
+            autosome_count, 'autosome_count', minimum=1,
         )
         self.autosomes = dataloader.get_autosome_labels(self.autosome_count)
         self.merge_cn = merge_cn
-        self.max_merge_gap = dataloader.validate_max_merge_gap(max_merge_gap)
+        self.max_merge_gap = validation.validate_integer(
+            max_merge_gap, 'max_merge_gap', allow_none=True,
+        )
         self.apply_reads_correction = apply_reads_correction
         self.drop_unmatched_snvs = drop_unmatched_snvs
         self.drop_unmatched_chromosomes = drop_unmatched_chromosomes
         self.drop_unrecognized_phasing = drop_unrecognized_phasing
-        self.min_mutation_alt_count = _validate_non_negative_integer(
+        self.min_mutation_alt_count = validation.validate_integer(
             min_mutation_alt_count,
             'min_mutation_alt_count',
         )
-        self.min_mutation_coverage = _validate_non_negative_integer(
+        self.min_mutation_coverage = validation.validate_integer(
             min_mutation_coverage,
             'min_mutation_coverage',
         )
-        self.coverage_vaf_quantile = validate_coverage_vaf_quantile(
-            coverage_vaf_quantile
+        self.coverage_vaf_quantile = validation.validate_proportion(
+            coverage_vaf_quantile, 'coverage_vaf_quantile',
         )
-        self.min_subclone_ccf = validate_min_subclone_ccf(
-            min_subclone_ccf,
+        self.min_subclone_ccf = validation.validate_proportion(
+            min_subclone_ccf, 'min_subclone_ccf', allow_zero=False,
         )
-        self.max_subclone_ccf = _validate_unit_interval_number(
+        self.max_subclone_ccf = validation.validate_proportion(
             max_subclone_ccf,
             'max_subclone_ccf',
         )
@@ -868,13 +815,13 @@ class Sample:
                 'min_subclone_ccf must be less than or equal to '
                 'max_subclone_ccf'
             )
-        self.min_subclone_fraction = _validate_unit_interval_number(
+        self.min_subclone_fraction = validation.validate_proportion(
             min_subclone_fraction,
             'min_subclone_fraction',
         )
-        if not isinstance(clip_subclone_ccf, (bool, np.bool_)):
-            raise ValueError('clip_subclone_ccf must be a boolean')
-        self.clip_subclone_ccf = bool(clip_subclone_ccf)
+        self.clip_subclone_ccf = validation.validate_boolean(
+            clip_subclone_ccf, 'clip_subclone_ccf',
+        )
         if (
             _validation_token is not None
             and _validation_token is not _VALIDATED_INPUT_TABLES
@@ -1347,17 +1294,19 @@ class Segment:
                 subclone_table
             )
         self.sex = sex
-        self.min_mutation_alt_count = _validate_non_negative_integer(
+        self.min_mutation_alt_count = validation.validate_integer(
             min_mutation_alt_count,
             'min_mutation_alt_count',
         )
-        self.coverage_vaf_quantile = validate_coverage_vaf_quantile(
-            coverage_vaf_quantile
+        self.coverage_vaf_quantile = validation.validate_proportion(
+            coverage_vaf_quantile, 'coverage_vaf_quantile',
         )
         self.sample_clone_fractions = self.get_sample_clone_fractions()
         self.n_subclones = self.get_n_subclones()
         self.apply_reads_correction = apply_reads_correction
-        self.purity = validate_purity(purity)
+        self.purity = validation.validate_proportion(
+            purity, 'purity', allow_zero=False,
+        )
 
         self.segment_id = self.get_unique_attribute_from_table('Segment_ID')
 

@@ -97,7 +97,7 @@ class CliModulePlotIntegrationTest(unittest.TestCase):
                 set(route_table['Segment_ID']),
                 {'1-0-1000', '1-1000-1200'},
             )
-            self.assertEqual(set(gain_table['Segment_ID']), {'1-1000-1200'})
+            self.assertEqual(set(gain_table['Segment']), {'1-1000-1200'})
 
             plot_directory = (
                 sample_output

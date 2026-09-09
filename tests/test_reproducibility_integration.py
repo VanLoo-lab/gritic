@@ -41,15 +41,6 @@ def make_subclonal_gain_sample():
 
 
 class RandomSeedValidationTest(unittest.TestCase):
-    def test_validator_accepts_full_numpy_seed_range(self):
-        for seed in (0, 1, np.int64(17), 2**32 - 1, None):
-            with self.subTest(seed=seed):
-                expected = None if seed is None else int(seed)
-                self.assertEqual(
-                    gritictimer._validate_random_seed(seed),
-                    expected,
-                )
-
     def test_process_sample_rejects_invalid_seed_before_creating_output(self):
         invalid_seeds = (
             True,
@@ -66,7 +57,7 @@ class RandomSeedValidationTest(unittest.TestCase):
                 with self.subTest(seed=seed):
                     with self.assertRaisesRegex(
                         ValueError,
-                        r'random_seed.*between 0 and 2\*\*32 - 1',
+                        r'random_seed.*between 0 and 4294967295',
                     ):
                         gritictimer.process_sample(
                             sample,

@@ -1,27 +1,13 @@
 from dataclasses import dataclass, field
-from numbers import Real
 
 import numpy as np
+
+from gritic import validation
 
 
 HPD = 'hpd'
 EQUAL_TAILED = 'equal-tailed'
 INTERVAL_METHODS = (HPD, EQUAL_TAILED)
-
-
-def validate_interval_width(width):
-    """Return a credible-interval width expressed as a proportion."""
-    if (
-        isinstance(width, (bool, np.bool_))
-        or not isinstance(width, Real)
-        or not np.isfinite(width)
-        or not 0 < width <= 1
-    ):
-        raise ValueError(
-            'interval width must be a finite proportion greater than 0 and at '
-            'most 1'
-        )
-    return float(width)
 
 
 @dataclass(frozen=True)
@@ -30,7 +16,12 @@ class IntervalSpec:
     method: str = HPD
 
     def __post_init__(self):
-        object.__setattr__(self, 'width', validate_interval_width(self.width))
+        object.__setattr__(
+            self, 'width',
+            validation.validate_proportion(
+                self.width, 'interval width', allow_zero=False,
+            ),
+        )
         if self.method not in INTERVAL_METHODS:
             raise ValueError(
                 'interval method must be one of: '

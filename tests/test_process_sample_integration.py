@@ -409,6 +409,8 @@ class ProcessSampleIntegrationTest(unittest.TestCase):
                 sep='\t',
             )
             self.assertEqual(len(gain_table), 1)
+            self.assertEqual(gain_table.loc[0, 'Sample'], 'GAIN')
+            self.assertEqual(gain_table.loc[0, 'Segment'], '1-1000-1200')
             self.assertEqual(gain_table.loc[0, 'Route'], route_id)
             self.assertEqual(gain_table.loc[0, 'Node_Phasing'], 'Major')
             self.assertTrue(

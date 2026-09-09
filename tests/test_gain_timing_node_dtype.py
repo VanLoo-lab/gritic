@@ -27,13 +27,13 @@ class GainTimingNodeDtypeTest(unittest.TestCase):
             ]
         )
         empty_timing_table = classifier.get_timing_table()
-        empty_timing_table['Segment_ID'] = 'segment-without-gains'
-        empty_timing_table['Sample_ID'] = 'sample'
+        empty_timing_table['Segment'] = 'segment-without-gains'
+        empty_timing_table['Sample'] = '001'
 
         timing_table = pd.DataFrame(
             {
-                'Sample_ID': ['sample', 'sample'],
-                'Segment_ID': ['segment-with-gains', 'segment-with-gains'],
+                'Sample': ['001', '001'],
+                'Segment': ['0002', '0002'],
                 'Route': ['route', 'route'],
                 'Node': [0, 2],
                 'Node_Phasing': ['Major', 'Major'],
@@ -55,13 +55,20 @@ class GainTimingNodeDtypeTest(unittest.TestCase):
                 table_path,
             )
 
-            written_table = pd.read_csv(table_path, sep='\t')
+            written_table = pd.read_csv(
+                table_path,
+                sep='\t',
+                dtype={'Sample': str, 'Segment': str},
+            )
             node_column = [
                 line.split('\t')[3]
                 for line in table_path.read_text().splitlines()[1:]
             ]
 
         self.assertEqual(node_column, ['0', '2'])
+        self.assertEqual(written_table.columns.tolist(), GAIN_TIMING_TABLE_COLUMNS)
+        self.assertEqual(written_table['Sample'].tolist(), ['001', '001'])
+        self.assertEqual(written_table['Segment'].tolist(), ['0002', '0002'])
         self.assertTrue(pd.api.types.is_integer_dtype(written_table['Node']))
         self.assertEqual(written_table['Node'].tolist(), [0, 2])
 

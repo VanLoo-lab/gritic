@@ -163,16 +163,16 @@ class InputSchemaValidationTest(DataloaderFixtures, unittest.TestCase):
 
 
 class ScalarAndChromosomeValidationTest(DataloaderFixtures, unittest.TestCase):
-    def test_sex_autosome_and_purity_validators_accept_canonical_boundaries(self):
+    def test_sex_and_autosome_validators_accept_canonical_boundaries(self):
         for sex in (None, 'XX', 'XY', 'ZZ', 'ZW'):
             with self.subTest(sex=sex):
                 self.assertEqual(dataloader.validate_sex_karyotype(sex), sex)
-        self.assertEqual(dataloader.validate_autosome_count(np.int64(3)), 3)
+        self.assertEqual(
+            dataloader.get_autosome_labels(np.int64(3)), ('1', '2', '3'),
+        )
         self.assertEqual(dataloader.get_autosome_labels(3), ('1', '2', '3'))
-        self.assertEqual(dataloader.validate_purity('0.25'), 0.25)
-        self.assertEqual(dataloader.validate_purity(1), 1.0)
 
-    def test_sex_autosome_and_purity_validators_reject_invalid_values(self):
+    def test_sex_and_autosome_validators_reject_invalid_values(self):
         for sex in ('xx', 'XO', 1):
             with self.subTest(sex=sex):
                 with self.assertRaisesRegex(ValueError, 'XX, XY, ZZ, or ZW'):
@@ -181,21 +181,26 @@ class ScalarAndChromosomeValidationTest(DataloaderFixtures, unittest.TestCase):
         for autosome_count in (True, np.bool_(False), 0, -1, 1.0, '2', None):
             with self.subTest(autosome_count=autosome_count):
                 with self.assertRaisesRegex(ValueError, 'positive integer'):
-                    dataloader.validate_autosome_count(autosome_count)
+                    dataloader.get_autosome_labels(autosome_count)
 
+    def test_nrpcc_rejects_invalid_purity_before_table_access(self):
         for purity in (
             False,
             np.bool_(True),
             0,
             -0.1,
             1.01,
+            '0.25',
+            '1',
             'nan',
+            np.nan,
             float('inf'),
+            None,
             object(),
         ):
             with self.subTest(purity=purity):
-                with self.assertRaisesRegex(ValueError, 'Purity must be finite'):
-                    dataloader.validate_purity(purity)
+                with self.assertRaisesRegex(ValueError, 'purity must be a finite number'):
+                    dataloader.calculate_nrpcc(None, None, purity)
 
     def test_normal_copy_number_uses_karyotype_specific_sex_chromosomes(self):
         expected = {
@@ -1002,16 +1007,18 @@ class DataloaderIOAndPloidyTest(DataloaderFixtures, unittest.TestCase):
             'Tumor_Alt_Count': [10, 20],
         })
 
-        nrpcc, coverage, tumor_ploidy = dataloader.calculate_nrpcc(
-            copy_number,
-            mutations,
-            purity=0.5,
-            sex='XX',
-        )
+        for purity, expected_nrpcc in ((0.25, 3), (np.float64(0.5), 5), (1, 7.5)):
+            with self.subTest(purity=purity):
+                nrpcc, coverage, tumor_ploidy = dataloader.calculate_nrpcc(
+                    copy_number,
+                    mutations,
+                    purity=purity,
+                    sex='XX',
+                )
 
-        self.assertEqual(coverage, 30)
-        self.assertEqual(tumor_ploidy, 4)
-        self.assertEqual(nrpcc, 5)
+                self.assertEqual(coverage, 30)
+                self.assertEqual(tumor_ploidy, 4)
+                self.assertEqual(nrpcc, expected_nrpcc)
 
 
 if __name__ == '__main__':

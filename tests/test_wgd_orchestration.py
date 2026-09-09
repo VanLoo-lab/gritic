@@ -176,7 +176,7 @@ class AutomaticWGDIntegrationTest(unittest.TestCase):
                 sep='\t',
             )
             self.assertFalse(gain_table.empty)
-            self.assertEqual(set(gain_table['Segment_ID']), {'1-1000-1200'})
+            self.assertEqual(set(gain_table['Segment']), {'1-1000-1200'})
 
             archive_path, manifest_path = timingio.get_timing_archive_paths(
                 output_directory / 'AUTO_WGD_COMPLEX_timing_dicts',

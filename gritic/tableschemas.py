@@ -1,5 +1,6 @@
 ROUTE_KEY_COLUMNS = ['Sample_ID', 'Segment_ID', 'Route']
 SEGMENT_KEY_COLUMNS = ['Sample_ID', 'Segment_ID']
+GAIN_TIMING_KEY_COLUMNS = ['Sample', 'Segment', 'Route', 'Node']
 NODE_PHASING_LABELS = ('Major', 'Minor')
 TIMING_REPRESENTATION_COLUMN = 'Timing_Representation'
 UNIFORM_NO_GAIN_REPRESENTATION = 'Uniform_No_Gain'
@@ -94,11 +95,7 @@ ROUTE_TABLE_COLUMNS = [
     'WGD_Timing_CI_High',
 ]
 
-GAIN_TIMING_TABLE_COLUMNS = [
-    'Sample_ID',
-    'Segment_ID',
-    'Route',
-    'Node',
+GAIN_TIMING_TABLE_COLUMNS = GAIN_TIMING_KEY_COLUMNS + [
     'Node_Phasing',
     'Timing',
     'Timing_CI_Low',

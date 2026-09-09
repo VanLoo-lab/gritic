@@ -553,26 +553,5 @@ class TimerHelperTest(unittest.TestCase):
             'Best_Overlap_Timing': None,
         })
 
-    def test_wgd_count_validation(self):
-        self.assertIsNone(gritictimer._validate_wgd_count(None))
-        for value in (0, 1, np.int64(1)):
-            self.assertEqual(gritictimer._validate_wgd_count(value), int(value))
-        for value in (-1, 2, 0.0, True, np.bool_(False), '1'):
-            with self.subTest(value=value):
-                with self.assertRaisesRegex(ValueError, '0 or 1'):
-                    gritictimer._validate_wgd_count(value)
-
-    def test_minimum_wgd_overlap_validation(self):
-        for value, expected in ((0, 0.0), (0.5, 0.5), (np.float64(1), 1.0)):
-            self.assertEqual(
-                gritictimer._validate_min_wgd_overlap(value),
-                expected,
-            )
-        for value in (-0.1, 1.1, np.nan, np.inf, True, '0.5'):
-            with self.subTest(value=value):
-                with self.assertRaisesRegex(ValueError, 'between 0 and 1'):
-                    gritictimer._validate_min_wgd_overlap(value)
-
-
 if __name__ == '__main__':
     unittest.main()
