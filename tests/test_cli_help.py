@@ -27,7 +27,7 @@ class CliHelpTest(unittest.TestCase):
                 '--drop-unmatched-chromosomes',
                 '--drop-unmatched-snvs',
                 '--drop-unrecognized-phasing',
-                '--no-merge-adjacent-segments',
+                '--keep-adjacent-segments',
                 '--max-merge-gap',
             ),
         ),

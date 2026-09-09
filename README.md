@@ -18,9 +18,7 @@ python -m pip install .
 
 ## Quick start
 
-Run either example from the repository root. Both write directly to `examples/output/TEST_ID`, which must not already exist, even if empty. To reuse it, supply `--overwrite` on the command line or `overwrite=True` to `process_sample`.
-
-### Command line
+Run this example from the repository root. It writes directly to `examples/output/TEST_ID`, which must not already exist, even if empty. To reuse it, supply `--overwrite`.
 
 ```bash
 gritic \
@@ -35,40 +33,7 @@ gritic \
     --plot-trees
 ```
 
-Use `gritic --help` for command-line help or see [run options](#run-options).
-
-### Python API
-
-```python
-import pandas as pd
-
-from gritic import dataloader, gritictimer, sampletools
-
-copy_number_table, mutation_table = dataloader.load_input_tables(
-    'examples/cn_table_example.tsv',
-    'examples/snv_table_example.tsv',
-)
-subclone_table = pd.read_csv(
-    'examples/subclone_table_example.tsv',
-    sep='\t',
-    dtype={'Cluster': str},
-)
-
-sample = sampletools.Sample(
-    mutation_table,
-    copy_number_table,
-    subclone_table,
-    sample_id='TEST_ID',
-    purity=0.5,
-)
-gritictimer.process_sample(
-    sample,
-    sample_dir='examples/output/TEST_ID',
-    plot_trees=True,
-    wgd_count=1,
-    random_seed=20260828,
-)
-```
+Use `gritic --help` for command-line help or see [run options](#run-options). For programmatic use, see [Python API](#python-api).
 
 ## Input tables
 
@@ -100,8 +65,6 @@ GRITIC supports two segment-assignment modes:
 
 In supplied-ID mode, both tables require nonblank `Segment_ID` values, and those IDs must be unique in the copy-number table. Every mutation's `Segment_ID` must match a copy-number row, including its `Chromosome`. If `--drop-unmatched-snvs` is supplied, mutations unmatched by either assignment mode are dropped with one count warning. Missing or blank supplied IDs and chromosome mismatches remain errors.
 
-For unmatched-SNV dropping with supplied segment IDs, `dataloader.load_input_tables(..., drop_unmatched_snvs=True)` removes unmatched rows during loading. For position-based assignment, pass `drop_unmatched_snvs=True` to `sampletools.Sample`.
-
 GRITIC does not model mutations in zero-copy `0+0` segments. In supplied-ID
 mode, mutations assigned to such otherwise valid input segments are dropped with
 one aggregated warning reporting the affected mutation count, segment count, and
@@ -129,11 +92,11 @@ The `1+0` and `1+1` states use uniform no-gain timing. In WGD runs, major-copy-n
 
 #### Segment merging
 
-By default, GRITIC merges consecutive segments on the same chromosome having identical `Major_CN` and `Minor_CN`. The merged interval runs from the first segment's start through the last segment's end, including any intervening uncovered bases. Use `--max-merge-gap` to limit gaps or `--no-merge-adjacent-segments` to preserve input segments; the Python arguments are `max_merge_gap` and `merge_cn=False`. Final segment IDs are generated from `Chromosome`, `Segment_Start`, and `Segment_End` after merging.
+By default, GRITIC merges consecutive segments on the same chromosome having identical `Major_CN` and `Minor_CN`. The merged interval runs from the first segment's start through the last segment's end, including any intervening uncovered bases. Use `--max-merge-gap` to limit gaps or `--keep-adjacent-segments` to preserve input segments. Final segment IDs are generated from `Chromosome`, `Segment_Start`, and `Segment_End` after merging.
 
 #### Chromosome handling
 
-Both input tables accept numbered chromosomes from 1 through `--autosome-count` and the sex chromosomes present under the selected karyotype. Chromosome labels are case-sensitive; one leading `chr` prefix is removed.
+Both input tables accept numbered chromosomes from 1 through `--autosome-count` and the sex chromosomes present under the selected karyotype. Chromosome labels are case-sensitive; `chr` prefixes are removed.
 
 | Karyotype | Present sex chromosomes | Normal X or Z copies | Normal Y or W copies |
 | --- | --- | --- | --- |
@@ -142,13 +105,17 @@ Both input tables accept numbered chromosomes from 1 through `--autosome-count` 
 | ZZ | Z | 2 | 0 |
 | ZW | Z, W | 1 | 1 |
 
-When sample sex is not supplied, GRITIC infers it from the copy-number table: Y implies `XY` and W implies `ZW`; otherwise X implies `XX` and Z implies `ZZ`. If no sex chromosome is represented, GRITIC defaults to `XX`, so callers using another system should supply `--sample-sex`. Inputs mixing the X/Y and Z/W systems cannot be inferred. Chromosomes outside the configured set follow `--drop-unmatched-chromosomes` behavior.
+When sample sex is not supplied, GRITIC infers it from the copy-number table: Y implies `XY` and W implies `ZW`; otherwise X alone implies XX and Z alone implies ZZ. If no sex chromosome is represented, GRITIC defaults to `XX`, so callers using another system should supply `--sample-sex`. Chromosomes outside the configured set follow `--drop-unmatched-chromosomes` behavior.
 
 ### Subclone table
 
 The optional subclone table gives the identified subclonal peaks and their assigned mutation fractions for the sample.
 
-Required columns are `Cluster` (the subclone identifier), `Subclone_CCF` (cancer cell fraction), and `Subclone_Fraction` (the fraction of input SNVs assigned to the subclone). CCF determines the expected VAF of a subclone state; mutation shares determine its mixture prior. `Subclone_Fraction` is not a cellular fraction. `Subclone_Fraction` values must sum to at most 1. Values are validated before filtering.
+Required columns are:
+
+- `Cluster`: the subclone identifier.
+- `Subclone_CCF`: cancer cell fraction. CCF determines the expected VAF of a subclone state.
+- `Subclone_Fraction`: the fraction of input SNVs assigned to the subclone. Mutation shares determine its mixture prior.
 
 Candidates are filtered using the [subclone-handling options](#subclone-handling). If no subclones remain, GRITIC uses its clonal-only model. If there are more than two subclones, GRITIC groups them into two: the subclone with the largest CCF is unmodified and the remaining clones are combined by summing their fractions and taking their fraction-weighted mean CCF.
 
@@ -178,7 +145,7 @@ Probability, proportion, quantile, and interval-width inputs use `[0, 1]`; param
 - `--drop-unmatched-chromosomes` Drop copy-number and mutation rows whose chromosome is not one of the configured autosomes or present sex chromosomes, with warnings reporting the number of rows dropped. By default, any such chromosome is an error.
 - `--drop-unmatched-snvs` Drop mutation rows that cannot be associated with a copy-number segment by either supplied `Segment_ID` or genomic `Position`, with one warning reporting the number dropped. By default, unmatched mutations raise an error.
 - `--drop-unrecognized-phasing` Drop mutation rows whose non-missing `Phasing` value is not `major` or `minor`, with one warning reporting the number dropped. By default, unrecognized phasing labels raise an error.
-- `--no-merge-adjacent-segments` Preserve input copy-number segments separately. See [segment merging](#segment-merging) for the default behavior.
+- `--keep-adjacent-segments` Preserve input copy-number segments separately. See [segment merging](#segment-merging) for the default behavior.
 - `--max-merge-gap N` Merge consecutive equal-copy-number segments only when the gap is at most `N` bases. If omitted, there is no maximum; use `0` to merge only intervals that touch.
 
 ### Mutation filtering and detection correction
@@ -196,7 +163,7 @@ Probability, proportion, quantile, and interval-width inputs use `[0, 1]`; param
 - `--min-subclone-fraction` A subclone's normalized share of the subclonal mutation fractions after CCF filtering must be strictly greater than this threshold (default: 0.1).
 - `--subclone-fraction-prior {adjusted,supplied}` Use detection-adjusted mutation fractions or the supplied fractions in the mutation-share prior (default: `adjusted`). See [detection correction and mutation-share priors](#detection-correction-and-mutation-share-priors).
 
-The CCF bounds must satisfy `0 < min_subclone_ccf <= max_subclone_ccf`.
+The value of `--min-subclone-ccf` must be greater than 0 and no greater than `--max-subclone-ccf`.
 
 ### Inference model and WGD calling
 
@@ -217,8 +184,6 @@ Intervals default to highest posterior density (HPD, `hpd`); `equal-tailed` is a
 | Sample WGD | `--wgd-timing-interval-width`, `--wgd-timing-interval-method` | 0.9 | Final sample-level WGD bounds shared by the calling-info JSON, route table, and yellow tree nodes. |
 | Posterior summary | `--posterior-summary-interval-width`, `--posterior-summary-interval-method` | 0.95 | Gain and gain-conditioned WGD bounds in posterior summaries. |
 | Tree gain | `--tree-gain-interval-width`, `--tree-gain-interval-method` | 0.9 | Blue gain-node labels in tree PDFs. |
-
-Python callers configure intervals through the `interval_config` argument to `process_sample`, using `distributiontools.TimingIntervalConfig` and `distributiontools.IntervalSpec`.
 
 ## Outputs
 
@@ -263,7 +228,7 @@ Gain and WGD statistics on a row use the same subset of draws in which that gain
 
 This table contains one row for each possible route of each timed segment, keyed by `(Sample_ID, Segment_ID, Route)`. Routes with no independently timeable gains are retained here.
 
-`Timing_Representation` is `Route_Particles` for ordinary gained routes and `Uniform_No_Gain` when every extant copy spans the complete `[0,1]` interval. The table stores ordinary `Probability` and post-hoc `Penalized_Probability`, average event and loss counts, a timing-space sampling-density diagnostic (`Density`), runtime (`Time`), and segment and WGD metadata.
+`Timing_Representation` is `Route_Particles` for ordinary gained routes and `Uniform_No_Gain` when every extant copy spans the `[0,1]` interval. The table stores ordinary `Probability` and post-hoc `Penalized_Probability`, average event and loss counts, a timing-space sampling-density diagnostic (`Density`), runtime (`Time`), and segment and WGD metadata.
 
 `Route` is an opaque, order-sensitive identifier of the complete allele route. See [posterior sampling](#posterior-sampling) for the density diagnostic.
 
@@ -336,7 +301,7 @@ See [timing archives](#timing-archives) for the pooled-WGD encoding.
 
 GRITIC calculates the modal `Major_CN`, weighted by segment width, across the configured autosomes. With automatic WGD inference, mode 1 gives a WGD count of 0. Mode 2 triggers timing of autosomal major-copy-number-two segments with at least 10 retained SNVs; at least one must produce a finite timing interval.
 
-`Best_Overlap_Timing` is the mutation-time point covered by the greatest total segment width across the candidate segments' internal WGD-overlap intervals. `Overlap_Proportion` is that covered width divided by the total width of eligible segments with finite intervals. An overlap of at least 60% gives an inferred WGD count of 1; a lower overlap gives 0 and emits a warning. Python callers can set this threshold with `process_sample(..., min_wgd_overlap=...)`.
+`Best_Overlap_Timing` is the mutation-time point covered by the greatest total segment width across the candidate segments' internal WGD-overlap intervals. `Overlap_Proportion` is that covered width divided by the total width of eligible segments with finite intervals. An overlap of at least 60% gives an inferred WGD count of 1; a lower overlap gives 0 and emits a warning.
 
 Overlapping segments are pooled and refit by minor-copy-number class, and their timing densities are combined into 500 sample-level draws. For a WGD call, `WGD_Timing` and its interval fields summarize those draws using the configured sample-WGD interval.
 
@@ -393,17 +358,9 @@ The `_timing_dicts` directory contains compressed posterior archives for mutatio
 - `SEGMENT_ID_timing_dict.npz`
 - `SEGMENT_ID_timing_dict.manifest.json`
 
-Pooled WGD stores use the same pair with a `WGD_minor_cn_N` identifier in place of `SEGMENT_ID`. From the sample output directory, load a store through GRITIC to validate the pair and reconstruct the dictionary hierarchy:
+Pooled WGD stores use the same pair with a `WGD_minor_cn_N` identifier in place of `SEGMENT_ID`. See [Reading timing archives](#reading-timing-archives) for a Python example.
 
-```python
-from gritic.timingio import load_timing_archive
-
-timing_dict = load_timing_archive(
-    'SAMPLE_ID_timing_dicts/1-0-200_timing_dict.npz'
-)
-```
-
-The reconstructed dictionary keys are opaque route identifiers. The rows of `Timing`, `WGD_Timing`, and `Mult` are aligned; use the same row index for one joint posterior draw.
+The rows of `Timing`, `WGD_Timing`, and `Mult` are aligned; use the same row index for one joint posterior draw.
 
 A subclonal `Uniform_No_Gain` route contains only `Clone_Share`, whose columns contain fitted mutation shares for the clonal cluster followed by each subclone.
 
@@ -421,5 +378,70 @@ Each `Route_Particles` entry contains the following numeric arrays:
 - `Archive_Kind` is 0 for an ordinary segment store and 1 for a pooled-WGD store. For pooled `2+2` segments, target metadata describe `2+2` with WGD and model metadata describe `2+0` without WGD. Phasing masks and state slices address the representative major allele; see the [balanced WGD model](#balanced-wgd-segments).
 
 </details>
+
+## Python API
+
+### Running GRITIC
+
+Run this example from the repository root. It writes directly to `examples/output/TEST_ID`. Pass `overwrite=True` to `gritictimer.process_sample` to reuse an existing sample directory; files with matching names are overwritten and other files are preserved.
+
+```python
+import pandas as pd
+
+from gritic import dataloader, gritictimer, sampletools
+
+copy_number_table, mutation_table = dataloader.load_input_tables(
+    'examples/cn_table_example.tsv',
+    'examples/snv_table_example.tsv',
+)
+subclone_table = pd.read_csv(
+    'examples/subclone_table_example.tsv',
+    sep='\t',
+    dtype={'Cluster': str},
+)
+
+sample = sampletools.Sample(
+    mutation_table,
+    copy_number_table,
+    subclone_table,
+    sample_id='TEST_ID',
+    purity=0.5,
+)
+gritictimer.process_sample(
+    sample,
+    sample_dir='examples/output/TEST_ID',
+    plot_trees=True,
+    wgd_count=1,
+    random_seed=20260828,
+)
+```
+
+### Input handling
+
+For unmatched-SNV dropping with supplied segment IDs, `dataloader.load_input_tables(..., drop_unmatched_snvs=True)` removes unmatched rows during loading. For position-based assignment, pass `drop_unmatched_snvs=True` to `sampletools.Sample`.
+
+For [segment merging](#segment-merging), `sampletools.Sample` accepts `max_merge_gap` to limit gaps and `merge_cn=False` to preserve input segments.
+
+The CCF bounds must satisfy `0 < min_subclone_ccf <= max_subclone_ccf`.
+
+### Timing intervals and WGD inference
+
+Python callers configure intervals through the `interval_config` argument to `process_sample`, using `distributiontools.TimingIntervalConfig` and `distributiontools.IntervalSpec`.
+
+Set the [WGD overlap threshold](#wgd-timing-estimation) with `process_sample(..., min_wgd_overlap=...)`; the default is 0.6.
+
+### Reading timing archives
+
+From the sample output directory, load a store through GRITIC to validate the pair and reconstruct the dictionary hierarchy:
+
+```python
+from gritic.timingio import load_timing_archive
+
+timing_dict = load_timing_archive(
+    'SAMPLE_ID_timing_dicts/1-0-200_timing_dict.npz'
+)
+```
+
+The reconstructed dictionary keys are opaque route identifiers. See [Timing archives](#timing-archives) for the array definitions and alignment rules.
 
 [publication]: https://aacrjournals.org/cancerdiscovery/article/14/10/1810/748591/The-History-of-Chromosomal-Instability-in-Genome

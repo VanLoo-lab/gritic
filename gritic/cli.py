@@ -236,7 +236,7 @@ def build_parser():
         ),
     )
     genome_and_input_arguments.add_argument(
-        '--no-merge-adjacent-segments',
+        '--keep-adjacent-segments',
         dest='merge_adjacent_segments',
         action='store_false',
         default=True,

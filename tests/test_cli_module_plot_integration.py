@@ -69,7 +69,7 @@ class CliModulePlotIntegrationTest(unittest.TestCase):
                     '0',
                     '--random-seed',
                     '20260828',
-                    '--no-merge-adjacent-segments',
+                    '--keep-adjacent-segments',
                     '--plot-trees',
                 ],
                 cwd=project_root,

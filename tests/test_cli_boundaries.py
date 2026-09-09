@@ -359,7 +359,7 @@ class CliMainTest(CliArgumentFixture, unittest.TestCase):
             '--drop-unmatched-chromosomes',
             '--drop-unmatched-snvs',
             '--drop-unrecognized-phasing',
-            '--no-merge-adjacent-segments',
+            '--keep-adjacent-segments',
             '--max-merge-gap', '50',
             '--min-mutation-alt-count', '4',
             '--min-mutation-coverage', '11',
