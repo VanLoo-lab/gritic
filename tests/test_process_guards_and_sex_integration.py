@@ -218,6 +218,92 @@ class ProcessSampleGuardTest(unittest.TestCase):
             )
 
 
+class ProcessSampleOverwriteIntegrationTest(unittest.TestCase):
+    @staticmethod
+    def make_sample(include_gain=True):
+        copy_number_table = pd.DataFrame({
+            'Chromosome': ['1', '1'],
+            'Segment_Start': [0, 1_000],
+            'Segment_End': [1_000, 1_200],
+            'Major_CN': [1, 2],
+            'Minor_CN': [1, 1],
+        })
+        mutation_table = pd.DataFrame({
+            'Chromosome': ['1'] * 24,
+            'Position': list(range(10, 22)) + list(range(1_010, 1_022)),
+            'Tumor_Ref_Count': [20] * 24,
+            'Tumor_Alt_Count': [5] * 24,
+        })
+        if not include_gain:
+            copy_number_table = copy_number_table.iloc[:1].copy()
+            mutation_table = mutation_table.iloc[:12].copy()
+        return sampletools.Sample(
+            mutation_table,
+            copy_number_table,
+            None,
+            sample_id='RERUN',
+            purity=0.8,
+            merge_cn=False,
+        )
+
+    def test_overwrite_replaces_results_for_identical_and_changed_inputs(self):
+        sample = self.make_sample()
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / sample.sample_id
+
+            def read_table(suffix):
+                return pd.read_csv(output / f'RERUN_{suffix}.tsv', sep='\t')
+
+            gritictimer.process_sample(
+                sample, output, wgd_count=0, random_seed=19,
+            )
+            first_tables = {
+                suffix: read_table(suffix)
+                for suffix in (
+                    'route_table',
+                    'gain_timing_table',
+                    'posterior_timing_table_summary_penalty_False',
+                    'posterior_timing_table_summary_penalty_True',
+                )
+            }
+            self.assertEqual(
+                set(first_tables['route_table']['Segment_ID']),
+                {'1-0-1000', '1-1000-1200'},
+            )
+            self.assertFalse(first_tables['gain_timing_table'].empty)
+            note = output / 'notes.txt'
+            note.write_text('keep root file')
+            archive = output / 'RERUN_timing_dicts' / 'other.npz'
+            archive.write_bytes(b'keep unmatched archive')
+
+            gritictimer.process_sample(
+                sample, output, wgd_count=0, random_seed=19, overwrite=True,
+            )
+            for suffix, first in first_tables.items():
+                with self.subTest(table=suffix):
+                    repeated = read_table(suffix)
+                    if suffix == 'route_table':
+                        first = first.drop(columns='Time')
+                        repeated = repeated.drop(columns='Time')
+                    pd.testing.assert_frame_equal(first, repeated, check_exact=True)
+
+            gritictimer.process_sample(
+                self.make_sample(include_gain=False),
+                output,
+                wgd_count=0,
+                random_seed=19,
+                overwrite=True,
+            )
+            self.assertEqual(
+                read_table('route_table')['Segment_ID'].tolist(), ['1-0-1000'],
+            )
+            for suffix in first_tables.keys() - {'route_table'}:
+                with self.subTest(table=suffix):
+                    self.assertTrue(read_table(suffix).empty)
+            self.assertEqual(note.read_text(), 'keep root file')
+            self.assertEqual(archive.read_bytes(), b'keep unmatched archive')
+
+
 class SexChromosomeProcessIntegrationTest(unittest.TestCase):
     @staticmethod
     def make_xy_sample():

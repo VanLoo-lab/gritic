@@ -20,7 +20,6 @@ from gritic.sampletools import (
     MultProbabilityStore,
     Segment,
     get_major_cn_mode,
-    validate_sample_id,
 )
 from gritic import dataloader, outputtools, timingio, validation
 from gritic.distributiontools import (
@@ -2653,11 +2652,11 @@ def write_gain_timing_table(timing_table, timing_table_path):
 
 
 def _initialize_table(table_path, columns):
-    if not os.path.exists(table_path):
-        _write_tsv(
-            pd.DataFrame(columns=columns),
-            table_path,
-        )
+    """Start an aggregate table for this run, replacing any previous rows."""
+    _write_tsv(
+        pd.DataFrame(columns=columns),
+        table_path,
+    )
 
 def get_wgd_info(
     wgd_timing_distribution,
@@ -3561,7 +3560,7 @@ def process_sample(
     random_seed = validation.validate_integer(
         random_seed, 'random_seed', maximum=2**64 - 1, allow_none=True,
     )
-    validate_sample_id(sample.sample_id)
+    validation.validate_sample_id(sample.sample_id)
     major_cn_mode = get_major_cn_mode(sample)
     if major_cn_mode not in (1, 2):
         raise ValueError(

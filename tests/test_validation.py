@@ -108,3 +108,91 @@ class ScalarParameterValidationTest(unittest.TestCase):
                     validation.validate_proportion(
                         value, 'min_subclone_ccf', allow_zero=False,
                     )
+
+
+class PortableSampleIdTest(unittest.TestCase):
+    def test_ordinary_ascii_and_unicode_ids_are_preserved(self):
+        for sample_id in ('sample-01_A', '.hidden', '患者-α'):
+            with self.subTest(sample_id=sample_id):
+                self.assertEqual(
+                    validation.validate_sample_id(sample_id),
+                    sample_id,
+                )
+
+    def test_non_string_empty_and_dot_components_are_rejected(self):
+        for sample_id in (None, 17, b'sample', '', '.', '..'):
+            with self.subTest(sample_id=sample_id):
+                with self.assertRaises(ValueError):
+                    validation.validate_sample_id(sample_id)
+
+    def test_every_windows_forbidden_character_is_rejected(self):
+        for character in '<>:"/\\|?*':
+            with self.subTest(character=character):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    'Windows-forbidden',
+                ):
+                    validation.validate_sample_id(f'left{character}right')
+
+    def test_unicode_control_format_and_surrogate_characters_are_rejected(self):
+        characters = ('\x00', '\n', '\u200d', chr(0xD800))
+        for character in characters:
+            with self.subTest(code_point=ord(character)):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    'Unicode control, format, or surrogate',
+                ):
+                    validation.validate_sample_id(f'a{character}b')
+
+    def test_trailing_dot_or_space_is_rejected(self):
+        for sample_id in ('sample.', 'sample ', 'sample. '):
+            with self.subTest(sample_id=sample_id):
+                with self.assertRaisesRegex(ValueError, 'end in a dot or space'):
+                    validation.validate_sample_id(sample_id)
+
+    def test_windows_device_names_are_rejected_case_insensitively(self):
+        reserved_ids = (
+            'CON',
+            'con.txt',
+            'PRN.results',
+            'AUX',
+            'NUL.data',
+            'COM1',
+            'lpt9.anything',
+            'COM²',
+            'CON .txt',
+        )
+        for sample_id in reserved_ids:
+            with self.subTest(sample_id=sample_id):
+                with self.assertRaisesRegex(ValueError, 'reserved Windows'):
+                    validation.validate_sample_id(sample_id)
+
+    def test_ascii_component_limit_accounts_for_longest_output_suffix(self):
+        available = (
+            validation._MAX_PATH_COMPONENT_UNITS
+            - len(validation._LONGEST_SAMPLE_ID_OUTPUT_SUFFIX)
+        )
+        boundary_id = 'a' * available
+
+        self.assertEqual(
+            validation.validate_sample_id(boundary_id),
+            boundary_id,
+        )
+        with self.assertRaisesRegex(ValueError, 'too long'):
+            validation.validate_sample_id(boundary_id + 'a')
+
+    def test_component_limit_is_measured_in_encoded_units_not_characters(self):
+        suffix_bytes = len(
+            validation._LONGEST_SAMPLE_ID_OUTPUT_SUFFIX.encode('utf-8')
+        )
+        max_repeated_e_acute = (
+            validation._MAX_PATH_COMPONENT_UNITS - suffix_bytes
+        ) // len('é'.encode('utf-8'))
+        boundary_id = 'é' * max_repeated_e_acute
+
+        self.assertEqual(
+            validation.validate_sample_id(boundary_id),
+            boundary_id,
+        )
+        with self.assertRaisesRegex(ValueError, 'too long'):
+            validation.validate_sample_id(boundary_id + 'é')

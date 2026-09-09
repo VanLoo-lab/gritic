@@ -161,7 +161,7 @@ def build_parser():
     required_arguments.add_argument(
         '--sample-id',
         required=True,
-        type=sampletools.validate_sample_id,
+        type=validation.validate_sample_id,
         help=(
             'A cross-platform-safe filename component used for sample '
             'output filename prefixes.'
