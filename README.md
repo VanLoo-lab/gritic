@@ -83,15 +83,13 @@ All SNVs for the sample, with either `Mutation_ID` or `Position` required alongs
 | Column | Requirement | Values |
 | --- | --- | --- |
 | `Chromosome` | Required | Labels following the [chromosome-handling rules](#chromosome-handling). |
-| `Tumor_Ref_Count` | Required | Non-negative integer. |
-| `Tumor_Alt_Count` | Required | Non-negative integer; the two read counts must have a positive sum. |
+| `Tumor_Ref_Count` | Required | Number of reads supporting the reference allele. |
+| `Tumor_Alt_Count` | Required | Number of reads supporting the alternate allele. |
 | `Mutation_ID` | Required unless `Position` is supplied | Literal text, preserving values such as `000123`, `NA`, and `NULL`. |
-| `Position` | Required unless `Mutation_ID` is supplied | Non-negative integer. |
+| `Position` | Required unless `Mutation_ID` is supplied | Zero-based genomic position. |
 | `Phasing` | Optional | `major` or `minor`, case-insensitive, ignoring surrounding whitespace. Missing values remain unphased. |
 
 Supplying `--drop-unrecognized-phasing` drops affected mutation rows and emits one warning with the number dropped and the unrecognized values.
-
-After copy-number assignment, every mutation with `Phasing=minor` must have an assigned `Minor_CN` greater than zero.
 
 Input mutation columns named `Segment_Start`, `Segment_End`, `Major_CN`, or `Minor_CN` are ignored because GRITIC always annotates those values from the copy-number table.
 
@@ -114,7 +112,7 @@ The selected `Mutation_ID` or canonical integer `Position` value must be unique 
 
 ### Copy number table
 
-The rounded allele-specific copy-number profile for the sample requires `Chromosome`, `Segment_Start`, `Segment_End`, `Major_CN`, and `Minor_CN`. Chromosome labels follow the [rules below](#chromosome-handling). Segments use nonempty, zero-based, half-open intervals with non-negative integer coordinates. Intervals on the same chromosome must not overlap. Allele-specific copy numbers are non-negative integers with `Major_CN >= Minor_CN`. Supplied `Segment_ID` values enable the assignment mode described under [Mutation table](#mutation-table).
+The rounded allele-specific copy-number profile for the sample requires `Chromosome`, `Segment_Start`, `Segment_End`, `Major_CN`, and `Minor_CN`. Chromosome labels follow the [rules below](#chromosome-handling). Segments use zero-based, half-open intervals. Intervals on the same chromosome must not overlap. Allele-specific copy numbers are non-negative integers with `Major_CN >= Minor_CN`. Supplied `Segment_ID` values enable the assignment mode described under [Mutation table](#mutation-table).
 
 #### Timing eligibility
 
@@ -122,9 +120,7 @@ The supported allele-specific copy-number states are:
 
 | `Major_CN` | Permitted `Minor_CN` |
 | --- | --- |
-| 1 | 0–1 |
-| 2 | 0–2 |
-| 3–5 | 0 through `Major_CN` |
+| 1–5 | 0 through `Major_CN` |
 | 6 | 0–4 |
 | 7 | 0–3 |
 | 8 | 0–1 |
@@ -382,7 +378,7 @@ Each final segment with retained mutations mapped to one observation context, wi
 
 ### _count_group_likelihood_table.tsv
 
-One likelihood vector per `(Likelihood_Context_ID, Count_Group_ID)` pair used by at least one segment. The fixed leading columns are `Sample_ID`, `Likelihood_Context_ID`, and `Count_Group_ID`, followed by `Prob_Mult_1`, `Prob_Mult_2`, and so on through the largest sample-wide major copy number, then `Prob_Subclone_0`, `Prob_Subclone_1`, and so on. Multiplicity columns above the row context's `Major_CN` are blank. Applicable entries are finite, nonnegative, and sum to one per row.
+One likelihood vector per `(Likelihood_Context_ID, Count_Group_ID)` pair used by at least one segment. The fixed leading columns are `Sample_ID`, `Likelihood_Context_ID`, and `Count_Group_ID`, followed by `Prob_Mult_1`, `Prob_Mult_2`, and so on through the largest sample-wide major copy number, then `Prob_Subclone_0`, `Prob_Subclone_1`, and so on. Multiplicity columns above the row context's `Major_CN` are blank. Applicable entries sum to one per row.
 
 ### _segment_group_table.tsv
 
