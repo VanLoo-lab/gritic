@@ -54,7 +54,7 @@ All SNVs for the sample, with either `Mutation_ID` or `Position` required alongs
 | `Position` | Required unless `Mutation_ID` is supplied | Zero-based genomic position. |
 | `Phasing` | Optional | `major` or `minor`, case-insensitive, ignoring surrounding whitespace. Missing values remain unphased. |
 
-Supplying `--drop-unrecognized-phasing` drops affected mutation rows and emits one warning with the number dropped and the unrecognized values.
+Supplying `--drop-unrecognized-phasing` drops mutations with unrecognized phasing and reports the number dropped and the unrecognized values.
 
 Input mutation columns named `Segment_Start`, `Segment_End`, `Major_CN`, or `Minor_CN` are ignored because GRITIC always annotates those values from the copy-number table.
 
@@ -63,19 +63,18 @@ GRITIC supports two segment-assignment modes:
 - If both the mutation and copy number tables contain `Segment_ID`, GRITIC uses those IDs to associate mutations with the input copy number segments. `Position` is not needed for assignment.
 - Otherwise, the mutation table must contain `Position`, which assigns mutations to segments on the same chromosome using the [coordinate convention](#copy-number-table).
 
-In supplied-ID mode, both tables require nonblank `Segment_ID` values, and those IDs must be unique in the copy-number table. Every mutation's `Segment_ID` must match a copy-number row, including its `Chromosome`. If `--drop-unmatched-snvs` is supplied, mutations unmatched by either assignment mode are dropped with one count warning. Missing or blank supplied IDs and chromosome mismatches remain errors.
+In supplied-ID mode, both tables require nonblank `Segment_ID` values, and those IDs must be unique in the copy-number table. Every mutation's `Segment_ID` must match a copy-number row, including its `Chromosome`. If `--drop-unmatched-snvs` is supplied, GRITIC drops mutations unmatched by either assignment mode and reports the number dropped. Missing or blank supplied IDs and chromosome mismatches remain errors.
 
 GRITIC does not model mutations in zero-copy `0+0` segments. In supplied-ID
-mode, mutations assigned to such otherwise valid input segments are dropped with
-one aggregated warning reporting the affected mutation count, segment count, and
-source `Segment_ID` values. This is independent of
+mode, GRITIC drops mutations assigned to these segments and reports the mutation
+count, segment count, and source `Segment_ID` values. This is independent of
 `--drop-unmatched-snvs` because those IDs are matched rather than unknown.
 
 The selected `Mutation_ID` or canonical integer `Position` value must be unique within its source segment. An explicit `Mutation_ID` column takes precedence for every row; GRITIC does not fall back to `Position` for blank values in that column. The same selected value may be reused in different source segments. With supplied segment IDs, this also applies to source segments that GRITIC subsequently merges.
 
 ### Copy number table
 
-The rounded allele-specific copy-number profile for the sample requires `Chromosome`, `Segment_Start`, `Segment_End`, `Major_CN`, and `Minor_CN`. Chromosome labels follow the [rules below](#chromosome-handling). Segments use zero-based, half-open intervals. Intervals on the same chromosome must not overlap. Allele-specific copy numbers are non-negative integers with `Major_CN >= Minor_CN`. Supplied `Segment_ID` values enable the assignment mode described under [Mutation table](#mutation-table).
+The rounded allele-specific copy-number profile for the sample requires `Chromosome`, `Segment_Start`, `Segment_End`, `Major_CN`, and `Minor_CN`. Chromosome labels follow the [rules below](#chromosome-handling). Segments use zero-based, half-open intervals. Intervals on the same chromosome must not overlap. Supplied `Segment_ID` values enable the assignment mode described under [Mutation table](#mutation-table).
 
 #### Timing eligibility
 
@@ -123,28 +122,26 @@ Retained `Subclone_Fraction` values keep their input scale; the remaining share 
 
 ## Run options
 
-Probability, proportion, quantile, and interval-width inputs use `[0, 1]`; parameters that exclude zero state this explicitly.
-
 ### Required run arguments
 
 - `--mutation-table` A path to the [mutation table](#mutation-table) for the sample.
 - `--copy-number-table` A path to the [copy-number table](#copy-number-table) for the sample.
-- `--purity` The estimated cellular purity for the sample; must be greater than 0.
+- `--purity` The estimated cellular purity for the sample.
 - `--sample-id` Sample ID used as an output filename prefix. It must be a cross-platform-safe filename component.
 - `--sample-dir` Sample output directory.
 
 ### Output handling
 
 - `--overwrite` Reuse the existing `--sample-dir` directory and its subdirectories. Files with the same names as new outputs are overwritten; all other files are preserved.
-- `--plot-trees` Enable route-tree plots for each segment (disabled by default).
+- `--plot-trees` Enable route-tree plots for each segment.
 
 ### Genome and input handling
 
 - `--autosome-count` Number of numbered autosomes in the organism (default: 22). This defines the accepted numbered chromosome labels and the chromosomes eligible for WGD inference.
 - `--sample-sex` Override the inferred karyotype with `XX`, `XY`, `ZZ`, or `ZW`. See [chromosome handling](#chromosome-handling) for inference rules and normal copy numbers.
-- `--drop-unmatched-chromosomes` Drop copy-number and mutation rows whose chromosome is not one of the configured autosomes or present sex chromosomes, with warnings reporting the number of rows dropped. By default, any such chromosome is an error.
-- `--drop-unmatched-snvs` Drop mutation rows that cannot be associated with a copy-number segment by either supplied `Segment_ID` or genomic `Position`, with one warning reporting the number dropped. By default, unmatched mutations raise an error.
-- `--drop-unrecognized-phasing` Drop mutation rows whose non-missing `Phasing` value is not `major` or `minor`, with one warning reporting the number dropped. By default, unrecognized phasing labels raise an error.
+- `--drop-unmatched-chromosomes` Drop copy-number and mutation rows whose chromosome is not one of the configured autosomes or present sex chromosomes and report the number of rows dropped. By default, any such chromosome is an error.
+- `--drop-unmatched-snvs` Drop mutation rows that cannot be associated with a copy-number segment by either supplied `Segment_ID` or genomic `Position` and report the number dropped. By default, unmatched mutations raise an error.
+- `--drop-unrecognized-phasing` Drop mutation rows whose non-missing `Phasing` value is not `major` or `minor` and report the number dropped. By default, unrecognized phasing labels raise an error.
 - `--keep-adjacent-segments` Preserve input copy-number segments separately. See [segment merging](#segment-merging) for the default behavior.
 - `--max-merge-gap N` Merge consecutive equal-copy-number segments only when the gap is at most `N` bases. If omitted, there is no maximum; use `0` to merge only intervals that touch.
 
@@ -157,25 +154,25 @@ Probability, proportion, quantile, and interval-width inputs use `[0, 1]`; param
 ### Subclone handling
 
 - `--subclone-table` A path to the [subclone table](#subclone-table) for the sample. If omitted, GRITIC assumes every SNV is clonal, which can bias gain timings earlier.
-- `--clip-subclone-ccf` Clip out-of-range `Subclone_CCF` values before validation and filtering (disabled by default). With the default CCF filters, values clipped to either boundary are subsequently excluded.
+- `--clip-subclone-ccf` Clip out-of-range `Subclone_CCF` values before filtering. With the default CCF filters, values clipped to either boundary are subsequently excluded.
 - `--min-subclone-ccf` Minimum `Subclone_CCF` retained as a subclone, inclusive (default: 0.01).
 - `--max-subclone-ccf` Maximum `Subclone_CCF` retained as a subclone, inclusive (default: 0.9).
 - `--min-subclone-fraction` A subclone's normalized share of the subclonal mutation fractions after CCF filtering must be strictly greater than this threshold (default: 0.1).
 - `--subclone-fraction-prior {adjusted,supplied}` Use detection-adjusted mutation fractions or the supplied fractions in the mutation-share prior (default: `adjusted`). See [detection correction and mutation-share priors](#detection-correction-and-mutation-share-priors).
 
-The value of `--min-subclone-ccf` must be greater than 0 and no greater than `--max-subclone-ccf`.
+The value of `--min-subclone-ccf` must be greater than 0.
 
 ### Inference model and WGD calling
 
 Every run requires configured autosomal segments with a segment-width-weighted modal `Major_CN` of 1 or 2, including runs with a supplied WGD count.
 
-- `--wgd-count {0,1}` Override GRITIC's inferred WGD count. A count of 0 bypasses WGD timing; a count of 1 still requires a timing estimate from eligible major-copy-number-two segments. If omitted, GRITIC infers the count. GRITIC warns when the supplied count conflicts with modal major copy number. See [WGD timing estimation](#wgd-timing-estimation).
+- `--wgd-count {0,1}` Override GRITIC's inferred WGD count. If omitted, GRITIC infers the count. GRITIC warns when the supplied count conflicts with modal major copy number. See [WGD timing estimation](#wgd-timing-estimation).
 - `--random-seed` Seed stochastic inference with an unsigned 64-bit integer. If omitted, GRITIC generates a random seed using sources provided by the operating system.
-- `--unordered-balanced-route-prior` Use a uniform prior over unordered allele-route pairs (disabled by default). See [balanced route priors](#balanced-route-priors) for the weighting of ordered routes.
+- `--unordered-balanced-route-prior` Use a uniform prior over unordered allele-route pairs. See [balanced route priors](#balanced-route-priors) for the weighting of ordered routes.
 
 ### Timing intervals
 
-Intervals default to highest posterior density (HPD, `hpd`); `equal-tailed` is also available. Widths must be in `(0, 1]`.
+Intervals default to highest posterior density (HPD, `hpd`); `equal-tailed` is also available. Interval widths specify probability mass.
 
 | Interval family | Options | Default width | Controls |
 | --- | --- | --- | --- |
@@ -187,7 +184,7 @@ Intervals default to highest posterior density (HPD, `hpd`); `equal-tailed` is a
 
 ## Outputs
 
-The file and directory names below are suffixes prefixed by `SAMPLE_ID`. We recommend only considering gained segments with 10 or more SNVs.
+Append each suffix below to `SAMPLE_ID`. We recommend only considering gained segments with 10 or more SNVs.
 
 | File or directory suffix | Contents |
 | --- | --- |
@@ -230,7 +227,7 @@ This table contains one row for each possible route of each timed segment, keyed
 
 `Timing_Representation` is `Route_Particles` for ordinary gained routes and `Uniform_No_Gain` when every extant copy spans the `[0,1]` interval. The table stores ordinary `Probability` and post-hoc `Penalized_Probability`, average event and loss counts, a timing-space sampling-density diagnostic (`Density`), runtime (`Time`), and segment and WGD metadata.
 
-`Route` is an opaque, order-sensitive identifier of the complete allele route. See [posterior sampling](#posterior-sampling) for the density diagnostic.
+`Route` is an order-sensitive identifier of the complete allele route. See [posterior sampling](#posterior-sampling) for the density diagnostic.
 
 `Penalized_Probability` is calculated by multiplying each route's ordinary probability by `exp(-2.7 * Average_N_Events)` and renormalizing across routes within the segment. Tree output uses ordinary probabilities. See [Baker et al. (2024)][publication] for details of the penalty.
 
@@ -267,7 +264,7 @@ Every output row contains these mutation identity, mapping, and provenance colum
 - `Source_Segment_ID` is the input segment ID when both input tables supplied matching `Segment_ID` columns. For position-based copy-number assignment it is the final assigned segment ID.
 - `Mutation_ID` contains the literal input `Mutation_ID` when supplied and is blank otherwise.
 - `Position` contains the canonical input position when supplied and is blank otherwise.
-- `GRITIC_Mutation_ID` is the canonical sample-unique identifier derived from the source segment plus `Mutation_ID` when supplied, otherwise from the source segment plus `Position`. Consumers should treat this value as opaque.
+- `GRITIC_Mutation_ID` is the canonical sample-unique identifier derived from the source segment plus `Mutation_ID` when supplied, otherwise from the source segment plus `Position`.
 - `Segment_Mutation_Index` is a zero-based, consecutive index within the final `Segment_ID`.
 - `Phase_Group_ID` links the mutation to one row of [`_phase_group_table.tsv`](#_phase_group_tabletsv). Together with `Segment_ID`, it also links to the mutation count in [`_segment_group_table.tsv`](#_segment_group_tabletsv).
 
@@ -307,9 +304,9 @@ Overlapping segments are pooled and refit by minor-copy-number class, and their 
 
 ### Detection correction and mutation-share priors
 
-GRITIC uses each segment's read counts to fit clonal and subclonal mutation shares, with the supplied subclone CCFs determining the expected VAFs of the subclonal states. The retained input fractions inform a weak Dirichlet prior; the clonal input fraction is one minus their sum.
+GRITIC uses each segment's read counts to fit clonal and subclonal mutation shares, with the supplied subclone CCFs determining the expected VAFs of the subclonal states. The clonal input fraction is one minus the sum of the retained subclonal fractions. GRITIC constructs a weak Dirichlet prior with parameters equal to one plus the supplied or adjusted fractions.
 
-With `--subclone-fraction-prior adjusted`, GRITIC divides the clonal and subclonal input fractions by their estimated detection probabilities separately for each segment, then renormalizes them. With `supplied`, it uses the fractions directly. Both modes set the Dirichlet parameters to one plus the resulting fractions and apply the segment-specific detection correction in the likelihood.
+With `--subclone-fraction-prior adjusted`, GRITIC divides the clonal and subclonal input fractions by their estimated detection probabilities separately for each segment, then renormalizes them. With `supplied`, it uses the fractions directly. Both modes apply the segment-specific detection correction in the likelihood.
 
 The correction uses Poisson thinning to calculate the probability of meeting `--min-mutation-alt-count`, given each state's expected VAF and the segment's estimated mean coverage. Coverage is averaged over SNVs with observed VAF greater than the `--coverage-vaf-quantile` quantile minus 0.01. This quantile affects the likelihood correction in both prior modes and the prior adjustment only in `adjusted` mode.
 
@@ -319,7 +316,7 @@ The `supplied` prior follows [Baker et al. (2024)][publication], Supplementary M
 
 GRITIC retains 1,000 likelihood-resampled particles for each sampled route. The `Density` diagnostic reports the fraction of tested timing points with another sampled point within the sampling neighborhood. It covers hit-and-run timing coordinates. Analytic uniform routes require no chain and report density 1.
 
-Each posterior-summary draw samples a route and its gain and WGD timings jointly, preserving dependence between events. The [gain timing table](#_gain_timing_tabletsv) supplies node identity and phasing metadata; the [timing archives](#timing-archives) contain the joint timing draws and authoritative route weights.
+Each posterior-summary draw samples a route and its gain and WGD timings jointly, preserving dependence between events. The [gain timing table](#_gain_timing_tabletsv) supplies node identity and phasing metadata; the [timing archives](#timing-archives) contain the joint timing draws and route weights used for downstream inference.
 
 ## Downstream formats
 
@@ -353,7 +350,7 @@ Columns `Sample_ID`, `Segment_ID`, `Phase_Group_ID`, and `N_Mutations`, keyed by
 
 The `_timing_dicts` directory contains compressed posterior archives for mutation timing.
 
-`Route_Particles` segments store gain timing and multiplicity particles. A `Uniform_No_Gain` segment writes no store when it has no subclones; with subclones it writes only the fitted clone-share posterior. Each logical store that exists is a required pair:
+`Route_Particles` segments store gain timing and multiplicity particles. A `Uniform_No_Gain` segment writes no store when it has no subclones; with subclones it writes only the fitted clone-share posterior. Each archive consists of two files:
 
 - `SEGMENT_ID_timing_dict.npz`
 - `SEGMENT_ID_timing_dict.manifest.json`
@@ -369,7 +366,7 @@ A subclonal `Uniform_No_Gain` route contains only `Clone_Share`, whose columns c
 
 Each `Route_Particles` entry contains the following numeric arrays:
 
-- `Probability` and `Penalized_Probability` are one-element float64 arrays containing the authoritative route weights used for mutation timing.
+- `Probability` and `Penalized_Probability` are one-element float64 arrays containing the route weights used for downstream inference.
 - `Timing` is a float64 `N_Particles x N_Timing_Nodes` matrix. `Timing_Node_ID` is the aligned int64 identifier for each column, corresponding to `Node` in the [gain timing table](#_gain_timing_tabletsv).
 - `WGD_Timing` is the aligned float64 WGD vector and `Mult` is the aligned float64 multiplicity matrix. Non-WGD models use an all-NaN `WGD_Timing` vector; WGD models use finite values.
 - `Interval_Start_Source`, `Interval_End_Source`, `Interval_Multiplicity`, and `Interval_Phasing` describe every mutation-bearing route interval without requiring the consumer to reconstruct a route tree. Source 0 is constant zero, source 1 is constant one, source 2 is `WGD_Timing`, and source `3+j` is column `j` of `Timing`. Phasing is a bit mask: 1 is `non_phased`, 2 is `major`, and 4 is `minor`.
@@ -422,7 +419,7 @@ For unmatched-SNV dropping with supplied segment IDs, `dataloader.load_input_tab
 
 For [segment merging](#segment-merging), `sampletools.Sample` accepts `max_merge_gap` to limit gaps and `merge_cn=False` to preserve input segments.
 
-The CCF bounds must satisfy `0 < min_subclone_ccf <= max_subclone_ccf`.
+`min_subclone_ccf` must be greater than 0.
 
 ### Timing intervals and WGD inference
 
@@ -442,6 +439,6 @@ timing_dict = load_timing_archive(
 )
 ```
 
-The reconstructed dictionary keys are opaque route identifiers. See [Timing archives](#timing-archives) for the array definitions and alignment rules.
+The reconstructed dictionary keys are route identifiers. See [Timing archives](#timing-archives) for the array definitions and alignment rules.
 
 [publication]: https://aacrjournals.org/cancerdiscovery/article/14/10/1810/748591/The-History-of-Chromosomal-Instability-in-Genome
