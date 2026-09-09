@@ -16,6 +16,10 @@ class CliHelpTest(unittest.TestCase):
             ),
         ),
         (
+            'Output handling',
+            ('--overwrite',),
+        ),
+        (
             'Genome and input handling',
             (
                 '--autosome-count',

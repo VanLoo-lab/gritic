@@ -18,7 +18,7 @@ python -m pip install .
 
 ## Quick start
 
-Run the examples from the repository root. Each run writes to `OUTPUT/SAMPLE_ID`, which must be absent or empty. Both examples below use `examples/output/TEST_ID`.
+Run the examples from the repository root. Each run writes to `OUTPUT/SAMPLE_ID`, which must not already exist, even if empty. Use `--overwrite` to reuse it. Both examples below use `examples/output/TEST_ID`.
 
 ### Command line
 
@@ -164,6 +164,10 @@ GRITIC derives `N_SNVs` from the retained mutation count and each retained/combi
 - `--output` The output directory. GRITIC stores the sample output in `OUTPUT/SAMPLE_ID`.
 
 Probability, proportion, quantile, and interval-width inputs use `[0, 1]`; parameters that exclude zero state this explicitly.
+
+### Output handling
+
+- `--overwrite` Reuse an existing `OUTPUT/SAMPLE_ID` directory and its subdirectories. Files with the same names as new outputs are overwritten; all other files are preserved. The parent `OUTPUT` directory may already exist without this switch. The Python API accepts `overwrite=True` for the same behavior.
 
 ### Genome and input handling
 

@@ -332,7 +332,7 @@ class ProcessSampleIntegrationTest(unittest.TestCase):
 
             with self.assertRaisesRegex(
                 FileExistsError,
-                'must be absent or empty',
+                'Output directory already exists',
             ):
                 gritictimer.process_sample(
                     sample,

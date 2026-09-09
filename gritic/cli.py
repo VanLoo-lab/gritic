@@ -150,6 +150,7 @@ def build_parser():
         ),
     )
     required_arguments = parser.add_argument_group('Required run arguments')
+    output_arguments = parser.add_argument_group('Output handling')
     genome_and_input_arguments = parser.add_argument_group(
         'Genome and input handling'
     )
@@ -214,6 +215,16 @@ def build_parser():
         help=(
             'The output directory. GRITIC stores sample output in '
             'OUTPUT/SAMPLE_ID.'
+        ),
+    )
+    output_arguments.add_argument(
+        '--overwrite',
+        action='store_true',
+        help=(
+            'Reuse an existing OUTPUT/SAMPLE_ID directory and its '
+            'subdirectories, overwriting files with matching names. Other '
+            'files are preserved. By default the sample directory must '
+            'not exist, even if empty.'
         ),
     )
     genome_and_input_arguments.add_argument(
@@ -523,6 +534,7 @@ def main(argv=None):
                 args.unordered_balanced_route_prior
             ),
             random_seed=args.random_seed,
+            overwrite=args.overwrite,
         )
 
 

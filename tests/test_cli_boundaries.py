@@ -209,6 +209,7 @@ class CliParserBoundaryTest(CliArgumentFixture, unittest.TestCase):
         self.assertIsNone(args.wgd_count)
         self.assertIsNone(args.random_seed)
         self.assertFalse(args.plot_trees)
+        self.assertFalse(args.overwrite)
         self.assertIs(
             args.unordered_balanced_route_prior,
             gritictimer.DEFAULT_UNORDERED_BALANCED_ROUTE_PRIOR,
@@ -369,6 +370,7 @@ class CliMainTest(CliArgumentFixture, unittest.TestCase):
             '--random-seed', '18446744073709551615',
             '--unordered-balanced-route-prior',
             '--plot-trees',
+            '--overwrite',
             '--route-gain-interval-width', '0.81',
             '--route-gain-interval-method', 'equal-tailed',
             '--tree-gain-interval-width', '0.82',
@@ -427,6 +429,7 @@ class CliMainTest(CliArgumentFixture, unittest.TestCase):
             subclone_fraction_prior='supplied',
             unordered_balanced_route_prior=True,
             random_seed=2**64 - 1,
+            overwrite=True,
         )
 
     @mock.patch.object(cli.gritictimer, 'process_sample')

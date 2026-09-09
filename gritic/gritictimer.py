@@ -22,7 +22,7 @@ from gritic.sampletools import (
     get_major_cn_mode,
     validate_sample_id,
 )
-from gritic import dataloader, timingio, validation
+from gritic import dataloader, outputtools, timingio, validation
 from gritic.intervaltools import (
     DEFAULT_TIMING_INTERVALS,
     TimingIntervalConfig,
@@ -3541,6 +3541,7 @@ def process_sample(
     subclone_fraction_prior=DEFAULT_SUBCLONE_FRACTION_PRIOR,
     unordered_balanced_route_prior=DEFAULT_UNORDERED_BALANCED_ROUTE_PRIOR,
     random_seed=None,
+    overwrite=False,
 ):
     if not isinstance(interval_config, TimingIntervalConfig):
         raise TypeError('interval_config must be a TimingIntervalConfig')
@@ -3568,24 +3569,17 @@ def process_sample(
         )
 
     output_dir = pathlib.Path(output_dir, pathlib.Path(sample.sample_id))
-    if output_dir.exists():
-        if not output_dir.is_dir():
-            raise FileExistsError(
-                f'Sample output path is not a directory: {output_dir}'
-            )
-        if any(output_dir.iterdir()):
-            raise FileExistsError(
-                'Sample output directory must be absent or empty before a '
-                f'GRITIC run: {output_dir}'
-            )
-    else:
-        os.makedirs(output_dir, exist_ok=False)
+    timing_dict_dir = output_dir / f'{sample.sample_id}_timing_dicts'
+    outputtools.check_output_paths(
+        directories=(output_dir, timing_dict_dir),
+        overwrite=overwrite,
+    )
+    output_dir.mkdir(parents=True, exist_ok=overwrite)
 
     rng = np.random.default_rng(random_seed)
 
 
-    timing_dict_dir= output_dir/f"{sample.sample_id}_timing_dicts/"
-    os.makedirs(timing_dict_dir,exist_ok=True)
+    timing_dict_dir.mkdir(exist_ok=overwrite)
 
     (
         sample_mutation_table,

@@ -114,7 +114,7 @@ class ProcessSampleGuardTest(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(
                     FileExistsError,
-                    'Sample output path is not a directory',
+                    'Output directory path is not a directory',
                 ):
                     gritictimer.process_sample(sample, directory)
 
@@ -123,7 +123,28 @@ class ProcessSampleGuardTest(unittest.TestCase):
                 'occupied',
             )
 
-    def test_preexisting_empty_sample_output_directory_is_accepted(self):
+    def test_overwrite_reuses_subdirectories_and_preserves_unmatched_files(self):
+        sample = self.lightweight_sample('REUSE')
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / sample.sample_id
+            timing = output / 'REUSE_timing_dicts'
+            timing.mkdir(parents=True)
+            previous = output / 'REUSE_mutation_table.tsv'
+            previous.write_text('old mutation table')
+            note = output / 'notes.txt'
+            note.write_text('keep root file')
+            archive = timing / 'other.npz'
+            archive.write_bytes(b'keep unmatched archive')
+            with (
+                mock.patch.object(gritictimer, 'get_major_cn_mode', return_value=1),
+                mock.patch.object(gritictimer, '_run_sample'),
+            ):
+                gritictimer.process_sample(sample, directory, overwrite=True)
+            self.assertIn('Mutation_ID\tSegment_ID', previous.read_text())
+            self.assertEqual(note.read_text(), 'keep root file')
+            self.assertEqual(archive.read_bytes(), b'keep unmatched archive')
+
+    def test_preexisting_empty_sample_output_directory_requires_overwrite(self):
         sample = self.lightweight_sample('EMPTY')
         with tempfile.TemporaryDirectory() as directory:
             sample_output_path = Path(directory) / sample.sample_id
@@ -134,10 +155,15 @@ class ProcessSampleGuardTest(unittest.TestCase):
                 'get_major_cn_mode',
                 return_value=1,
             ), mock.patch.object(gritictimer, '_run_sample') as run_sample:
+                with self.assertRaisesRegex(FileExistsError, '--overwrite'):
+                    gritictimer.process_sample(sample, directory, wgd_count=0)
+                run_sample.assert_not_called()
+                self.assertEqual(list(sample_output_path.iterdir()), [])
                 gritictimer.process_sample(
                     sample,
                     directory,
                     wgd_count=0,
+                    overwrite=True,
                 )
 
             self.assertTrue(
