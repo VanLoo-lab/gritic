@@ -150,7 +150,7 @@ class ExampleDataIntegrationTest(unittest.TestCase):
             ):
                 gritictimer.process_sample(
                     sample,
-                    directory,
+                    sample_dir=Path(directory) / sample.sample_id,
                     wgd_count=0,
                     random_seed=20260901,
                 )

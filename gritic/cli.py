@@ -163,23 +163,23 @@ def build_parser():
         required=True,
         type=sampletools.validate_sample_id,
         help=(
-            'A cross-platform-safe filename component used for the sample '
-            'output directory and filename prefixes.'
+            'A cross-platform-safe filename component used for sample '
+            'output filename prefixes.'
         ),
     )
     required_arguments.add_argument(
-        '--output',
+        '--sample-dir',
         required=True,
         help=(
-            'The output directory. GRITIC stores sample output in '
-            'OUTPUT/SAMPLE_ID.'
+            'Directory for this sample. GRITIC writes its output directly '
+            'here; use the same --sample-dir for MUTIC and SIGTIC.'
         ),
     )
     output_arguments.add_argument(
         '--overwrite',
         action='store_true',
         help=(
-            'Reuse an existing OUTPUT/SAMPLE_ID directory and its '
+            'Reuse the existing sample directory and its '
             'subdirectories, overwriting files with matching names. Other '
             'files are preserved. By default the sample directory must '
             'not exist, even if empty.'
@@ -563,7 +563,7 @@ def main(argv=None):
     with _cli_progress_logging():
         gritictimer.process_sample(
             sample,
-            args.output,
+            args.sample_dir,
             plot_trees=args.plot_trees,
             wgd_count=args.wgd_count,
             interval_config=interval_config,

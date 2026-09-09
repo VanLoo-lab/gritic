@@ -118,7 +118,7 @@ class AutomaticWGDIntegrationTest(unittest.TestCase):
         ):
             gritictimer.process_sample(
                 sample,
-                temporary_directory,
+                sample_dir=Path(temporary_directory) / sample.sample_id,
                 wgd_count=None,
                 random_seed=8128,
             )

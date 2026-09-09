@@ -39,7 +39,7 @@ class CliModulePlotIntegrationTest(unittest.TestCase):
             copy_number_path, mutation_path = self.write_input_tables(
                 temporary_path
             )
-            output_root = temporary_path / 'output'
+            sample_dir = temporary_path / 'output' / 'chosen-sample-directory'
             environment = os.environ.copy()
             environment.update({
                 'MPLBACKEND': 'Agg',
@@ -61,8 +61,8 @@ class CliModulePlotIntegrationTest(unittest.TestCase):
                     '0.8',
                     '--sample-id',
                     'CLI_PLOT',
-                    '--output',
-                    str(output_root),
+                    '--sample-dir',
+                    str(sample_dir),
                     '--sample-sex',
                     'XX',
                     '--wgd-count',
@@ -85,7 +85,8 @@ class CliModulePlotIntegrationTest(unittest.TestCase):
                 0,
                 f'stdout:\n{result.stdout}\nstderr:\n{result.stderr}',
             )
-            sample_output = output_root / 'CLI_PLOT'
+            sample_output = sample_dir
+            self.assertFalse((sample_dir / 'CLI_PLOT').exists())
             route_path = sample_output / 'CLI_PLOT_route_table.tsv'
             gain_path = sample_output / 'CLI_PLOT_gain_timing_table.tsv'
             self.assertTrue(route_path.is_file())

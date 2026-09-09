@@ -385,7 +385,7 @@ class SyntheticScientificOracleTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             gritictimer.process_sample(
                 self.make_sample(),
-                temporary_directory,
+                sample_dir=Path(temporary_directory) / 'SYNTHETIC_ORACLE',
                 wgd_count=0,
                 random_seed=739,
             )

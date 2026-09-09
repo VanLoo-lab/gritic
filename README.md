@@ -18,7 +18,7 @@ python -m pip install .
 
 ## Quick start
 
-Run the examples from the repository root. Each run writes to `OUTPUT/SAMPLE_ID`, which must not already exist, even if empty. Use `--overwrite` to reuse it. Both examples below use `examples/output/TEST_ID`.
+Run the examples from the repository root. Each run writes directly to `--sample-dir`, which must not already exist, even if empty. Use `--overwrite` to reuse it. Both examples below use `examples/output/TEST_ID`.
 
 ### Command line
 
@@ -29,7 +29,7 @@ gritic \
     --subclone-table examples/subclone_table_example.tsv \
     --purity 0.5 \
     --sample-id TEST_ID \
-    --output examples/output \
+    --sample-dir examples/output/TEST_ID \
     --wgd-count 1 \
     --random-seed 20260828 \
     --plot-trees
@@ -63,7 +63,7 @@ sample = sampletools.Sample(
 )
 gritictimer.process_sample(
     sample,
-    output_dir='examples/output',
+    sample_dir='examples/output/TEST_ID',
     plot_trees=True,
     wgd_count=1,
     random_seed=20260828,
@@ -160,14 +160,14 @@ GRITIC derives `N_SNVs` from the retained mutation count and each retained/combi
 - `--mutation-table` A path to the [mutation table](#mutation-table) for the sample.
 - `--copy-number-table` A path to the [copy-number table](#copy-number-table) for the sample.
 - `--purity` The estimated cellular purity for the sample; must be greater than 0.
-- `--sample-id` Sample ID used as an output-directory component and filename prefix. It must be a cross-platform-safe filename component.
-- `--output` The output directory. GRITIC stores the sample output in `OUTPUT/SAMPLE_ID`.
+- `--sample-id` Sample ID used as an output filename prefix. It must be a cross-platform-safe filename component.
+- `--sample-dir` Directory for this sample. GRITIC writes outputs directly here without appending the sample ID. Pass the same path to MUTIC and SIGTIC.
 
 Probability, proportion, quantile, and interval-width inputs use `[0, 1]`; parameters that exclude zero state this explicitly.
 
 ### Output handling
 
-- `--overwrite` Reuse an existing `OUTPUT/SAMPLE_ID` directory and its subdirectories. Files with the same names as new outputs are overwritten; all other files are preserved. The parent `OUTPUT` directory may already exist without this switch. The Python API accepts `overwrite=True` for the same behavior.
+- `--overwrite` Reuse the existing `--sample-dir` directory and its subdirectories. Files with the same names as new outputs are overwritten; all other files are preserved. Parent directories may already exist without this switch. The Python API accepts `overwrite=True` for the same behavior.
 
 ### Genome and input handling
 
@@ -224,7 +224,7 @@ Sample intervals are computed with the NumPy array interface of [ArviZ Stats](ht
 
 ## Outputs
 
-Outputs are written under `OUTPUT/SAMPLE_ID`. The file and directory names below are suffixes prefixed by `SAMPLE_ID`. We recommend only considering gained segments with 10 or more SNVs.
+Outputs are written directly under `--sample-dir`. The file and directory names below are suffixes prefixed by `SAMPLE_ID`. We recommend only considering gained segments with 10 or more SNVs.
 
 | File or directory suffix | Contents |
 | --- | --- |

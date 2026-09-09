@@ -21,7 +21,7 @@ class SubcloneFractionPriorTest(unittest.TestCase):
             '0.8',
             '--sample-id',
             'TEST',
-            '--output',
+            '--sample-dir',
             'output',
         ]
 

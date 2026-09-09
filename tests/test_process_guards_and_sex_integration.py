@@ -97,7 +97,9 @@ class ProcessSampleGuardTest(unittest.TestCase):
                     ValueError,
                     'supports only modal major copy numbers 1 and 2',
                 ):
-                    gritictimer.process_sample(sample, output_root)
+                    gritictimer.process_sample(
+                        sample, sample_dir=output_root / sample.sample_id,
+                    )
 
             self.assertFalse((output_root / sample.sample_id).exists())
 
@@ -116,7 +118,7 @@ class ProcessSampleGuardTest(unittest.TestCase):
                     FileExistsError,
                     'Output directory path is not a directory',
                 ):
-                    gritictimer.process_sample(sample, directory)
+                    gritictimer.process_sample(sample, sample_dir=sample_output_path)
 
             self.assertEqual(
                 sample_output_path.read_text(encoding='utf-8'),
@@ -139,7 +141,7 @@ class ProcessSampleGuardTest(unittest.TestCase):
                 mock.patch.object(gritictimer, 'get_major_cn_mode', return_value=1),
                 mock.patch.object(gritictimer, '_run_sample'),
             ):
-                gritictimer.process_sample(sample, directory, overwrite=True)
+                gritictimer.process_sample(sample, sample_dir=output, overwrite=True)
             self.assertIn('Mutation_ID\tSegment_ID', previous.read_text())
             self.assertEqual(note.read_text(), 'keep root file')
             self.assertEqual(archive.read_bytes(), b'keep unmatched archive')
@@ -156,12 +158,14 @@ class ProcessSampleGuardTest(unittest.TestCase):
                 return_value=1,
             ), mock.patch.object(gritictimer, '_run_sample') as run_sample:
                 with self.assertRaisesRegex(FileExistsError, '--overwrite'):
-                    gritictimer.process_sample(sample, directory, wgd_count=0)
+                    gritictimer.process_sample(
+                        sample, sample_dir=sample_output_path, wgd_count=0,
+                    )
                 run_sample.assert_not_called()
                 self.assertEqual(list(sample_output_path.iterdir()), [])
                 gritictimer.process_sample(
                     sample,
-                    directory,
+                    sample_dir=sample_output_path,
                     wgd_count=0,
                     overwrite=True,
                 )
@@ -245,7 +249,7 @@ class SexChromosomeProcessIntegrationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             gritictimer.process_sample(
                 sample,
-                directory,
+                sample_dir=Path(directory) / sample.sample_id,
                 wgd_count=0,
                 random_seed=20260831,
             )

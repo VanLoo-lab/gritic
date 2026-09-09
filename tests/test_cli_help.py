@@ -12,7 +12,7 @@ class CliHelpTest(unittest.TestCase):
                 '--copy-number-table',
                 '--purity',
                 '--sample-id',
-                '--output',
+                '--sample-dir',
             ),
         ),
         (

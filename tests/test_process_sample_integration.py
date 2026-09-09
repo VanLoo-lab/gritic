@@ -94,7 +94,7 @@ class ProcessSampleIntegrationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             gritictimer.process_sample(
                 sample,
-                temporary_directory,
+                sample_dir=Path(temporary_directory) / sample.sample_id,
                 wgd_count=0,
                 random_seed=20260828,
             )
@@ -336,7 +336,7 @@ class ProcessSampleIntegrationTest(unittest.TestCase):
             ):
                 gritictimer.process_sample(
                     sample,
-                    temporary_directory,
+                    sample_dir=Path(temporary_directory) / sample.sample_id,
                     wgd_count=0,
                 )
 
@@ -346,7 +346,7 @@ class ProcessSampleIntegrationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             gritictimer.process_sample(
                 sample,
-                temporary_directory,
+                sample_dir=Path(temporary_directory) / sample.sample_id,
                 wgd_count=0,
                 random_seed=20260829,
             )
@@ -477,7 +477,7 @@ class ProcessSampleIntegrationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             gritictimer.process_sample(
                 sample,
-                temporary_directory,
+                sample_dir=Path(temporary_directory) / sample.sample_id,
                 wgd_count=1,
                 random_seed=20260830,
             )

@@ -63,7 +63,7 @@ class RandomSeedValidationTest(unittest.TestCase):
                     ):
                         gritictimer.process_sample(
                             sample,
-                            temporary_directory,
+                            sample_dir=Path(temporary_directory) / sample.sample_id,
                             random_seed=seed,
                         )
                     self.assertFalse(output_path.exists())
@@ -125,7 +125,7 @@ class SeededSubcloneProcessSampleTest(unittest.TestCase):
                     ))
                 gritictimer.process_sample(
                     sample,
-                    temporary_directory.name,
+                    sample_dir=Path(temporary_directory.name) / sample.sample_id,
                     wgd_count=0,
                     random_seed=2**64 - 1,
                 )

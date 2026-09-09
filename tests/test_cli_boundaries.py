@@ -24,7 +24,7 @@ class CliArgumentFixture:
             '0.8',
             '--sample-id',
             'TEST',
-            '--output',
+            '--sample-dir',
             'output',
         ]
 
@@ -130,10 +130,14 @@ class CliParserBoundaryTest(CliArgumentFixture, unittest.TestCase):
         self.assert_parse_error([], 'the following arguments are required:')
         self.assert_parse_error(
             self.required_arguments()[:-2],
-            '--output',
+            '--sample-dir',
         )
 
     def test_long_option_abbreviations_and_underscore_aliases_are_rejected(self):
+        self.assert_parse_error(
+            [*self.required_arguments(), '--output', 'old-output-root'],
+            'unrecognized arguments: --output old-output-root',
+        )
         self.assert_parse_error(
             [*self.required_arguments(), '--plot'],
             'unrecognized arguments: --plot',

@@ -3533,7 +3533,7 @@ def _run_sample(
 
 def process_sample(
     sample,
-    output_dir,
+    sample_dir,
     plot_trees=False,
     min_wgd_overlap=0.6,
     wgd_count=None,
@@ -3543,6 +3543,7 @@ def process_sample(
     random_seed=None,
     overwrite=False,
 ):
+    """Time one sample and write outputs directly into sample_dir."""
     if not isinstance(interval_config, TimingIntervalConfig):
         raise TypeError('interval_config must be a TimingIntervalConfig')
     subclone_fraction_prior = validate_subclone_fraction_prior(
@@ -3568,7 +3569,7 @@ def process_sample(
             "GRITIC currently supports only modal major copy numbers 1 and 2"
         )
 
-    output_dir = pathlib.Path(output_dir, pathlib.Path(sample.sample_id))
+    output_dir = pathlib.Path(sample_dir)
     timing_dict_dir = output_dir / f'{sample.sample_id}_timing_dicts'
     outputtools.check_output_paths(
         directories=(output_dir, timing_dict_dir),
