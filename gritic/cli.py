@@ -372,7 +372,8 @@ def build_parser():
         default=None,
         help=(
             'Seed stochastic inference with an integer '
-            'between 0 and 2**64 - 1. By default, no seed is imposed.'
+            'between 0 and 2**64 - 1. '
+            'Generated with secrets.randbits(64) if omitted.'
         ),
     )
     defaults = distributiontools.DEFAULT_TIMING_INTERVALS

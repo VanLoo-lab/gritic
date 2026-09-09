@@ -207,7 +207,7 @@ The CCF bounds must satisfy `0 < min_subclone_ccf <= max_subclone_ccf`.
 Every run requires configured autosomal segments with a segment-width-weighted modal `Major_CN` of 1 or 2, including runs with a supplied WGD count.
 
 - `--wgd-count {0,1}` Override GRITIC's inferred WGD count. A count of 0 bypasses WGD timing; a count of 1 still requires a timing estimate from eligible major-copy-number-two segments. If omitted, GRITIC infers the count. GRITIC warns when the supplied count conflicts with modal major copy number. See [WGD timing estimation](#wgd-timing-estimation).
-- `--random-seed` Seed stochastic inference with an unsigned 64-bit integer.
+- `--random-seed` Seed stochastic inference with an unsigned 64-bit integer. If omitted, GRITIC generates a random seed using sources provided by the operating system.
 - `--unordered-balanced-route-prior` Use a uniform prior over unordered allele-route pairs (disabled by default). See [balanced route priors](#balanced-route-priors) for the weighting of ordered routes.
 
 ### Timing intervals
@@ -358,7 +358,7 @@ The `supplied` prior follows [Baker et al. (2024)][publication], Supplementary M
 
 GRITIC retains 1,000 likelihood-resampled particles for each sampled route. The `Density` diagnostic reports the fraction of tested timing points with another sampled point within the sampling neighborhood. It covers hit-and-run timing coordinates. Analytic uniform routes require no chain and report density 1.
 
-Posterior-summary draws select a route, then use one posterior-array index for its WGD and all independent-gain timings, preserving their joint dependence. The [gain timing table](#_gain_timing_tabletsv) supplies node identity and phasing metadata; the aligned arrays and authoritative route weights are in the [timing archives](#timing-archives).
+Each posterior-summary draw samples a route and its gain and WGD timings jointly, preserving dependence between events. The [gain timing table](#_gain_timing_tabletsv) supplies node identity and phasing metadata; the [timing archives](#timing-archives) contain the joint timing draws and authoritative route weights.
 
 ## Downstream formats
 

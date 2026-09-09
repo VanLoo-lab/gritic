@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import secrets
 from dataclasses import dataclass
 from numbers import Integral, Real
 
@@ -3576,6 +3577,8 @@ def process_sample(
     )
     output_dir.mkdir(parents=True, exist_ok=overwrite)
 
+    if random_seed is None:
+        random_seed = secrets.randbits(64)
     rng = np.random.default_rng(random_seed)
 
 
