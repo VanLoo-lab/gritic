@@ -462,7 +462,9 @@ class SegmentDeterministicBehaviorTest(unittest.TestCase):
         ) as optimizer:
             mutation_rate = segment.get_mutation_rate()
 
-        optimizer.assert_called_once_with(segment.multiplicity_probabilities, 1)
+        optimizer.assert_called_once_with(
+            segment.multiplicity_probabilities, 1, rng=None,
+        )
         self.assertEqual(mutation_rate, 1.25)
 
     def test_mutation_rate_is_nan_when_optimisation_fails(self):

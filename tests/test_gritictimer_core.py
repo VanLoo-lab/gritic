@@ -93,8 +93,9 @@ class CloneFractionAndRouteBasicsTest(unittest.TestCase):
         wgd = np.array([0.4, 0.5, 0.6])
         mult = np.array([[1, 10], [2, 20], [3, 30]])
         indexes = np.array([1, 1, 2])
+        route.rng = mock.Mock(spec=np.random.Generator)
         with mock.patch.object(
-            gritictimer.np.random,
+            route.rng,
             'choice',
             return_value=indexes,
         ) as choice:
@@ -138,8 +139,9 @@ class CloneFractionAndRouteBasicsTest(unittest.TestCase):
         node_timing = np.arange(12).reshape(3, 4)
         wgd_timing = np.array([0.1, 0.2, 0.3, 0.4])
         indexes = np.array([3, 1, 3])
+        route.rng = mock.Mock(spec=np.random.Generator)
         with mock.patch.object(
-            gritictimer.np.random,
+            route.rng,
             'choice',
             return_value=indexes,
         ):
@@ -216,8 +218,9 @@ class ProposalGeometryValidationTest(unittest.TestCase):
         ))
         base_mult = np.arange(10, dtype=float).reshape(2, 5)
         timing = np.arange(8, dtype=float).reshape(4, 2)
+        route.rng = mock.Mock(spec=np.random.Generator)
         with mock.patch.object(
-            gritictimer.np.random,
+            route.rng,
             'choice',
             return_value=0.4,
         ) as choice, mock.patch.object(
@@ -244,6 +247,7 @@ class ProposalGeometryValidationTest(unittest.TestCase):
 
     def test_density_estimate_reports_local_neighbor_proportions(self):
         samples = np.array([[0.0], [0.01], [1.0], [2.0]])
+        self.route.rng = mock.Mock(spec=np.random.Generator)
         with mock.patch.dict(os.environ, {'LOKY_MAX_CPU_COUNT': '1'}), warnings.catch_warnings():
             warnings.filterwarnings(
                 'ignore',
@@ -251,7 +255,7 @@ class ProposalGeometryValidationTest(unittest.TestCase):
                 category=UserWarning,
             )
             with mock.patch.object(
-                gritictimer.np.random,
+                self.route.rng,
                 'choice',
                 return_value=np.arange(4),
             ):

@@ -406,7 +406,6 @@ class BalancedMirrorReuseTest(unittest.TestCase):
                 'Post_WGD_Losses': np.array([np.nan]),
             },
         ):
-            np.random.seed(7)
             classifier.fit_routes(
                 UnphasedProbabilityStore(),
                 None,

@@ -248,6 +248,7 @@ class WGDRunDecisionTest(unittest.TestCase):
                 gritictimer.DEFAULT_SUBCLONE_FRACTION_PRIOR,
                 gritictimer.DEFAULT_UNORDERED_BALANCED_ROUTE_PRIOR,
                 major_cn_mode,
+                rng=np.random.default_rng(8128),
             )
         finally:
             for patcher in reversed(patchers):
@@ -549,7 +550,9 @@ class WGDCandidateOrchestrationTest(unittest.TestCase):
         )
         self.assertIs(pool_segments.call_args.args[1], sample.subclone_table)
         self.assertEqual(pool_segments.call_args.args[2], sample.purity)
-        combine_distributions.assert_called_once_with(pooled_distributions)
+        combine_distributions.assert_called_once_with(
+            pooled_distributions, rng=mock.ANY,
+        )
 
         self.assertEqual(len(candidate_output), 4)
         self.assertEqual(

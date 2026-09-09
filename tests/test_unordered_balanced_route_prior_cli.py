@@ -100,7 +100,7 @@ class UnorderedBalancedRoutePriorCliTest(unittest.TestCase):
             major_cn=2,
             width=100,
             subclone_table=None,
-            get_info_dict=lambda: {},
+            get_info_dict=lambda *, rng: {},
         )
         sample = SimpleNamespace(
             sample_id='sample',
@@ -181,6 +181,7 @@ class UnorderedBalancedRoutePriorCliTest(unittest.TestCase):
                     gritictimer.DEFAULT_SUBCLONE_FRACTION_PRIOR
                 ),
                 unordered_balanced_route_prior=True,
+                rng=np.random.default_rng(8128),
             )
 
         self.assertIs(
@@ -198,7 +199,7 @@ class UnorderedBalancedRoutePriorCliTest(unittest.TestCase):
             minor_cn=4,
             subclone_table=None,
             multiplicity_probabilities=object(),
-            get_info_dict=lambda: {},
+            get_info_dict=lambda *, rng: {},
         )
         with mock.patch.object(
             gritictimer,

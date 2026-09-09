@@ -197,7 +197,7 @@ The CCF bounds must satisfy `0 < min_subclone_ccf <= max_subclone_ccf`.
 Every run requires configured autosomal segments with a segment-width-weighted modal `Major_CN` of 1 or 2, including runs with a supplied WGD count.
 
 - `--wgd-count {0,1}` Override GRITIC's inferred WGD count. A count of 0 bypasses WGD timing; a count of 1 still requires a timing estimate from eligible major-copy-number-two segments. If omitted, GRITIC infers the count. See [WGD timing estimation](#wgd-timing-estimation).
-- `--random-seed` Seed both NumPy and Numba stochastic inference with an integer from 0 through `2**32 - 1`.
+- `--random-seed` Seed stochastic inference with an unsigned 64-bit integer (`0` through `2**64 - 1`).
 - `--unordered-balanced-route-prior` Use a uniform prior over unordered allele-route pairs. See [balanced route priors](#balanced-route-priors) for the weighting of ordered routes. This is disabled by default.
 
 ### Timing intervals

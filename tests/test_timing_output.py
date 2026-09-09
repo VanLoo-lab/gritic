@@ -59,8 +59,9 @@ class TimingOutputTest(unittest.TestCase):
         classifier._get_output_routes = mock.Mock(
             return_value=[(route, 1.0)]
         )
+        route.rng = mock.Mock(spec=np.random.Generator)
         with mock.patch.object(
-            gritictimer.np.random,
+            route.rng,
             'choice',
             side_effect=AssertionError(
                 'Timing serialization must not resample fitted particles'

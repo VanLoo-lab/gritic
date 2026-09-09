@@ -10,7 +10,7 @@ class DirectionGeometryTest(unittest.TestCase):
     def test_random_direction_has_requested_dimension_and_unit_norm(self):
         for dimension in (1, 2, 7):
             with self.subTest(dimension=dimension):
-                direction = hitandrun.get_random_direction(dimension)
+                direction = hitandrun.get_random_direction(dimension, np.random.default_rng(44021))
                 self.assertEqual(direction.shape, (dimension,))
                 self.assertTrue(np.isfinite(direction).all())
                 self.assertAlmostEqual(np.linalg.norm(direction), 1.0, 13)
@@ -58,6 +58,7 @@ class DirectionGeometryTest(unittest.TestCase):
                 start,
                 null_basis.shape[1],
                 null_basis,
+                rng=np.random.default_rng(44_021),
             )
             self.assertTrue((sampled >= 0.0).all())
             self.assertTrue((sampled <= 1.0).all())
@@ -76,6 +77,7 @@ class HitAndRunChainTest(unittest.TestCase):
             n_samples=6,
             burn_in=100,
             skips=20,
+            rng=np.random.default_rng(44_021),
         )
 
         self.assertFalse(process_limit_exceeded)
@@ -89,6 +91,7 @@ class HitAndRunChainTest(unittest.TestCase):
             null_basis,
             state,
             n_samples=5,
+            rng=np.random.default_rng(44_021),
         )
 
         self.assertFalse(process_limit_exceeded)
@@ -109,7 +112,6 @@ class HitAndRunChainTest(unittest.TestCase):
         n_samples = 7
         dense_sample_count = burn_in + skips * n_samples
 
-        hitandrun.seed_random(44_021)
         dense_samples = hitandrun.run_chain(
             state,
             null_basis.shape[1],
@@ -118,8 +120,8 @@ class HitAndRunChainTest(unittest.TestCase):
             burn_in=0,
             skips=1,
             n_samples=dense_sample_count,
+            rng=np.random.default_rng(44_021),
         )
-        hitandrun.seed_random(44_021)
         thinned_samples = hitandrun.run_chain(
             state,
             null_basis.shape[1],
@@ -128,6 +130,7 @@ class HitAndRunChainTest(unittest.TestCase):
             burn_in=burn_in,
             skips=skips,
             n_samples=n_samples,
+            rng=np.random.default_rng(44_021),
         )
 
         np.testing.assert_array_equal(
@@ -151,6 +154,7 @@ class HitAndRunChainTest(unittest.TestCase):
             n_samples=20,
             burn_in=5,
             skips=2,
+            rng=np.random.default_rng(44_021),
         )
 
         self.assertFalse(process_limit_exceeded)

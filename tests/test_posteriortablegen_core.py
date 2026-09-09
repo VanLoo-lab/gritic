@@ -722,6 +722,7 @@ class PosteriorSegmentGenerationTest(unittest.TestCase):
                 )
 
     def test_draws_route_once_and_uses_one_joint_timing_index(self):
+        rng = mock.Mock(spec=np.random.Generator)
         archive_delta = 5e-14
         self.timing_dict['a']['Probability'] = np.asarray([
             0.25 + archive_delta
@@ -730,12 +731,12 @@ class PosteriorSegmentGenerationTest(unittest.TestCase):
             0.75 - archive_delta
         ])
         with mock.patch.object(
-            posteriortablegen.np.random,
+            rng,
             'choice',
             return_value=np.array(['b', 'a']),
         ) as choice, mock.patch.object(
-            posteriortablegen.np.random,
-            'randint',
+            rng,
+            'integers',
             side_effect=[1, 0],
         ) as randint:
             gain_draws, route_draws = (
@@ -745,6 +746,7 @@ class PosteriorSegmentGenerationTest(unittest.TestCase):
                     self.timing_dict,
                     'segment',
                     n_samples=2,
+                    rng=rng,
                 )
             )
 
@@ -835,6 +837,7 @@ class SamplePosteriorArchiveIntegrationTest(unittest.TestCase):
         self.assertEqual(list(route_draws.columns), ROUTE_DRAW_COLUMNS)
 
     def test_mixed_uniform_and_particle_segments_load_only_particle_archive(self):
+        rng = mock.Mock(spec=np.random.Generator)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             route_path = root / 'routes.tsv'
@@ -864,12 +867,12 @@ class SamplePosteriorArchiveIntegrationTest(unittest.TestCase):
             }, root / 'sample_timing_dicts', 'gained')
 
             with mock.patch.object(
-                posteriortablegen.np.random,
+                rng,
                 'choice',
                 return_value=np.array(['gained-route']),
             ) as choice, mock.patch.object(
-                posteriortablegen.np.random,
-                'randint',
+                rng,
+                'integers',
                 return_value=0,
             ):
                 gain_draws, route_draws = (
@@ -879,6 +882,7 @@ class SamplePosteriorArchiveIntegrationTest(unittest.TestCase):
                         root,
                         'sample',
                         n_posterior_samples=1,
+                        rng=rng,
                     )
                 )
 
@@ -887,6 +891,7 @@ class SamplePosteriorArchiveIntegrationTest(unittest.TestCase):
         self.assertEqual(route_draws['Segment_ID'].tolist(), ['gained'])
 
     def test_reads_tables_and_archives_for_multiple_segments(self):
+        rng = mock.Mock(spec=np.random.Generator)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             rows = [
@@ -932,12 +937,12 @@ class SamplePosteriorArchiveIntegrationTest(unittest.TestCase):
             }, archive_dir, '0001')
 
             with mock.patch.object(
-                posteriortablegen.np.random,
+                rng,
                 'choice',
                 side_effect=[np.array(['r2', 'r2']), np.array(['r1', 'r1'])],
             ), mock.patch.object(
-                posteriortablegen.np.random,
-                'randint',
+                rng,
+                'integers',
                 side_effect=[0, 1, 1, 0],
             ):
                 gain_draws, route_draws = (
@@ -947,6 +952,7 @@ class SamplePosteriorArchiveIntegrationTest(unittest.TestCase):
                         root,
                         '001',
                         n_posterior_samples=2,
+                        rng=rng,
                     )
                 )
 
@@ -964,6 +970,7 @@ class SamplePosteriorArchiveIntegrationTest(unittest.TestCase):
         )
 
     def test_uses_penalized_probability_column_when_requested(self):
+        rng = mock.Mock(spec=np.random.Generator)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             rows = [
@@ -991,12 +998,12 @@ class SamplePosteriorArchiveIntegrationTest(unittest.TestCase):
             }, root / 'sample_timing_dicts', 'segment')
 
             with mock.patch.object(
-                posteriortablegen.np.random,
+                rng,
                 'choice',
                 return_value=np.array(['b']),
             ) as choice, mock.patch.object(
-                posteriortablegen.np.random,
-                'randint',
+                rng,
+                'integers',
                 return_value=0,
             ):
                 posteriortablegen.get_sample_posterior_tables(
@@ -1006,6 +1013,7 @@ class SamplePosteriorArchiveIntegrationTest(unittest.TestCase):
                     'sample',
                     n_posterior_samples=1,
                     apply_penalty=True,
+                    rng=rng,
                 )
         np.testing.assert_allclose(choice.call_args.kwargs['p'], [0.2, 0.8])
 

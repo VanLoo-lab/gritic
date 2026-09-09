@@ -27,7 +27,7 @@ dependencies = [
     "scipy",
     "scikit-learn",
     "networkx>=3.5,<3.7",
-    "numba",
+    "numba>=0.57",
 ]
 
 [project.urls]

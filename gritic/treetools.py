@@ -1,7 +1,7 @@
 import networkx as nx
+import numpy as np
 import itertools
 import hashlib
-import random
 import warnings
 
 from gritic.tableschemas import NODE_PHASING_LABELS
@@ -547,7 +547,10 @@ def get_combined_hierarchy_pos(route_tree):
     
     return {**major_pos,**minor_pos}
 #https://stackoverflow.com/questions/29586520/can-one-get-hierarchical-graphs-from-networkx-with-python-3
-def hierarchy_pos(G, root=None, width=1., vert_gap = 0.2, vert_loc = 0, xcenter = 0.5,x_offset=0):
+def hierarchy_pos(
+    G, root=None, width=1., vert_gap=0.2, vert_loc=0, xcenter=0.5,
+    x_offset=0, *, rng=None,
+):
 
     '''
     From Joel's answer at https://stackoverflow.com/a/29597209/2966723.  
@@ -579,9 +582,12 @@ def hierarchy_pos(G, root=None, width=1., vert_gap = 0.2, vert_loc = 0, xcenter 
 
     if root is None:
         if isinstance(G, nx.DiGraph):
-            root = next(iter(nx.topological_sort(G)))  #allows back compatibility with nx version 1.11
+            root = next(iter(nx.topological_sort(G)))
         else:
-            root = random.choice(list(G.nodes))
+            if rng is None:
+                rng = np.random.default_rng()
+            nodes = list(G.nodes)
+            root = nodes[int(rng.integers(len(nodes)))]
 
     def _hierarchy_pos(G, root, width=1., vert_gap = 0.2, vert_loc = 0, xcenter = 0.5, pos = None, parent = None,x_offset=0):
         '''

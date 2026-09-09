@@ -1369,8 +1369,10 @@ class Segment:
             sample_peak_names.append(f"Subclone_{i}")
         return sample_peak_names
     
-    def get_mutation_rate(self):
-        mult_proportions = multiplicityoptimiser.unconstrained_mult_optimisation(self.multiplicity_probabilities,self.n_subclones)
+    def get_mutation_rate(self, *, rng=None):
+        mult_proportions = multiplicityoptimiser.unconstrained_mult_optimisation(
+            self.multiplicity_probabilities, self.n_subclones, rng=rng,
+        )
         if mult_proportions is None:
             return np.nan
         mult_states = np.concatenate([np.arange(self.major_cn)+1,np.ones(self.n_subclones)])
@@ -1756,14 +1758,14 @@ class Segment:
             self.n_subclones,
         )
     
-    def get_info_dict(self):
+    def get_info_dict(self, *, rng=None):
         
         info_dict = {'Segment_ID':self.segment_id,'Chromosome':self.chromosome,'Segment_Start':self.start,'Segment_End':self.end}
         info_dict['Major_CN'] = self.major_cn
         info_dict['Minor_CN'] = self.minor_cn
         info_dict['Total_CN'] = self.total_cn
         info_dict['N_Mutations']=self.n_mutations
-        info_dict['Mutation_Rate'] = self.get_mutation_rate()
+        info_dict['Mutation_Rate'] = self.get_mutation_rate(rng=rng)
         return info_dict
     
   

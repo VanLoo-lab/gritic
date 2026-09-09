@@ -645,8 +645,12 @@ def produce_timing_segment_tables(
     segment_id,
     n_samples=100,
     probability_column='Probability',
+    *,
+    rng=None,
 ):
     """Draw routes once per posterior sample and timings jointly per route."""
+    if rng is None:
+        rng = np.random.default_rng()
     probabilities = _normalized_route_probabilities(
         segment_route_table,
         probability_column,
@@ -682,7 +686,7 @@ def produce_timing_segment_tables(
         )
     probabilities = archive_probabilities / archive_probability_sum
 
-    sampled_routes = np.random.choice(
+    sampled_routes = rng.choice(
         segment_route_table['Route'].to_numpy(),
         size=n_samples,
         replace=True,
@@ -714,7 +718,7 @@ def produce_timing_segment_tables(
             node: column
             for column, node in enumerate(timing_node_ids.tolist())
         }
-        timing_sample_index = np.random.randint(
+        timing_sample_index = rng.integers(
             0,
             wgd_timing_store.size,
         )
@@ -760,8 +764,12 @@ def get_sample_posterior_tables(
     sample_id: str,
     n_posterior_samples: int = 100,
     apply_penalty: bool = False,
+    *,
+    rng=None,
 ):
     """Return gain draws and the one-row-per-draw route ledger."""
+    if rng is None:
+        rng = np.random.default_rng()
     apply_penalty = validation.validate_boolean(apply_penalty, 'apply_penalty')
     n_posterior_samples = validation.validate_integer(
         n_posterior_samples, 'n_posterior_samples', minimum=1,
@@ -833,6 +841,7 @@ def get_sample_posterior_tables(
             segment_id,
             n_samples=n_posterior_samples,
             probability_column=probability_column,
+            rng=rng,
         )
         if gain_frame is None:
             warnings.warn(

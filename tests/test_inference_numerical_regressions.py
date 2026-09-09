@@ -204,6 +204,7 @@ class HighCopyNumberFitTest(unittest.TestCase):
             minor_cn,
             False,
             'No_WGD',
+            rng=np.random.default_rng(1_907),
         )
         original_sampling = gritictimer.Route.run_geometry_sampling
 
@@ -216,8 +217,6 @@ class HighCopyNumberFitTest(unittest.TestCase):
                 density_cut_off=0.0,
             )
 
-        np.random.seed(1_907)
-        hitandrun.seed_random(1_907)
         with mock.patch.object(
             gritictimer.Route,
             'run_geometry_sampling',

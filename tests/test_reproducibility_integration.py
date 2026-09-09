@@ -1,8 +1,10 @@
 import tempfile
 import unittest
 from collections.abc import Mapping
+from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 import numpy as np
 import pandas as pd
@@ -46,7 +48,7 @@ class RandomSeedValidationTest(unittest.TestCase):
             True,
             np.bool_(False),
             -1,
-            2**32,
+            2**64,
             1.5,
             '17',
         )
@@ -57,7 +59,7 @@ class RandomSeedValidationTest(unittest.TestCase):
                 with self.subTest(seed=seed):
                     with self.assertRaisesRegex(
                         ValueError,
-                        r'random_seed.*between 0 and 4294967295',
+                        r'random_seed.*between 0 and 18446744073709551615',
                     ):
                         gritictimer.process_sample(
                             sample,
@@ -66,33 +68,33 @@ class RandomSeedValidationTest(unittest.TestCase):
                         )
                     self.assertFalse(output_path.exists())
 
-    def test_numba_hit_and_run_stream_can_be_reseeded_exactly(self):
+    def test_numba_hit_and_run_reproduces_full_width_seeds(self):
         state = np.array([0.2, 0.3, 0.5])
         null_basis = null_space(np.ones((1, state.size)))
 
-        hitandrun.seed_random(90210)
         first = hitandrun.hit_and_run(
             null_basis,
             state,
             n_samples=12,
             burn_in=4,
             skips=2,
+            rng=np.random.default_rng(2**64 - 1),
         )
-        hitandrun.seed_random(90210)
         repeated = hitandrun.hit_and_run(
             null_basis,
             state,
             n_samples=12,
             burn_in=4,
             skips=2,
+            rng=np.random.default_rng(2**64 - 1),
         )
-        hitandrun.seed_random(90211)
         different = hitandrun.hit_and_run(
             null_basis,
             state,
             n_samples=12,
             burn_in=4,
             skips=2,
+            rng=np.random.default_rng(2**32 - 1),
         )
 
         np.testing.assert_array_equal(first, repeated)
@@ -112,12 +114,21 @@ class SeededSubcloneProcessSampleTest(unittest.TestCase):
         sample = make_subclonal_gain_sample()
         cls.output_directories = []
         for temporary_directory in cls.temporary_directories:
-            gritictimer.process_sample(
-                sample,
-                temporary_directory.name,
-                wgd_count=0,
-                random_seed=731_921,
-            )
+            with ExitStack() as stack:
+                for method in (
+                    'seed', 'choice', 'randint', 'normal', 'uniform',
+                    'shuffle', 'dirichlet',
+                ):
+                    stack.enter_context(mock.patch.object(
+                        np.random, method,
+                        side_effect=AssertionError('Unexpected global RNG use'),
+                    ))
+                gritictimer.process_sample(
+                    sample,
+                    temporary_directory.name,
+                    wgd_count=0,
+                    random_seed=2**64 - 1,
+                )
             cls.output_directories.append(
                 Path(temporary_directory.name) / sample.sample_id
             )

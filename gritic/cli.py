@@ -47,11 +47,11 @@ def positive_integer(value):
 def random_seed(value):
     try:
         return validation.validate_integer(
-            int(value), 'random_seed', maximum=2**32 - 1,
+            int(value), 'random_seed', maximum=2**64 - 1,
         )
     except (TypeError, ValueError, OverflowError) as error:
         raise argparse.ArgumentTypeError(
-            'must be an integer between 0 and 2**32 - 1'
+            'must be an integer between 0 and 2**64 - 1'
         ) from error
 
 
@@ -402,8 +402,8 @@ def build_parser():
         type=random_seed,
         default=None,
         help=(
-            'Seed both NumPy and Numba stochastic inference with an integer '
-            'between 0 and 2**32 - 1. By default, no seed is imposed.'
+            'Seed stochastic inference with an integer '
+            'between 0 and 2**64 - 1. By default, no seed is imposed.'
         ),
     )
     defaults = intervaltools.DEFAULT_TIMING_INTERVALS

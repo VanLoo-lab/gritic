@@ -60,12 +60,12 @@ class CliTypeValidationTest(unittest.TestCase):
                     cli.positive_integer(value)
 
         self.assertEqual(cli.random_seed('0'), 0)
-        self.assertEqual(cli.random_seed(str(2**32 - 1)), 2**32 - 1)
-        for value in ('-1', str(2**32), '1.5', 'nan', '', None):
+        self.assertEqual(cli.random_seed(str(2**64 - 1)), 2**64 - 1)
+        for value in ('-1', str(2**64), '1.5', 'nan', '', None):
             with self.subTest(function='random_seed', value=value):
                 with self.assertRaisesRegex(
                     argparse.ArgumentTypeError,
-                    r'integer between 0 and 2\*\*32 - 1',
+                    r'integer between 0 and 2\*\*64 - 1',
                 ):
                     cli.random_seed(value)
 
@@ -366,7 +366,7 @@ class CliMainTest(CliArgumentFixture, unittest.TestCase):
             '--min-subclone-fraction', '0.15',
             '--subclone-fraction-prior', 'supplied',
             '--wgd-count', '1',
-            '--random-seed', '4294967295',
+            '--random-seed', '18446744073709551615',
             '--unordered-balanced-route-prior',
             '--plot-trees',
             '--route-gain-interval-width', '0.81',
@@ -426,7 +426,7 @@ class CliMainTest(CliArgumentFixture, unittest.TestCase):
             ),
             subclone_fraction_prior='supplied',
             unordered_balanced_route_prior=True,
-            random_seed=2**32 - 1,
+            random_seed=2**64 - 1,
         )
 
     @mock.patch.object(cli.gritictimer, 'process_sample')

@@ -254,7 +254,8 @@ class ProposalGeometry:
 
 
 class Route:
-    def __init__(self, route_id, route_tree):
+    def __init__(self, route_id, route_tree, *, rng=None):
+        self.rng = np.random.default_rng() if rng is None else rng
         self.route_id = route_id
         self.short_id = route_id[:9]
         self.route_tree = route_tree
@@ -313,8 +314,8 @@ class Route:
                 )
         return np.asarray(cumulative_timing)
 
-    @staticmethod
     def get_weighted_sample_indices(
+        self,
         weights,
         n_candidates,
         n_samples=ROUTE_CONDITIONAL_SAMPLE_COUNT,
@@ -329,7 +330,7 @@ class Route:
         assert (weights > -1e-80).all()
         weights = np.clip(weights, 0, 1)
         weights = weights / np.sum(weights)
-        return np.random.choice(
+        return self.rng.choice(
             np.arange(n_candidates),
             size=n_samples,
             replace=True,
@@ -374,6 +375,7 @@ class Route:
             constraints_null,
             start_sol,
             n_samples=n_samples,
+            rng=self.rng,
         )
 
         timing = self.get_cumulative_timing(solutions)
@@ -404,7 +406,7 @@ class Route:
         wgd_timing,
         n_samples=300,
     ):
-        random_indices = np.random.choice(
+        random_indices = self.rng.choice(
             node_timing.shape[1],
             size=n_samples,
         )
@@ -420,9 +422,8 @@ class Route:
             )
         }
 
-    @staticmethod
-    def simulate_clone_share(alpha, n_samples):
-        return np.random.dirichlet(alpha, size=n_samples)
+    def simulate_clone_share(self, alpha, n_samples):
+        return self.rng.dirichlet(alpha, size=n_samples)
 
     def get_density_estimate(
         self,
@@ -433,7 +434,7 @@ class Route:
         nn_finder = NearestNeighbors(radius=radius, p=1)
         nn_finder.fit(samples)
         n_test_points = min(n_test_points, samples.shape[0])
-        random_mult_indices = np.random.choice(
+        random_mult_indices = self.rng.choice(
             samples.shape[0],
             size=n_test_points,
             replace=False,
@@ -470,7 +471,7 @@ class Route:
 
         while sample_count < max_samples:
             if self.wgd_status:
-                wgd_timing = np.random.choice(wgd_timing_distribution)
+                wgd_timing = self.rng.choice(wgd_timing_distribution)
             else:
                 wgd_timing = np.nan
             mults, timing = self.sample_mults(wgd_timing, samples_per_run)
@@ -898,7 +899,9 @@ class RouteClassifier:
         subclone_fraction_prior=DEFAULT_SUBCLONE_FRACTION_PRIOR,
         unordered_balanced_route_prior=DEFAULT_UNORDERED_BALANCED_ROUTE_PRIOR,
         route_trees=None,
+        rng=None,
     ):
+        self.rng = np.random.default_rng() if rng is None else rng
         self.major_cn = major_cn
         self.minor_cn = minor_cn
         self.wgd_status = wgd_status
@@ -923,7 +926,7 @@ class RouteClassifier:
                     'state and WGD status'
                 )
         self.routes = {
-            route_id: Route(route_id, route_tree)
+            route_id: Route(route_id, route_tree, rng=self.rng)
             for route_id, route_tree in route_trees.items()
         }
         route_representations = {
@@ -2704,7 +2707,11 @@ def get_combined_distribution(
     distributions,
     n_samples=COMBINED_WGD_SAMPLE_COUNT,
     eps=1e-300,
+    *,
+    rng=None,
 ):
+    if rng is None:
+        rng = np.random.default_rng()
     bins = np.linspace(0,1,201)
     bin_mid_points = (bins[1:]+bins[:(bins.size-1)])/2
     binned_distributions = []
@@ -2720,7 +2727,9 @@ def get_combined_distribution(
 
     combined_distribution = np.exp(combined_distribution-logsumexp(combined_distribution))
    
-    combined_distribution_samples = np.random.choice(bin_mid_points,p=combined_distribution,size=n_samples,replace=True)
+    combined_distribution_samples = rng.choice(
+        bin_mid_points, p=combined_distribution, size=n_samples, replace=True,
+    )
     return combined_distribution_samples
 
 
@@ -2792,7 +2801,7 @@ def _get_wgd_segment_result(segment, classifier, interval_config):
         how='inner',
         validate='one_to_many',
     )
-    for key, val in segment.get_info_dict().items():
+    for key, val in segment.get_info_dict(rng=classifier.rng).items():
         wgd_timing_table[key] = val
 
     classifier_route = list(classifier.routes.values())[0]
@@ -2807,7 +2816,11 @@ def time_wgd_major_cn_2(
     interval_config=DEFAULT_TIMING_INTERVALS,
     subclone_fraction_prior=DEFAULT_SUBCLONE_FRACTION_PRIOR,
     unordered_balanced_route_prior=DEFAULT_UNORDERED_BALANCED_ROUTE_PRIOR,
+    *,
+    rng=None,
 ):
+    if rng is None:
+        rng = np.random.default_rng()
     subclone_fraction_prior = validate_subclone_fraction_prior(
         subclone_fraction_prior
     )
@@ -2843,6 +2856,7 @@ def time_wgd_major_cn_2(
             subclone_fraction_prior=subclone_fraction_prior,
             unordered_balanced_route_prior=unordered_balanced_route_prior,
             route_trees=state_jobs['route_trees'],
+            rng=rng,
         )
         if state_jobs['route_trees'] is None:
             state_jobs['route_trees'] = {
@@ -2928,8 +2942,11 @@ def time_wgd_major_cn_2(
         timing_dict_dir,
         subclone_fraction_prior=subclone_fraction_prior,
         unordered_balanced_route_prior=unordered_balanced_route_prior,
+        rng=rng,
     )
-    wgd_timing_distribution = get_combined_distribution(cn_distributions)
+    wgd_timing_distribution = get_combined_distribution(
+        cn_distributions, rng=rng,
+    )
     
     return wgd_timing_distribution,non_overlapping_segment_ids,overlap_proportion,best_overlap_timing
 
@@ -2946,6 +2963,7 @@ def _time_combined_wgd_segment(
     timing_dict_dir,
     subclone_fraction_prior,
     unordered_balanced_route_prior,
+    rng,
 ):
     mutation_table = mutation_table.copy()
     mutation_table['Segment_ID'] = f'Minor_CN_{minor_cn}'
@@ -2970,6 +2988,7 @@ def _time_combined_wgd_segment(
         'No_WGD',
         subclone_fraction_prior=subclone_fraction_prior,
         unordered_balanced_route_prior=unordered_balanced_route_prior,
+        rng=rng,
     )
     classifier.fit_routes(
         mult_probabilities,
@@ -3007,7 +3026,11 @@ def get_combined_segment_timing_cn_2(
     timing_dict_dir,
     subclone_fraction_prior=DEFAULT_SUBCLONE_FRACTION_PRIOR,
     unordered_balanced_route_prior=DEFAULT_UNORDERED_BALANCED_ROUTE_PRIOR,
+    *,
+    rng=None,
 ):
+    if rng is None:
+        rng = np.random.default_rng()
     subclone_fraction_prior = validate_subclone_fraction_prior(
         subclone_fraction_prior
     )
@@ -3069,6 +3092,7 @@ def get_combined_segment_timing_cn_2(
                 timing_dict_dir,
                 subclone_fraction_prior,
                 unordered_balanced_route_prior,
+                rng=rng,
             )
         )
     
@@ -3181,7 +3205,7 @@ def _write_segment_results(
     segment_timing_table = classifier.get_timing_table(
         interval=interval_config.route_gain,
     )
-    for key, val in segment.get_info_dict().items():
+    for key, val in segment.get_info_dict(rng=classifier.rng).items():
         segment_route_table[key] = val
     segment_route_table = add_wgd_info_to_route_table(
         segment_route_table,
@@ -3240,7 +3264,11 @@ def process_segments(
     interval_config=DEFAULT_TIMING_INTERVALS,
     subclone_fraction_prior=DEFAULT_SUBCLONE_FRACTION_PRIOR,
     unordered_balanced_route_prior=DEFAULT_UNORDERED_BALANCED_ROUTE_PRIOR,
+    *,
+    rng=None,
 ):
+    if rng is None:
+        rng = np.random.default_rng()
     subclone_fraction_prior = validate_subclone_fraction_prior(
         subclone_fraction_prior
     )
@@ -3266,6 +3294,7 @@ def process_segments(
             'Default',
             subclone_fraction_prior=subclone_fraction_prior,
             unordered_balanced_route_prior=unordered_balanced_route_prior,
+            rng=rng,
         )
         route_trees = {
             route_id: route.route_tree
@@ -3317,6 +3346,7 @@ def process_segments(
                             unordered_balanced_route_prior
                         ),
                         route_trees=route_trees,
+                        rng=rng,
                     )
                 classifier_jobs.append((
                     classifier,
@@ -3362,6 +3392,7 @@ def _run_sample(
     subclone_fraction_prior,
     unordered_balanced_route_prior,
     major_cn_mode,
+    rng,
 ):
     if wgd_count is not None:
         if major_cn_mode == 1 and wgd_count == 1:
@@ -3388,6 +3419,7 @@ def _run_sample(
                 interval_config=interval_config,
                 subclone_fraction_prior=subclone_fraction_prior,
                 unordered_balanced_route_prior=unordered_balanced_route_prior,
+                rng=rng,
             )
             wgd_status = True
         else:
@@ -3415,6 +3447,7 @@ def _run_sample(
             interval_config=interval_config,
             subclone_fraction_prior=subclone_fraction_prior,
             unordered_balanced_route_prior=unordered_balanced_route_prior,
+            rng=rng,
         )
         if overlap_proportion < min_wgd_overlap:
             warnings.warn(
@@ -3464,6 +3497,7 @@ def _run_sample(
         interval_config=interval_config,
         subclone_fraction_prior=subclone_fraction_prior,
         unordered_balanced_route_prior=unordered_balanced_route_prior,
+        rng=rng,
     )
 
     if os.path.exists(route_table_path):
@@ -3477,6 +3511,7 @@ def _run_sample(
                 output_dir,
                 sample.sample_id,
                 apply_penalty=apply_penalty,
+                rng=rng,
             )
             sample_posterior_table_summary = (
                 posteriortablegen.get_sample_posterior_table_summary(
@@ -3522,7 +3557,7 @@ def process_sample(
         min_wgd_overlap, 'min_wgd_overlap',
     )
     random_seed = validation.validate_integer(
-        random_seed, 'random_seed', maximum=2**32 - 1, allow_none=True,
+        random_seed, 'random_seed', maximum=2**64 - 1, allow_none=True,
     )
     validate_sample_id(sample.sample_id)
     major_cn_mode = get_major_cn_mode(sample)
@@ -3546,9 +3581,7 @@ def process_sample(
     else:
         os.makedirs(output_dir, exist_ok=False)
 
-    if random_seed is not None:
-        np.random.seed(random_seed)
-        hitandrun.seed_random(random_seed)
+    rng = np.random.default_rng(random_seed)
 
 
     timing_dict_dir= output_dir/f"{sample.sample_id}_timing_dicts/"
@@ -3632,4 +3665,5 @@ def process_sample(
         subclone_fraction_prior,
         unordered_balanced_route_prior,
         major_cn_mode,
+        rng=rng,
     )

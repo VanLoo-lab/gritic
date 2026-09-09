@@ -414,13 +414,10 @@ class TreeIdentityAndLayoutTest(unittest.TestCase):
 
     def test_undirected_hierarchy_without_root_uses_a_valid_random_root(self):
         tree = nx.Graph([(0, 1), (1, 2)])
-        with mock.patch.object(
-            treetools.random,
-            'choice',
-            return_value=1,
-        ) as choose:
-            positions = treetools.hierarchy_pos(tree)
-        choose.assert_called_once_with([0, 1, 2])
+        rng = mock.Mock()
+        rng.integers.return_value = 1
+        positions = treetools.hierarchy_pos(tree, rng=rng)
+        rng.integers.assert_called_once_with(3)
         self.assertEqual(set(positions), {0, 1, 2})
         self.assertEqual(positions[1], (0.5, 0))
         self.assertEqual(positions[0], (0.25, -0.2))

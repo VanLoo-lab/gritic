@@ -2,9 +2,9 @@ import numpy as np
 from scipy.optimize import LinearConstraint, minimize
 
 
-def unconstrained_mult_optimisation(mult_probabilities, n_subclones):
+def unconstrained_mult_optimisation(mult_probabilities, n_subclones, *, rng=None):
     n_dim = mult_probabilities.major_cn + n_subclones
-    start_point = get_point_on_simplex(n_dim)
+    start_point = get_point_on_simplex(n_dim, rng=rng)
     bounds = [(0, 1)] * n_dim
     constraints = LinearConstraint(np.ones((1, n_dim)), 1, 1)
     sol = minimize(
@@ -23,5 +23,7 @@ def unconstrained_mult_likelihood(x, mult_probabilities):
     return -mult_probabilities.evaluate_likelihood(x)
 
 
-def get_point_on_simplex(n_dim):
-    return np.random.dirichlet(np.ones(n_dim))
+def get_point_on_simplex(n_dim, *, rng=None):
+    if rng is None:
+        rng = np.random.default_rng()
+    return rng.dirichlet(np.ones(n_dim))

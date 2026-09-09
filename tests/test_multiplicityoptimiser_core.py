@@ -18,20 +18,18 @@ class FakeMultiplicityProbabilities:
 
 class SimplexPointTest(unittest.TestCase):
     def test_generated_point_is_strictly_inside_requested_simplex(self):
-        np.random.seed(8128)
+        rng = np.random.default_rng(8128)
 
         for dimension in (1, 2, 8):
             with self.subTest(dimension=dimension):
-                point = multiplicityoptimiser.get_point_on_simplex(dimension)
+                point = multiplicityoptimiser.get_point_on_simplex(dimension, rng=rng)
                 self.assertEqual(point.shape, (dimension,))
                 self.assertTrue((point > 0.0).all())
                 self.assertAlmostEqual(point.sum(), 1.0, 14)
 
-    def test_simplex_sampling_obeys_numpy_seed(self):
-        np.random.seed(91)
-        first = multiplicityoptimiser.get_point_on_simplex(5)
-        np.random.seed(91)
-        second = multiplicityoptimiser.get_point_on_simplex(5)
+    def test_simplex_sampling_obeys_generator_seed(self):
+        first = multiplicityoptimiser.get_point_on_simplex(5, rng=np.random.default_rng(91))
+        second = multiplicityoptimiser.get_point_on_simplex(5, rng=np.random.default_rng(91))
 
         np.testing.assert_array_equal(first, second)
 
@@ -69,7 +67,7 @@ class MultiplicityOptimisationTest(unittest.TestCase):
                 n_subclones=1,
             )
 
-        point_mock.assert_called_once_with(4)
+        point_mock.assert_called_once_with(4, rng=None)
         self.assertIs(actual, solution)
         positional, keyword = minimize_mock.call_args
         self.assertIs(
@@ -110,11 +108,11 @@ class MultiplicityOptimisationTest(unittest.TestCase):
                 weights * np.log(np.clip(state, 1e-300, None))
             ),
         )
-        np.random.seed(1301)
 
         solution = multiplicityoptimiser.unconstrained_mult_optimisation(
             probabilities,
             n_subclones=0,
+            rng=np.random.default_rng(1301),
         )
 
         self.assertIsNotNone(solution)
