@@ -8,6 +8,50 @@ GRITIC is agnostic to reference genome. The number of numbered autosomes is conf
 
 The method is described in [Baker et al. (2024), *The History of Chromosomal Instability in Genome-Doubled Tumors*][publication].
 
+## Table of contents
+
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [Input tables](#input-tables)
+  - [Mutation table](#mutation-table)
+  - [Copy number table](#copy-number-table)
+  - [Subclone table](#subclone-table)
+- [Run options](#run-options)
+  - [Required run arguments](#required-run-arguments)
+  - [Output handling](#output-handling)
+  - [Genome and input handling](#genome-and-input-handling)
+  - [Mutation filtering and detection correction](#mutation-filtering-and-detection-correction)
+  - [Subclone handling](#subclone-handling)
+  - [Inference model and WGD calling](#inference-model-and-wgd-calling)
+  - [Timing intervals](#timing-intervals)
+- [Outputs](#outputs)
+  - [Posterior timing summaries](#posterior-timing-summaries)
+  - [`_route_table.tsv`](#_route_tabletsv)
+  - [`_gain_timing_table.tsv`](#_gain_timing_tabletsv)
+  - [`_wgd_calling_info.json`](#_wgd_calling_infojson)
+  - [`_gain_timing_table_wgd_segments.tsv`](#_gain_timing_table_wgd_segmentstsv)
+  - [`_tree_plots`](#_tree_plots)
+  - [Processed inputs and downstream tables](#processed-inputs-and-downstream-tables)
+- [Model details](#model-details)
+  - [Balanced route priors](#balanced-route-priors)
+  - [Balanced WGD segments](#balanced-wgd-segments)
+  - [WGD timing estimation](#wgd-timing-estimation)
+  - [Detection correction and mutation-share priors](#detection-correction-and-mutation-share-priors)
+  - [Posterior sampling](#posterior-sampling)
+- [Downstream formats](#downstream-formats)
+  - [`_count_group_table.tsv`](#_count_group_tabletsv)
+  - [`_phase_group_table.tsv`](#_phase_group_tabletsv)
+  - [`_likelihood_context_table.tsv`](#_likelihood_context_tabletsv)
+  - [`_segment_context_table.tsv`](#_segment_context_tabletsv)
+  - [`_count_group_likelihood_table.tsv`](#_count_group_likelihood_tabletsv)
+  - [`_segment_group_table.tsv`](#_segment_group_tabletsv)
+  - [Timing archives](#timing-archives)
+- [Python API](#python-api)
+  - [Running GRITIC](#running-gritic)
+  - [Input handling](#input-handling)
+  - [Timing intervals and WGD inference](#timing-intervals-and-wgd-inference)
+  - [Reading timing archives](#reading-timing-archives)
+
 ## Installation
 
 Python 3.12 or newer is required. Install the version documented here from this repository checkout:
