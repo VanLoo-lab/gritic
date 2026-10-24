@@ -109,10 +109,10 @@ GRITIC supports two segment-assignment modes:
 
 In supplied-ID mode, both tables require nonblank `Segment_ID` values, and those IDs must be unique in the copy-number table. Every mutation's `Segment_ID` must match a copy-number row, including its `Chromosome`. If `--drop-unmatched-snvs` is supplied, GRITIC drops mutations unmatched by either assignment mode and reports the number dropped. Missing or blank supplied IDs and chromosome mismatches remain errors.
 
-GRITIC does not model mutations in zero-copy `0+0` segments. In supplied-ID
-mode, GRITIC drops mutations assigned to these segments and reports the mutation
-count, segment count, and source `Segment_ID` values. This is independent of
-`--drop-unmatched-snvs` because those IDs are matched rather than unknown.
+GRITIC drops zero-copy `0+0` segments and their mutations before merging. In
+supplied-ID mode, the input segment IDs identify these mutations; in position
+mode, the original zero-copy intervals identify them. GRITIC warns when dropping
+these mutations, independently of `--drop-unmatched-snvs`.
 
 The selected `Mutation_ID` or canonical integer `Position` value must be unique within its source segment. An explicit `Mutation_ID` column takes precedence for every row; GRITIC does not fall back to `Position` for blank values in that column. The same selected value may be reused in different source segments. With supplied segment IDs, this also applies to source segments that GRITIC subsequently merges.
 
@@ -136,6 +136,8 @@ The `1+0` and `1+1` states use uniform no-gain timing. In WGD runs, major-copy-n
 #### Segment merging
 
 By default, GRITIC merges consecutive segments on the same chromosome having identical `Major_CN` and `Minor_CN`. The merged interval runs from the first segment's start through the last segment's end, including any intervening uncovered bases. Use `--max-merge-gap` to limit gaps or `--keep-adjacent-segments` to preserve input segments. Final segment IDs are generated from `Chromosome`, `Segment_Start`, and `Segment_End` after merging.
+
+Removing zero-copy intervals can make equal-copy-number segments consecutive, so `2+1 → 0+0 → 2+1` becomes one `2+1` segment by default. The gap limit includes the removed interval. Mutations inside original zero-copy intervals remain excluded even when a merged interval spans them; mutations in other uncovered gaps follow the merged interval's coordinates. Merged lengths include intervening bases. GRITIC preserves the original full copy-number profile for WGD copy-number-mode calculations.
 
 #### Chromosome handling
 
@@ -459,7 +461,7 @@ gritictimer.process_sample(
 
 ### Input handling
 
-For unmatched-SNV dropping with supplied segment IDs, `dataloader.load_input_tables(..., drop_unmatched_snvs=True)` removes unmatched rows during loading. For position-based assignment, pass `drop_unmatched_snvs=True` to `sampletools.Sample`.
+`dataloader.load_input_tables` reads the two input files while preserving identifier text and exact numeric values. `sampletools.Sample` performs the shared validation, filtering, mutation assignment, and segment merging for file and DataFrame inputs. Pass `drop_unmatched_snvs=True` to `sampletools.Sample` to drop unmatched mutations in either assignment mode.
 
 For [segment merging](#segment-merging), `sampletools.Sample` accepts `max_merge_gap` to limit gaps and `merge_cn=False` to preserve input segments.
 

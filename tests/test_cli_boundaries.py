@@ -334,7 +334,7 @@ class CliMainTest(CliArgumentFixture, unittest.TestCase):
         loader.assert_not_called()
 
     @mock.patch.object(cli.gritictimer, 'process_sample')
-    @mock.patch.object(cli.sampletools.Sample, '_from_validated_input_tables')
+    @mock.patch.object(cli.sampletools, 'Sample')
     @mock.patch.object(cli, 'load_subclone_table')
     @mock.patch.object(cli.dataloader, 'load_input_tables')
     def test_success_path_forwards_every_input_model_and_interval_option(
@@ -390,11 +390,6 @@ class CliMainTest(CliArgumentFixture, unittest.TestCase):
         load_input_tables.assert_called_once_with(
             'copy-number.tsv',
             'mutations.tsv',
-            drop_unmatched_snvs=True,
-            sex='ZW',
-            autosome_count=12,
-            drop_unmatched_chromosomes=True,
-            drop_unrecognized_phasing=True,
         )
         load_subclone_table.assert_called_once_with('subclones.tsv')
         make_sample.assert_called_once_with(
@@ -437,7 +432,7 @@ class CliMainTest(CliArgumentFixture, unittest.TestCase):
         )
 
     @mock.patch.object(cli.gritictimer, 'process_sample')
-    @mock.patch.object(cli.sampletools.Sample, '_from_validated_input_tables')
+    @mock.patch.object(cli.sampletools, 'Sample')
     @mock.patch.object(
         cli.dataloader,
         'load_input_tables',

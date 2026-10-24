@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import binom, poisson
 
-from gritic import sampletools
+from gritic import dataloader, sampletools
 
 
 def make_segment_mutation_table(
@@ -397,36 +397,27 @@ class SegmentDeterministicBehaviorTest(unittest.TestCase):
 
 class SampleTableHelperTest(unittest.TestCase):
     def test_filter_mutation_table_applies_both_read_thresholds(self):
-        sample = sampletools.Sample.__new__(sampletools.Sample)
-        sample.min_mutation_alt_count = 3
-        sample.min_mutation_coverage = 10
         mutations = pd.DataFrame({
             'Tumor_Alt_Count': [2, 3, 3, 8],
             'Tumor_Ref_Count': [20, 6, 7, 12],
             'Mutation_ID': ['low-alt', 'low-depth', 'keep-a', 'keep-b'],
         })
 
-        filtered = sample.filter_mutation_table(mutations)
+        filtered = dataloader.filter_mutation_table(mutations)
 
         self.assertEqual(filtered['Mutation_ID'].tolist(), ['keep-a', 'keep-b'])
         self.assertEqual(filtered['Total_Count'].tolist(), [10, 20])
 
     def test_filter_mutation_table_reports_when_no_rows_remain(self):
-        sample = sampletools.Sample.__new__(sampletools.Sample)
-        sample.min_mutation_alt_count = 3
-        sample.min_mutation_coverage = 10
         mutations = pd.DataFrame({
             'Tumor_Alt_Count': [1, 2],
             'Tumor_Ref_Count': [20, 20],
         })
 
         with self.assertRaisesRegex(ValueError, 'No mutations remain'):
-            sample.filter_mutation_table(mutations)
+            dataloader.filter_mutation_table(mutations)
 
     def test_high_alt_count_input_emits_diagnostic_warning(self):
-        sample = sampletools.Sample.__new__(sampletools.Sample)
-        sample.min_mutation_alt_count = 3
-        sample.min_mutation_coverage = 10
         mutations = pd.DataFrame({
             'Tumor_Alt_Count': [11, 12],
             'Tumor_Ref_Count': [9, 8],
@@ -434,7 +425,7 @@ class SampleTableHelperTest(unittest.TestCase):
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter('always')
-            sample.filter_mutation_table(mutations)
+            dataloader.filter_mutation_table(mutations)
 
         self.assertEqual(len(caught), 1)
         self.assertIn('no mutations with less than 10 alt reads', str(caught[0].message))

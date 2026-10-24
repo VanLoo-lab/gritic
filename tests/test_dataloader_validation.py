@@ -904,7 +904,7 @@ class DataloaderIOAndPloidyTest(DataloaderFixtures, unittest.TestCase):
         mutations.to_csv(mutation_path, sep='\t', index=False)
         return copy_path, mutation_path
 
-    def test_file_loading_preserves_identifier_text_and_discards_stale_annotations(self):
+    def test_file_inputs_preserve_identifier_text_and_replace_stale_annotations(self):
         copy_number = pd.DataFrame({
             'Chromosome': ['chr1'],
             'Segment_Start': ['000'],
@@ -927,22 +927,75 @@ class DataloaderIOAndPloidyTest(DataloaderFixtures, unittest.TestCase):
         })
         with tempfile.TemporaryDirectory() as directory:
             paths = self.write_tables(directory, copy_number, mutations)
-            loaded_cn, loaded_mutations = dataloader.load_input_tables(
-                *paths,
+            loaded_cn, loaded_mutations = dataloader.load_input_tables(*paths)
+            prepared = dataloader.prepare_sample_inputs(
+                loaded_cn,
+                loaded_mutations,
                 sex='XX',
             )
 
-        self.assertEqual(loaded_cn['Chromosome'].tolist(), ['1'])
+        self.assertEqual(loaded_cn['Chromosome'].tolist(), ['chr1'])
         self.assertEqual(loaded_cn['Segment_ID'].tolist(), ['001'])
-        self.assertEqual(loaded_cn['Segment_Start'].tolist(), [0])
+        self.assertEqual(loaded_cn['Segment_Start'].tolist(), ['000'])
         self.assertEqual(loaded_mutations['Mutation_ID'].tolist(), ['0007'])
         self.assertEqual(loaded_mutations['Segment_ID'].tolist(), ['001'])
-        self.assertEqual(loaded_mutations['Position'].tolist(), [10])
-        self.assertEqual(loaded_mutations['Tumor_Ref_Count'].tolist(), [9])
+        self.assertEqual(loaded_mutations['Position'].tolist(), ['010'])
+        self.assertEqual(loaded_mutations['Tumor_Ref_Count'].tolist(), ['09'])
         for column in dataloader.MUTATION_COPY_NUMBER_ANNOTATION_COLUMNS:
             self.assertNotIn(column, loaded_mutations.columns)
+        self.assertEqual(
+            prepared.source_copy_number_table['Chromosome'].tolist(), ['1']
+        )
+        self.assertEqual(
+            prepared.source_copy_number_table['Segment_Start'].tolist(), [0]
+        )
+        self.assertEqual(prepared.mutation_table['Mutation_ID'].tolist(), ['0007'])
+        self.assertEqual(
+            prepared.mutation_table['Source_Segment_ID'].tolist(), ['001']
+        )
+        self.assertEqual(prepared.mutation_table['Position'].tolist(), [10])
+        self.assertEqual(prepared.mutation_table['Tumor_Ref_Count'].tolist(), [9])
+        self.assertEqual(prepared.mutation_table['Segment_Start'].tolist(), [0])
+        self.assertEqual(prepared.mutation_table['Segment_End'].tolist(), [100])
+        self.assertEqual(prepared.mutation_table['Major_CN'].tolist(), [2])
+        self.assertEqual(prepared.mutation_table['Minor_CN'].tolist(), [1])
 
-    def test_file_loading_position_mode_validates_and_sorts_segments(self):
+    def test_file_inputs_preserve_literal_na_ids_and_exact_large_coordinates(self):
+        start = 2**53
+        copy_number = pd.DataFrame({
+            'Chromosome': ['1'],
+            'Segment_Start': [str(start)],
+            'Segment_End': [str(start + 100)],
+            'Major_CN': ['2'],
+            'Minor_CN': ['1'],
+            'Segment_ID': ['NA'],
+        })
+        mutations = pd.DataFrame({
+            'Chromosome': ['1'],
+            'Position': [str(start + 1)],
+            'Tumor_Ref_Count': ['10'],
+            'Tumor_Alt_Count': ['3'],
+            'Mutation_ID': ['NULL'],
+            'Segment_ID': ['NA'],
+        })
+        with tempfile.TemporaryDirectory() as directory:
+            paths = self.write_tables(directory, copy_number, mutations)
+            loaded_cn, loaded_mutations = dataloader.load_input_tables(*paths)
+            prepared = dataloader.prepare_sample_inputs(
+                loaded_cn,
+                loaded_mutations,
+                sex='XX',
+            )
+
+        self.assertEqual(loaded_cn['Segment_ID'].tolist(), ['NA'])
+        self.assertEqual(loaded_mutations['Mutation_ID'].tolist(), ['NULL'])
+        self.assertEqual(loaded_mutations['Position'].tolist(), [str(start + 1)])
+        self.assertEqual(prepared.mutation_table['Position'].tolist(), [start + 1])
+        self.assertEqual(
+            prepared.mutation_table['Source_Segment_ID'].tolist(), ['NA']
+        )
+
+    def test_file_inputs_use_shared_position_validation_and_sorting(self):
         copy_number = self.copy_number_table(
             Chromosome=['2', '1'],
             Segment_Start=[100, 0],
@@ -951,27 +1004,36 @@ class DataloaderIOAndPloidyTest(DataloaderFixtures, unittest.TestCase):
         mutations = self.mutation_table().drop(columns='Segment_ID')
         with tempfile.TemporaryDirectory() as directory:
             paths = self.write_tables(directory, copy_number, mutations)
-            loaded_cn, loaded_mutations = dataloader.load_input_tables(
-                *paths,
+            loaded_cn, loaded_mutations = dataloader.load_input_tables(*paths)
+            prepared = dataloader.prepare_sample_inputs(
+                loaded_cn,
+                loaded_mutations,
                 sex='XX',
             )
-        self.assertEqual(loaded_cn['Chromosome'].tolist(), ['1', '2'])
-        self.assertEqual(loaded_mutations['Position'].tolist(), [50, 150])
+        self.assertEqual(
+            prepared.source_copy_number_table['Chromosome'].tolist(), ['1', '2']
+        )
+        self.assertEqual(prepared.mutation_table['Position'].tolist(), [50, 150])
 
-    def test_file_loading_can_warn_and_drop_unknown_supplied_ids(self):
+    def test_file_inputs_can_warn_and_drop_unknown_supplied_ids(self):
         mutations = self.mutation_table(
             Segment_ID=['segment-a', 'missing'],
         )
         with tempfile.TemporaryDirectory() as directory:
             paths = self.write_tables(directory, self.copy_number_table(), mutations)
+            loaded_cn, loaded_mutations = dataloader.load_input_tables(*paths)
+            self.assertEqual(len(loaded_mutations), 2)
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter('always')
-                _, loaded_mutations = dataloader.load_input_tables(
-                    *paths,
+                prepared = dataloader.prepare_sample_inputs(
+                    loaded_cn,
+                    loaded_mutations,
                     sex='XX',
                     drop_unmatched_snvs=True,
                 )
-        self.assertEqual(loaded_mutations['Mutation_ID'].tolist(), ['mutation-a'])
+        self.assertEqual(
+            prepared.mutation_table['Mutation_ID'].tolist(), ['mutation-a']
+        )
         self.assertEqual(len(caught), 1)
         self.assertIn('Dropping 1 unmatched SNV', str(caught[0].message))
 

@@ -1,5 +1,3 @@
-import warnings
-
 import numpy as np
 import pandas as pd
 from scipy.stats import binom, poisson
@@ -9,16 +7,18 @@ from numba import njit,prange
 import gritic.multiplicityoptimiser as multiplicityoptimiser
 import gritic.dataloader as dataloader
 from gritic import validation
+from gritic.dataloader import (
+    DEFAULT_AUTOSOME_COUNT,
+    DEFAULT_MAX_MERGE_GAP,
+    DEFAULT_MIN_MUTATION_ALT_COUNT,
+    DEFAULT_MIN_MUTATION_COVERAGE,
+)
 
 
-DEFAULT_MIN_MUTATION_ALT_COUNT = 3
-DEFAULT_MIN_MUTATION_COVERAGE = 10
 DEFAULT_COVERAGE_VAF_QUANTILE = 0.9
 DEFAULT_MIN_SUBCLONE_CCF = 0.01
 DEFAULT_MAX_SUBCLONE_CCF = 0.9
 DEFAULT_MIN_SUBCLONE_FRACTION = 0.1
-DEFAULT_AUTOSOME_COUNT = 22
-DEFAULT_MAX_MERGE_GAP = None
 
 PHASE_GROUP_ORDER = {
     'non_phased': 0,
@@ -26,7 +26,6 @@ PHASE_GROUP_ORDER = {
     'minor': 2,
 }
 
-_VALIDATED_INPUT_TABLES = object()
 
 def frequency_weighted_quantile(values, frequencies, quantile):
     """Return NumPy's linear quantile of an integer-frequency sample.
@@ -651,14 +650,6 @@ class MultProbabilityStore:
 
 class Sample:
 
-    @classmethod
-    def _from_validated_input_tables(cls, *args, **kwargs):
-        return cls(
-            *args,
-            **kwargs,
-            _validation_token=_VALIDATED_INPUT_TABLES,
-        )
-   
     def __init__(
         self,
         mutation_table,
@@ -682,7 +673,6 @@ class Sample:
         max_merge_gap=DEFAULT_MAX_MERGE_GAP,
         clip_subclone_ccf=False,
         drop_unrecognized_phasing=False,
-        _validation_token=None,
     ):
 
         self.sample_id = validation.validate_sample_id(sample_id)
@@ -732,96 +722,28 @@ class Sample:
         self.clip_subclone_ccf = validation.validate_boolean(
             clip_subclone_ccf, 'clip_subclone_ccf',
         )
-        if (
-            _validation_token is not None
-            and _validation_token is not _VALIDATED_INPUT_TABLES
-        ):
-            raise ValueError('_validation_token is reserved for internal use')
-        input_tables_validated = (
-            _validation_token is _VALIDATED_INPUT_TABLES
-        )
-        self.supplied_segment_id_map = None
-        if input_tables_validated:
-            self.use_supplied_segment_ids = (
-                'Segment_ID' in cn_table.columns
-                and 'Segment_ID' in mutation_table.columns
-            )
-            self.sex = (
-                dataloader.infer_sex_from_copy_number_table(cn_table)
-                if sex is None
-                else sex
-            )
-            cn_table = cn_table.copy()
-            mutation_table = mutation_table.copy()
-        else:
-            self.use_supplied_segment_ids = (
-                dataloader.validate_input_table_headers(
-                    cn_table.columns,
-                    mutation_table.columns,
-                )
-            )
-            cn_table, mutation_table, self.sex = (
-                dataloader.validate_or_drop_input_chromosomes(
-                    cn_table,
-                    mutation_table,
-                    self.autosome_count,
-                    sex,
-                    drop_unmatched_chromosomes=(
-                        self.drop_unmatched_chromosomes
-                    ),
-                )
-            )
-            mutation_table = dataloader.validate_or_drop_phasing_labels(
-                mutation_table,
-                drop_unrecognized_phasing=(
-                    self.drop_unrecognized_phasing
-                ),
-            )
-            cn_table = dataloader.validate_segment_coordinates(cn_table)
-            cn_table = dataloader.validate_non_overlapping_segments(cn_table)
-            if 'Position' in mutation_table.columns:
-                mutation_table = mutation_table.copy()
-                mutation_table['Position'] = dataloader.parse_positions(
-                    mutation_table['Position']
-                )
-            mutation_table = dataloader.validate_mutation_read_counts(
-                mutation_table
-            )
-            cn_table = dataloader.validate_copy_number_values(cn_table)
-            if self.use_supplied_segment_ids:
-                dataloader.validate_supplied_segment_ids(
-                    cn_table,
-                    mutation_table,
-                    allow_unmatched=self.drop_unmatched_snvs,
-                )
-                dataloader.validate_source_scoped_mutation_components(
-                    mutation_table['Segment_ID'],
-                    dataloader.get_gritic_mutation_id_components(
-                        mutation_table
-                    ),
-                )
-                if self.drop_unmatched_snvs:
-                    mutation_table = (
-                        dataloader.drop_unmatched_segment_id_mutations(
-                            cn_table,
-                            mutation_table,
-                        )
-                    )
-        self.chromosome_order = list(self.autosomes)
-        self.chromosome_order.extend(
-            dataloader.SEX_CHROMOSOME_PAIR[self.sex]
-        )
-        self.copy_number_table = self.process_raw_copy_number_table(
+        prepared = dataloader.prepare_sample_inputs(
             cn_table,
-            _validated=True,
-        )
-        self.mutation_table = self.process_raw_mutation_table(
             mutation_table,
-            self.copy_number_table,
-            _validated=True,
+            sex=sex,
+            autosome_count=self.autosome_count,
+            merge_cn=self.merge_cn,
+            max_merge_gap=self.max_merge_gap,
+            drop_unmatched_snvs=drop_unmatched_snvs,
+            drop_unmatched_chromosomes=drop_unmatched_chromosomes,
+            drop_unrecognized_phasing=drop_unrecognized_phasing,
+            min_mutation_alt_count=self.min_mutation_alt_count,
+            min_mutation_coverage=self.min_mutation_coverage,
         )
-
-        self.cn_table = cn_table.copy()
+        self.sex = prepared.sex
+        self.chromosome_order = [
+            *self.autosomes,
+            *dataloader.SEX_CHROMOSOME_PAIR[self.sex],
+        ]
+        self.cn_table = prepared.source_copy_number_table
+        self.copy_number_table = prepared.copy_number_table
+        self.mutation_table = prepared.mutation_table
+        self.supplied_segment_id_map = prepared.supplied_segment_id_map
         self.subclone_table = self.format_subclone_table(subclone_table)
         (
             self.mutation_table,
@@ -849,163 +771,6 @@ class Sample:
         )
         self.segments = self.get_segments(_validated=True)
 
-    def process_raw_mutation_table(
-        self,
-        mutation_table,
-        cn_table,
-        *,
-        _validated=False,
-    ):
-        mutation_table = mutation_table.copy()
-        
-        mutation_table['Chromosome'] = (
-            mutation_table['Chromosome'].str.replace(
-                r'^chr', '', regex=True
-            )
-        )
-        gritic_id_components = dataloader.get_gritic_mutation_id_components(
-            mutation_table
-        )
-        mutation_table['_GRITIC_Mutation_ID_Component'] = gritic_id_components
-        if 'Mutation_ID' in mutation_table.columns:
-            mutation_table['Mutation_ID'] = gritic_id_components
-        else:
-            mutation_table['Mutation_ID'] = pd.NA
-        if 'Position' not in mutation_table.columns:
-            mutation_table['Position'] = pd.NA
-
-        if self.use_supplied_segment_ids:
-            mutation_table['Source_Segment_ID'] = (
-                mutation_table['Segment_ID'].astype(str)
-            )
-            mutation_table['Segment_ID'] = (
-                mutation_table['Segment_ID'].astype(str).map(
-                    self.supplied_segment_id_map
-                )
-            )
-            zero_copy_mutations = mutation_table['Segment_ID'].isin(
-                self.zero_copy_segment_ids
-            )
-            zero_copy_mutation_count = int(zero_copy_mutations.sum())
-            if zero_copy_mutation_count:
-                zero_copy_segment_count = int(
-                    mutation_table.loc[
-                        zero_copy_mutations,
-                        'Segment_ID',
-                    ].nunique()
-                )
-                source_segment_ids = sorted(
-                    mutation_table.loc[
-                        zero_copy_mutations,
-                        'Source_Segment_ID',
-                    ].astype(str).unique()
-                )
-                snv_label = (
-                    'SNV' if zero_copy_mutation_count == 1 else 'SNVs'
-                )
-                segment_label = (
-                    'segment'
-                    if zero_copy_segment_count == 1
-                    else 'segments'
-                )
-                warnings.warn(
-                    f'Dropping {zero_copy_mutation_count} {snv_label} '
-                    f'assigned to {zero_copy_segment_count} zero-copy '
-                    '(Major_CN=0, Minor_CN=0) copy-number '
-                    f'{segment_label} because GRITIC does not model '
-                    'mutations in 0+0 segments. Source Segment_ID value(s): '
-                    + ', '.join(source_segment_ids)
-                    + '.',
-                    UserWarning,
-                    stacklevel=2,
-                )
-                mutation_table = mutation_table.loc[
-                    ~zero_copy_mutations
-                ].copy()
-                if mutation_table.empty:
-                    raise ValueError(
-                        'No mutations remain after dropping SNVs assigned to '
-                        'zero-copy (0+0) segments'
-                    )
-
-        mutation_table = dataloader.assign_cn_to_snv(
-            mutation_table,
-            cn_table,
-            use_supplied_segment_ids=self.use_supplied_segment_ids,
-            drop_unmatched_snvs=self.drop_unmatched_snvs,
-            _validated=_validated,
-        )
-        if not self.use_supplied_segment_ids:
-            mutation_table['Source_Segment_ID'] = (
-                mutation_table['Segment_ID'].astype(str)
-            )
-        gritic_id_components = mutation_table.pop(
-            '_GRITIC_Mutation_ID_Component'
-        )
-        if not (_validated and self.use_supplied_segment_ids):
-            dataloader.validate_source_scoped_mutation_components(
-                mutation_table['Source_Segment_ID'],
-                gritic_id_components,
-            )
-        mutation_table['GRITIC_Mutation_ID'] = (
-            dataloader.generate_gritic_mutation_ids(
-                mutation_table['Source_Segment_ID'],
-                gritic_id_components,
-            )
-        )
-        dataloader.validate_phasing_copy_number_consistency(mutation_table)
-       
-        mutation_table = self.filter_mutation_table(mutation_table)
-     
-        
-        mutation_table = self.format_mutation_table(mutation_table)
-
-        
-        return mutation_table
-    def process_raw_copy_number_table(
-        self,
-        cn_table,
-        *,
-        _validated=False,
-    ):
-        cn_table = cn_table.copy()
-        cn_table['Chromosome'] = cn_table['Chromosome'].str.replace(
-            r'^chr', '', regex=True
-        )
-        if self.merge_cn:
-            if self.use_supplied_segment_ids:
-                cn_table, self.supplied_segment_id_map = (
-                    dataloader.merge_segments(
-                        cn_table,
-                        return_segment_id_map=True,
-                        max_merge_gap=self.max_merge_gap,
-                        _validated=_validated,
-                    )
-                )
-            else:
-                cn_table = dataloader.merge_segments(
-                    cn_table,
-                    max_merge_gap=self.max_merge_gap,
-                    _validated=_validated,
-                )
-        else:
-            if self.use_supplied_segment_ids:
-                supplied_segment_ids = cn_table['Segment_ID'].astype(str)
-            cn_table = dataloader.generate_segment_ids(cn_table)
-            if self.use_supplied_segment_ids:
-                self.supplied_segment_id_map = dict(zip(
-                    supplied_segment_ids,
-                    cn_table['Segment_ID'],
-                ))
-        cn_table['Total_CN'] = cn_table['Major_CN']+cn_table['Minor_CN']
-        self.zero_copy_segment_ids = frozenset(
-            cn_table.loc[
-                cn_table['Major_CN'].eq(0),
-                'Segment_ID',
-            ].astype(str)
-        )
-        cn_table = cn_table[cn_table['Major_CN']>0]
-        return cn_table
     def format_subclone_table(self,subclone_table):
         if subclone_table is None:
             return None
@@ -1034,80 +799,6 @@ class Sample:
             :,
             dataloader.SUBCLONE_OUTPUT_COLUMNS,
         ].copy()
-    
-    def format_mutation_table(self,mutation_table):
-        mutation_table = mutation_table.reset_index(drop=True)
-        if 'Phasing' not in mutation_table.columns:
-            mutation_table['Phasing'] = np.nan
-        if 'Context' not in mutation_table.columns:
-            mutation_table['Context'] = np.nan
-        canonical_order = mutation_table.sort_values(
-            ['Segment_ID', 'GRITIC_Mutation_ID'],
-            kind='mergesort',
-        )
-        canonical_indices = canonical_order.groupby(
-            'Segment_ID',
-            sort=False,
-        ).cumcount()
-        mutation_table.loc[
-            canonical_order.index,
-            'Segment_Mutation_Index',
-        ] = canonical_indices.to_numpy()
-        mutation_table['Segment_Mutation_Index'] = mutation_table[
-            'Segment_Mutation_Index'
-        ].astype(np.int64)
-        mutation_columns = [
-            'Segment_ID',
-            'Source_Segment_ID',
-            'Mutation_ID',
-            'GRITIC_Mutation_ID',
-            'Segment_Mutation_Index',
-            'Chromosome',
-            'Segment_Start',
-            'Segment_End',
-            'Major_CN',
-            'Minor_CN',
-            'Total_CN',
-            'Tumor_Ref_Count',
-            'Tumor_Alt_Count',
-            'Position',
-        ]
-        mutation_columns.extend(['Phasing','Context'])
-        mutation_table = mutation_table[mutation_columns].copy()
-        mutation_table['Chromosome'] = mutation_table['Chromosome'].astype(str)
-        mutation_table["Gain_Type"] = mutation_table["Major_CN"].astype(str)+ "_"+ mutation_table["Minor_CN"].astype(str)
-        return mutation_table
-    
-    def filter_mutation_table(self,mutation_table):
-        if mutation_table['Tumor_Alt_Count'].min() > 10:
-            warnings.warn(
-                'There are no mutations with less than 10 alt reads. This '
-                'may indicate a higher threshold for mutation calling than '
-                'the minimum alternate-read count configured for GRITIC '
-                f'({self.min_mutation_alt_count})'
-            )
-        if len(mutation_table.index) ==0:
-            raise ValueError("There are no mutations in the mutation table. Please check the mutation table is formatted correctly")
-        mutation_table['Total_Count'] = mutation_table['Tumor_Ref_Count']+mutation_table['Tumor_Alt_Count']
-        
-
-        mutation_table = mutation_table[
-            mutation_table['Tumor_Alt_Count']
-            >= self.min_mutation_alt_count
-        ]
-        mutation_table = mutation_table[
-            (
-                mutation_table['Tumor_Ref_Count']
-                + mutation_table['Tumor_Alt_Count']
-            ) >= self.min_mutation_coverage
-        ]
-        if mutation_table.empty:
-            raise ValueError(
-                'No mutations remain after applying the configured minimum '
-                'alternate-read count and coverage thresholds'
-            )
-        
-        return mutation_table
     
     def get_segments(self,min_mutations=0, *, _validated=False):
         segments = []

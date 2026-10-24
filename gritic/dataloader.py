@@ -1,4 +1,5 @@
 import warnings
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from urllib.parse import quote
 
@@ -6,6 +7,23 @@ import numpy as np
 import pandas as pd
 
 from gritic import validation
+
+DEFAULT_MIN_MUTATION_ALT_COUNT = 3
+DEFAULT_MIN_MUTATION_COVERAGE = 10
+DEFAULT_AUTOSOME_COUNT = 22
+DEFAULT_MAX_MERGE_GAP = None
+
+
+@dataclass(frozen=True)
+class PreparedSampleInputs:
+    """Canonical inputs with the source profile separate from analysis spans."""
+
+    source_copy_number_table: pd.DataFrame
+    copy_number_table: pd.DataFrame
+    mutation_table: pd.DataFrame
+    sex: str
+    supplied_segment_id_map: dict[str, str] | None
+
 
 COPY_NUMBER_REQUIRED_COLUMNS = (
     'Chromosome',
@@ -821,27 +839,22 @@ def drop_unmatched_segment_id_mutations(copy_number_table, mutation_table):
 def load_input_tables(
     copy_number_path,
     mutation_table_path,
-    drop_unmatched_snvs=False,
-    sex=None,
-    autosome_count=22,
-    drop_unmatched_chromosomes=False,
-    drop_unrecognized_phasing=False,
 ):
-    """Load paired copy number and mutation tables using their joint schema."""
-    validate_sex_karyotype(sex)
+    """Read input text without validation, filtering, or numeric precision loss.
+
+    Pass the returned tables to ``Sample`` or ``prepare_sample_inputs`` for
+    joint normalization, validation, filtering, and segment assignment.
+    """
     copy_number_header = pd.read_csv(copy_number_path, sep='\t', nrows=0)
     mutation_header = pd.read_csv(mutation_table_path, sep='\t', nrows=0)
-    use_supplied_segment_ids = validate_input_table_headers(
-        copy_number_header.columns,
-        mutation_header.columns,
-    )
 
     copy_number_dtypes = {'Chromosome': str}
     mutation_dtypes = {'Chromosome': str}
     copy_number_converters = {}
     mutation_converters = {}
-    if use_supplied_segment_ids:
+    if 'Segment_ID' in copy_number_header.columns:
         copy_number_converters['Segment_ID'] = str
+    if 'Segment_ID' in mutation_header.columns:
         mutation_converters['Segment_ID'] = str
     for column in (
         'Segment_Start',
@@ -872,42 +885,317 @@ def load_input_tables(
             column not in MUTATION_COPY_NUMBER_ANNOTATION_COLUMNS
         ),
     )
-    copy_number_table, mutation_table, _ = validate_or_drop_input_chromosomes(
-        copy_number_table,
-        mutation_table,
-        autosome_count,
-        sex,
-        drop_unmatched_chromosomes=drop_unmatched_chromosomes,
+    return copy_number_table, mutation_table
+
+
+def drop_zero_copy_mutations(
+    mutation_table,
+    zero_copy_table,
+    *,
+    use_supplied_segment_ids,
+):
+    """Exclude mutations owned by validated original zero-copy segments.
+
+    Do this before expanding retained segment spans, so a merged interval
+    cannot give positive copy numbers to mutations from a deleted interval.
+    """
+    if zero_copy_table.empty:
+        return mutation_table
+
+    if use_supplied_segment_ids:
+        source_ids = mutation_table['Segment_ID'].astype(str)
+        zero_copy_mutations = source_ids.isin(
+            zero_copy_table['Segment_ID'].astype(str)
+        )
+    else:
+        source_ids = pd.Series(pd.NA, index=mutation_table.index, dtype='string')
+        for segment in generate_segment_ids(zero_copy_table).itertuples():
+            in_interval = (
+                mutation_table['Chromosome'].eq(segment.Chromosome)
+                & mutation_table['Position'].ge(segment.Segment_Start)
+                & mutation_table['Position'].lt(segment.Segment_End)
+            )
+            source_ids.loc[in_interval] = segment.Segment_ID
+        zero_copy_mutations = source_ids.notna()
+
+    mutation_count = int(zero_copy_mutations.sum())
+    if not mutation_count:
+        return mutation_table
+
+    affected_source_ids = sorted(source_ids.loc[zero_copy_mutations].unique())
+    segment_count = len(affected_source_ids)
+    snv_label = 'SNV' if mutation_count == 1 else 'SNVs'
+    segment_label = 'segment' if segment_count == 1 else 'segments'
+    warnings.warn(
+        f'Dropping {mutation_count} {snv_label} assigned to {segment_count} '
+        'zero-copy (Major_CN=0, Minor_CN=0) copy-number '
+        f'{segment_label} because GRITIC does not model '
+        'mutations in 0+0 segments. Source Segment_ID value(s): '
+        + ', '.join(affected_source_ids)
+        + '.',
+        UserWarning,
+        stacklevel=2,
+    )
+    mutation_table = mutation_table.loc[~zero_copy_mutations].copy()
+    if mutation_table.empty:
+        raise ValueError(
+            'No mutations remain after dropping SNVs assigned to '
+            'zero-copy (0+0) segments'
+        )
+    return mutation_table
+
+
+def format_mutation_table(mutation_table):
+    """Format final mutation rows and assign canonical per-segment indices."""
+    mutation_table = mutation_table.reset_index(drop=True)
+    for column in ('Mutation_ID', 'Position'):
+        if column not in mutation_table.columns:
+            mutation_table[column] = pd.NA
+    if 'Phasing' not in mutation_table.columns:
+        mutation_table['Phasing'] = np.nan
+    if 'Context' not in mutation_table.columns:
+        mutation_table['Context'] = np.nan
+    canonical_order = mutation_table.sort_values(
+        ['Segment_ID', 'GRITIC_Mutation_ID'],
+        kind='mergesort',
+    )
+    canonical_indices = canonical_order.groupby(
+        'Segment_ID',
+        sort=False,
+    ).cumcount()
+    mutation_table.loc[
+        canonical_order.index,
+        'Segment_Mutation_Index',
+    ] = canonical_indices.to_numpy()
+    mutation_table['Segment_Mutation_Index'] = mutation_table[
+        'Segment_Mutation_Index'
+    ].astype(np.int64)
+    mutation_columns = [
+        'Segment_ID',
+        'Source_Segment_ID',
+        'Mutation_ID',
+        'GRITIC_Mutation_ID',
+        'Segment_Mutation_Index',
+        'Chromosome',
+        'Segment_Start',
+        'Segment_End',
+        'Major_CN',
+        'Minor_CN',
+        'Total_CN',
+        'Tumor_Ref_Count',
+        'Tumor_Alt_Count',
+        'Position',
+    ]
+    mutation_columns.extend(['Phasing', 'Context'])
+    mutation_table = mutation_table[mutation_columns].copy()
+    mutation_table['Chromosome'] = mutation_table['Chromosome'].astype(str)
+    mutation_table['Gain_Type'] = (
+        mutation_table['Major_CN'].astype(str)
+        + '_'
+        + mutation_table['Minor_CN'].astype(str)
+    )
+    return mutation_table
+
+
+def filter_mutation_table(
+    mutation_table,
+    *,
+    min_mutation_alt_count=DEFAULT_MIN_MUTATION_ALT_COUNT,
+    min_mutation_coverage=DEFAULT_MIN_MUTATION_COVERAGE,
+):
+    """Apply alternate-read and coverage thresholds after CN assignment."""
+    mutation_table = mutation_table.copy()
+    if mutation_table['Tumor_Alt_Count'].min() > 10:
+        warnings.warn(
+            'There are no mutations with less than 10 alt reads. This '
+            'may indicate a higher threshold for mutation calling than '
+            'the minimum alternate-read count configured for GRITIC '
+            f'({min_mutation_alt_count})'
+        )
+    if mutation_table.empty:
+        raise ValueError(
+            'There are no mutations in the mutation table. Please check '
+            'the mutation table is formatted correctly'
+        )
+    mutation_table['Total_Count'] = (
+        mutation_table['Tumor_Ref_Count'] + mutation_table['Tumor_Alt_Count']
+    )
+    mutation_table = mutation_table.loc[
+        mutation_table['Tumor_Alt_Count'].ge(min_mutation_alt_count)
+        & mutation_table['Total_Count'].ge(min_mutation_coverage)
+    ].copy()
+    if mutation_table.empty:
+        raise ValueError(
+            'No mutations remain after applying the configured minimum '
+            'alternate-read count and coverage thresholds'
+        )
+
+    return mutation_table
+
+
+def prepare_sample_inputs(
+    copy_number_table,
+    mutation_table,
+    *,
+    sex=None,
+    autosome_count=DEFAULT_AUTOSOME_COUNT,
+    merge_cn=True,
+    max_merge_gap=DEFAULT_MAX_MERGE_GAP,
+    drop_unmatched_snvs=False,
+    drop_unmatched_chromosomes=False,
+    drop_unrecognized_phasing=False,
+    min_mutation_alt_count=DEFAULT_MIN_MUTATION_ALT_COUNT,
+    min_mutation_coverage=DEFAULT_MIN_MUTATION_COVERAGE,
+):
+    """Prepare paired inputs before building any segment or model groups.
+
+    Zero-copy ownership is resolved against the original profile. Retained
+    copy-number intervals are then merged and mutations assigned to the final
+    spans, preserving interpolation across genuinely uncovered gaps. The
+    original normalized profile remains available for genome-wide statistics.
+    """
+    validate_sex_karyotype(sex)
+    autosome_count = validation.validate_integer(
+        autosome_count, 'autosome_count', minimum=1,
+    )
+    merge_cn = validation.validate_boolean(merge_cn, 'merge_cn')
+    max_merge_gap = validation.validate_integer(
+        max_merge_gap, 'max_merge_gap', allow_none=True,
+    )
+    min_mutation_alt_count = validation.validate_integer(
+        min_mutation_alt_count, 'min_mutation_alt_count',
+    )
+    min_mutation_coverage = validation.validate_integer(
+        min_mutation_coverage, 'min_mutation_coverage',
+    )
+    use_supplied_segment_ids = validate_input_table_headers(
+        copy_number_table.columns,
+        mutation_table.columns,
+    )
+    source_copy_number_table, mutation_table, sex = (
+        validate_or_drop_input_chromosomes(
+            copy_number_table,
+            mutation_table,
+            autosome_count,
+            sex,
+            drop_unmatched_chromosomes=drop_unmatched_chromosomes,
+        )
     )
     mutation_table = validate_or_drop_phasing_labels(
         mutation_table,
         drop_unrecognized_phasing=drop_unrecognized_phasing,
     )
-    copy_number_table = validate_segment_coordinates(copy_number_table)
-    copy_number_table = validate_non_overlapping_segments(copy_number_table)
-    copy_number_table = validate_copy_number_values(copy_number_table)
+    source_copy_number_table = validate_segment_coordinates(
+        source_copy_number_table
+    )
+    source_copy_number_table = validate_non_overlapping_segments(
+        source_copy_number_table
+    )
+    source_copy_number_table = validate_copy_number_values(
+        source_copy_number_table
+    )
     mutation_table = validate_mutation_read_counts(mutation_table)
     if 'Position' in mutation_table.columns:
-        mutation_table['Position'] = parse_positions(
-            mutation_table['Position']
-        )
-    gritic_id_components = get_gritic_mutation_id_components(mutation_table)
+        mutation_table['Position'] = parse_positions(mutation_table['Position'])
+    id_components = get_gritic_mutation_id_components(mutation_table)
     if use_supplied_segment_ids:
         validate_supplied_segment_ids(
-            copy_number_table,
+            source_copy_number_table,
             mutation_table,
             allow_unmatched=drop_unmatched_snvs,
         )
         validate_source_scoped_mutation_components(
-            mutation_table['Segment_ID'],
-            gritic_id_components,
+            mutation_table['Segment_ID'], id_components,
         )
-        if drop_unmatched_snvs:
-            mutation_table = drop_unmatched_segment_id_mutations(
+    # Carry identity components through drops and joins without relying on the
+    # caller's row index or choosing Position after adding a blank Mutation_ID.
+    mutation_table['_GRITIC_Mutation_ID_Component'] = id_components
+    if 'Mutation_ID' in mutation_table.columns:
+        mutation_table['Mutation_ID'] = id_components
+    if use_supplied_segment_ids and drop_unmatched_snvs:
+        mutation_table = drop_unmatched_segment_id_mutations(
+            source_copy_number_table, mutation_table,
+        )
+
+    zero_copy = source_copy_number_table['Major_CN'].eq(0)
+    mutation_table = drop_zero_copy_mutations(
+        mutation_table,
+        source_copy_number_table.loc[zero_copy],
+        use_supplied_segment_ids=use_supplied_segment_ids,
+    )
+    copy_number_table = source_copy_number_table.loc[~zero_copy].copy()
+    if copy_number_table.empty:
+        raise ValueError(
+            'No copy-number segments remain after dropping zero-copy '
+            '(0+0) segments'
+        )
+
+    supplied_segment_id_map = None
+    if merge_cn:
+        if use_supplied_segment_ids:
+            copy_number_table, supplied_segment_id_map = merge_segments(
                 copy_number_table,
-                mutation_table,
+                return_segment_id_map=True,
+                max_merge_gap=max_merge_gap,
+                _validated=True,
             )
-    return copy_number_table, mutation_table
+        else:
+            copy_number_table = merge_segments(
+                copy_number_table, max_merge_gap=max_merge_gap, _validated=True,
+            )
+    else:
+        analysis_table = generate_segment_ids(copy_number_table)
+        if use_supplied_segment_ids:
+            supplied_segment_id_map = dict(zip(
+                copy_number_table['Segment_ID'].astype(str),
+                analysis_table['Segment_ID'],
+            ))
+        copy_number_table = analysis_table.reset_index(drop=True)
+    copy_number_table['Total_CN'] = (
+        copy_number_table['Major_CN'] + copy_number_table['Minor_CN']
+    )
+
+    if use_supplied_segment_ids:
+        mutation_table['Source_Segment_ID'] = (
+            mutation_table['Segment_ID'].astype(str)
+        )
+        mutation_table['Segment_ID'] = (
+            mutation_table['Source_Segment_ID'].map(supplied_segment_id_map)
+        )
+    mutation_table = assign_cn_to_snv(
+        mutation_table,
+        copy_number_table,
+        use_supplied_segment_ids=use_supplied_segment_ids,
+        drop_unmatched_snvs=drop_unmatched_snvs,
+        _validated=True,
+    )
+    if not use_supplied_segment_ids:
+        mutation_table['Source_Segment_ID'] = (
+            mutation_table['Segment_ID'].astype(str)
+        )
+        validate_source_scoped_mutation_components(
+            mutation_table['Source_Segment_ID'],
+            mutation_table['_GRITIC_Mutation_ID_Component'],
+        )
+    mutation_table['GRITIC_Mutation_ID'] = generate_gritic_mutation_ids(
+        mutation_table['Source_Segment_ID'],
+        mutation_table.pop('_GRITIC_Mutation_ID_Component'),
+    )
+    validate_phasing_copy_number_consistency(mutation_table)
+    mutation_table = filter_mutation_table(
+        mutation_table,
+        min_mutation_alt_count=min_mutation_alt_count,
+        min_mutation_coverage=min_mutation_coverage,
+    )
+    mutation_table = format_mutation_table(mutation_table)
+    return PreparedSampleInputs(
+        source_copy_number_table=source_copy_number_table,
+        copy_number_table=copy_number_table,
+        mutation_table=mutation_table,
+        sex=sex,
+        supplied_segment_id_map=supplied_segment_id_map,
+    )
+
 
 def calculate_ploidy(
     cn_table,

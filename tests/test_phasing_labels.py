@@ -132,7 +132,7 @@ class PhasingLabelTest(unittest.TestCase):
         self.assertIn("'unknown'", user_warnings[0])
         self.assertIn("'other'", user_warnings[0])
 
-    def test_file_loader_canonicalizes_phasing(self):
+    def test_file_inputs_use_shared_phasing_preparation(self):
         mutation_table = self.mutation_table([' MAJOR', 'minor ', None])
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
@@ -145,17 +145,21 @@ class PhasingLabelTest(unittest.TestCase):
             )
             mutation_table.to_csv(mutation_path, sep='\t', index=False)
 
-            _, loaded_mutations = dataloader.load_input_tables(
+            loaded_cn, loaded_mutations = dataloader.load_input_tables(
                 copy_number_path,
                 mutation_path,
+            )
+            prepared = dataloader.prepare_sample_inputs(
+                loaded_cn,
+                loaded_mutations,
                 sex='XX',
             )
 
         self.assertEqual(
-            loaded_mutations['Phasing'].iloc[:2].tolist(),
+            prepared.mutation_table['Phasing'].iloc[:2].tolist(),
             ['major', 'minor'],
         )
-        self.assertTrue(pd.isna(loaded_mutations['Phasing'].iloc[2]))
+        self.assertTrue(pd.isna(prepared.mutation_table['Phasing'].iloc[2]))
 
     def test_direct_sample_uses_canonical_labels_in_phased_likelihoods(self):
         sample = sampletools.Sample(

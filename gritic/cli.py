@@ -528,11 +528,6 @@ def main(argv=None):
     copy_number_table, mutation_table = dataloader.load_input_tables(
         args.copy_number_table,
         args.mutation_table,
-        drop_unmatched_snvs=args.drop_unmatched_snvs,
-        sex=args.sample_sex,
-        autosome_count=args.autosome_count,
-        drop_unmatched_chromosomes=args.drop_unmatched_chromosomes,
-        drop_unrecognized_phasing=args.drop_unrecognized_phasing,
     )
     subclone_table = (
         None
@@ -540,7 +535,7 @@ def main(argv=None):
         else load_subclone_table(args.subclone_table)
     )
 
-    sample = sampletools.Sample._from_validated_input_tables(
+    sample = sampletools.Sample(
         mutation_table,
         copy_number_table,
         subclone_table,

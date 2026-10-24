@@ -22,7 +22,7 @@ class ExampleDataIntegrationTest(unittest.TestCase):
             examples / 'subclone_table_example.tsv',
             sep='\t',
         )
-        cls.sample = sampletools.Sample._from_validated_input_tables(
+        cls.sample = sampletools.Sample(
             cls.mutation_table,
             cls.copy_number_table,
             cls.input_subclone_table,
@@ -124,16 +124,20 @@ class ExampleDataIntegrationTest(unittest.TestCase):
         for chromosome, segment_start, segment_end in selected_segments:
             copy_number_parts.append(self.copy_number_table.loc[
                 self.copy_number_table['Chromosome'].eq(chromosome)
-                & self.copy_number_table['Segment_Start'].eq(segment_start)
-                & self.copy_number_table['Segment_End'].eq(segment_end)
+                & pd.to_numeric(self.copy_number_table['Segment_Start']).eq(
+                    segment_start
+                )
+                & pd.to_numeric(self.copy_number_table['Segment_End']).eq(
+                    segment_end
+                )
             ])
             mutation_parts.append(self.mutation_table.loc[
                 self.mutation_table['Chromosome'].eq(chromosome)
-                & self.mutation_table['Position'].ge(segment_start)
-                & self.mutation_table['Position'].lt(segment_end)
+                & pd.to_numeric(self.mutation_table['Position']).ge(segment_start)
+                & pd.to_numeric(self.mutation_table['Position']).lt(segment_end)
             ].head(12))
 
-        sample = sampletools.Sample._from_validated_input_tables(
+        sample = sampletools.Sample(
             pd.concat(mutation_parts, ignore_index=True),
             pd.concat(copy_number_parts, ignore_index=True),
             self.input_subclone_table,
