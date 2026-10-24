@@ -109,10 +109,8 @@ GRITIC supports two segment-assignment modes:
 
 In supplied-ID mode, both tables require nonblank `Segment_ID` values, and those IDs must be unique in the copy-number table. Every mutation's `Segment_ID` must match a copy-number row, including its `Chromosome`. If `--drop-unmatched-snvs` is supplied, GRITIC drops mutations unmatched by either assignment mode and reports the number dropped. Missing or blank supplied IDs and chromosome mismatches remain errors.
 
-GRITIC drops zero-copy `0+0` segments and their mutations before merging. In
-supplied-ID mode, the input segment IDs identify these mutations; in position
-mode, the original zero-copy intervals identify them. GRITIC warns when dropping
-these mutations, independently of `--drop-unmatched-snvs`.
+GRITIC drops zero-copy `0+0` segments and their mutations before merging. GRITIC
+warns when dropping these mutations, independently of `--drop-unmatched-snvs`.
 
 The selected `Mutation_ID` or canonical integer `Position` value must be unique within its source segment. An explicit `Mutation_ID` column takes precedence for every row; GRITIC does not fall back to `Position` for blank values in that column. The same selected value may be reused in different source segments. With supplied segment IDs, this also applies to source segments that GRITIC subsequently merges.
 
