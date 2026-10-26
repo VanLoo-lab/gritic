@@ -803,6 +803,16 @@ class SubcloneValidationTest(unittest.TestCase):
         values.update(overrides)
         return pd.DataFrame(values)
 
+    def test_header_only_subclone_table_has_numeric_empty_columns(self):
+        table = pd.DataFrame(columns=dataloader.SUBCLONE_REQUIRED_COLUMNS)
+        for clip_ccf in (False, True):
+            with self.subTest(clip_ccf=clip_ccf):
+                result = dataloader.validate_subclone_values(table, clip_subclone_ccf=clip_ccf)
+                self.assertTrue(result.empty)
+                self.assertEqual(result['Subclone_CCF'].dtype, np.dtype(float))
+                self.assertEqual(result['Subclone_Fraction'].dtype, np.dtype(float))
+                self.assertTrue(dataloader.get_valid_subclones(result).empty)
+
     def test_subclone_schema_numeric_values_and_fraction_tolerance(self):
         with self.assertRaisesRegex(
             ValueError,

@@ -16,6 +16,9 @@ The method is described in [Baker et al. (2024), *The History of Chromosomal Ins
   - [Mutation table](#mutation-table)
   - [Copy number table](#copy-number-table)
   - [Subclone table](#subclone-table)
+- [Input processing](#input-processing)
+  - [Preparation order](#preparation-order)
+  - [Grouping retained mutations](#grouping-retained-mutations)
 - [Run options](#run-options)
   - [Required run arguments](#required-run-arguments)
   - [Output handling](#output-handling)
@@ -36,6 +39,7 @@ The method is described in [Baker et al. (2024), *The History of Chromosomal Ins
   - [Balanced route priors](#balanced-route-priors)
   - [Balanced WGD segments](#balanced-wgd-segments)
   - [WGD timing estimation](#wgd-timing-estimation)
+  - [Multiplicity likelihoods](#multiplicity-likelihoods)
   - [Detection correction and mutation-share priors](#detection-correction-and-mutation-share-priors)
   - [Posterior sampling](#posterior-sampling)
 - [Downstream formats](#downstream-formats)
@@ -83,7 +87,7 @@ Use `gritic --help` for command-line help or see [run options](#run-options). Fo
 
 Supply tab-separated copy-number and mutation tables, plus an optional subclone table. Inputs from any caller are accepted if they follow these schemas; see [`examples/`](examples/).
 
-Column names are case-sensitive. Additional caller-supplied columns are accepted.
+Column names are case-sensitive. Additional caller-supplied columns are accepted, but only the canonical mutation fields described below are retained after formatting. See [input processing](#input-processing) for the order of validation, filtering, segment assignment, and likelihood construction.
 
 ### Mutation table
 
@@ -96,23 +100,30 @@ All SNVs for the sample, with either `Mutation_ID` or `Position` required alongs
 | `Tumor_Alt_Count` | Required | Number of reads supporting the alternate allele. |
 | `Mutation_ID` | Required unless `Position` is supplied | Literal text, preserving values such as `000123`, `NA`, and `NULL`. |
 | `Position` | Required unless `Mutation_ID` is supplied | Zero-based genomic position. |
+| `Segment_ID` | Optional | Enables supplied-ID assignment when also present in the copy number table. |
 | `Phasing` | Optional | `major` or `minor`, case-insensitive, ignoring surrounding whitespace. Missing values remain unphased. |
+| `Context` | Optional | Retained annotation; not used in the gain-timing read likelihood. |
 
 Supplying `--drop-unrecognized-phasing` drops mutations with unrecognized phasing and reports the number dropped and the unrecognized values.
 
 Input mutation columns named `Segment_Start`, `Segment_End`, `Major_CN`, or `Minor_CN` are ignored because GRITIC always annotates those values from the copy-number table.
 
-GRITIC supports two segment-assignment modes:
+GRITIC selects the segment-assignment mode from the columns present in the two tables:
 
-- If both the mutation and copy number tables contain `Segment_ID`, GRITIC uses those IDs to associate mutations with the input copy number segments. `Position` is not needed for assignment.
-- Otherwise, the mutation table must contain `Position`, which assigns mutations to segments on the same chromosome using the [coordinate convention](#copy-number-table).
+| Behavior | Supplied-ID mode | Coordinate mode |
+| --- | --- | --- |
+| Selected when | Both tables contain `Segment_ID`. | Otherwise, including when only one table contains `Segment_ID`. |
+| Assignment | Input segment ID maps to its final segment after the selected merge behavior. | Same chromosome and `Segment_Start <= Position < Segment_End` in the final analysis spans. |
+| Use of `Position` | Not needed for assignment. If supplied, validated numerically but not checked against the named interval. | Required and used for assignment. |
+| `Source_Segment_ID` | Original input segment ID. | Final assigned coordinate-derived segment ID. |
+| Mutation-identity uniqueness scope | Original input segment. | Final assigned segment. |
 
 In supplied-ID mode, both tables require nonblank `Segment_ID` values, and those IDs must be unique in the copy-number table. Every mutation's `Segment_ID` must match a copy-number row, including its `Chromosome`. If `--drop-unmatched-snvs` is supplied, GRITIC drops mutations unmatched by either assignment mode and reports the number dropped. Missing or blank supplied IDs and chromosome mismatches remain errors.
 
 GRITIC drops zero-copy `0+0` segments and their mutations before merging. GRITIC
 warns when dropping these mutations, independently of `--drop-unmatched-snvs`.
 
-The selected `Mutation_ID` or canonical integer `Position` value must be unique within its source segment. An explicit `Mutation_ID` column takes precedence for every row; GRITIC does not fall back to `Position` for blank values in that column. The same selected value may be reused in different source segments. With supplied segment IDs, this also applies to source segments that GRITIC subsequently merges.
+The selected `Mutation_ID` or canonical integer `Position` value must be nonblank and unique within the scope shown above. An explicit `Mutation_ID` column takes precedence for every row; GRITIC does not fall back to `Position` for blank values in that column. The same selected value may be reused in different source segments. With supplied segment IDs, this also applies to source segments that GRITIC subsequently merges. In coordinate mode, repeated identities in the same final merged segment are rejected.
 
 ### Copy number table
 
@@ -131,15 +142,21 @@ The supported allele-specific copy-number states are:
 
 The `1+0` and `1+1` states use uniform no-gain timing. In WGD runs, major-copy-number-two segments are excluded from the ordinary per-segment fit. [WGD timing estimation](#wgd-timing-estimation) uses those on configured autosomes with at least 10 retained SNVs. Balanced `2+2` segments use a [WGD-specific allele model](#balanced-wgd-segments).
 
+Input validation and timing eligibility are separate: a valid positive-CN segment can be retained in the analysis profile even when its state is outside these fitting limits. Only segments with retained mutations become model `Segment` objects. Ordinary per-segment fitting has no hard 10-mutation minimum; 10 is the WGD-candidate cutoff and a recommendation for interpreting gained segments.
+
 #### Segment merging
 
 By default, GRITIC merges consecutive segments on the same chromosome having identical `Major_CN` and `Minor_CN`. The merged interval runs from the first segment's start through the last segment's end, including any intervening uncovered bases. Use `--max-merge-gap` to limit gaps or `--keep-adjacent-segments` to preserve input segments. Final segment IDs are generated from `Chromosome`, `Segment_Start`, and `Segment_End` after merging.
 
-Removing zero-copy intervals can make equal-copy-number segments consecutive, so `2+1 → 0+0 → 2+1` becomes one `2+1` segment by default. The gap limit includes the removed interval. Mutations inside original zero-copy intervals remain excluded even when a merged interval spans them; mutations in other uncovered gaps follow the merged interval's coordinates. Merged lengths include intervening bases. GRITIC preserves the original full copy-number profile for WGD copy-number-mode calculations.
+Removing zero-copy intervals can make equal-copy-number segments consecutive, so `2+1 → 0+0 → 2+1` becomes one `2+1` segment by default. The gap limit includes the removed interval. Mutations assigned to original zero-copy intervals remain excluded even when a merged interval spans them; in coordinate mode, mutations in other uncovered gaps follow the merged interval's coordinates. Merged lengths include intervening bases. GRITIC preserves the original validated copy-number profile for WGD copy-number-mode calculations.
+
+![Coordinate assignment across an explicit zero-copy interval and an uncovered gap](docs/figures/segment_assignment.png)
+
+In both examples the final span is `1-0-300`, but the middle mutation is removed only when the original profile explicitly assigns it to `0+0`. Setting `--max-merge-gap 0` keeps the flanking intervals separate in both examples. A positive-CN interval with a different state remains a merge barrier even if it has no retained mutations or its state is ineligible for timing.
 
 #### Chromosome handling
 
-Both input tables accept numbered chromosomes from 1 through `--autosome-count` and the sex chromosomes present under the selected karyotype. Chromosome labels are case-sensitive; `chr` prefixes are removed.
+Both input tables accept numbered chromosomes from 1 through `--autosome-count` and the sex chromosomes present under the selected karyotype. Chromosome labels are case-sensitive; one leading lowercase `chr` prefix is removed, without other spelling or case normalization.
 
 | Karyotype | Present sex chromosomes | Normal X or Z copies | Normal Y or W copies |
 | --- | --- | --- | --- |
@@ -148,7 +165,7 @@ Both input tables accept numbered chromosomes from 1 through `--autosome-count` 
 | ZZ | Z | 2 | 0 |
 | ZW | Z, W | 1 | 1 |
 
-When sample sex is not supplied, GRITIC infers it from the copy-number table: Y implies `XY` and W implies `ZW`; otherwise X alone implies XX and Z alone implies ZZ. If no sex chromosome is represented, GRITIC defaults to `XX`, so callers using another system should supply `--sample-sex`. Chromosomes outside the configured set follow `--drop-unmatched-chromosomes` behavior.
+When sample sex is not supplied, GRITIC infers it from the copy-number table: Y implies `XY` and W implies `ZW`; otherwise X alone implies XX and Z alone implies ZZ. If no sex chromosome is represented, GRITIC defaults to `XX`, so callers using another system should supply `--sample-sex`. Mixing X/Y and Z/W labels prevents automatic sex inference. Inference happens before chromosome filtering. Chromosomes outside the configured set follow `--drop-unmatched-chromosomes` behavior.
 
 ### Subclone table
 
@@ -163,6 +180,67 @@ Required columns are:
 Candidates are filtered using the [subclone-handling options](#subclone-handling). If no subclones remain, GRITIC uses its clonal-only model. If there are more than two subclones, GRITIC groups them into two: the subclone with the largest CCF is unmodified and the remaining clones are combined by summing their fractions and taking their fraction-weighted mean CCF.
 
 Retained `Subclone_Fraction` values keep their input scale; the remaining share is treated as clonal.
+
+## Input processing
+
+GRITIC converts the paired tables into segment-specific, weighted likelihoods over mutation multiplicity. The CLI follows `load_input_tables` → `Sample` → `prepare_sample_inputs`, then builds the model inputs and calls `process_sample`. The Python `Sample` API enters the same preparation path with DataFrames, without the TSV-reading step.
+
+```mermaid
+flowchart TD
+    A[Mutation and copy number tables] --> B[Validate schemas, chromosomes, phasing and values]
+    B --> C[Preserve original validated CN profile]
+    C --> W[Autosomal major-CN mode for WGD assessment]
+    C --> D[Remove zero-copy analysis regions and their mutations]
+    D --> E[Optionally merge consecutive equal-CN segments]
+    E --> F[Assign mutations to final segments]
+    F --> G[Generate GRITIC mutation IDs and check minor phasing]
+    G --> H[Filter by alternate reads and total coverage]
+    H --> I[Format rows and assign per-segment mutation indices]
+    I --> J[Build count groups, phase groups and CN contexts]
+    P[Purity and optional processed subclones] --> K
+    J --> K[Multiplicity likelihoods and detection corrections]
+    K --> L[WGD assessment and eligible segment timing]
+    W --> L
+```
+
+The original validated CN profile (`sample.cn_table`) retains original boundaries and zero-copy intervals for the width-weighted autosomal major-CN mode, regardless of whether those intervals have retained mutations. The analysis profile (`sample.copy_number_table`) removes zero-copy intervals and may contain merged spans. Final positive-CN spans without retained mutations remain in the analysis profile but do not become model `Segment` objects or receive likelihood contexts. Positive-CN segments with mutations are grouped before timing eligibility is applied.
+
+### Preparation order
+
+The order below matters: a malformed mutation can fail validation even if its read counts would later cause it to be discarded.
+
+1. **Read and check the schemas.** The TSV reader preserves identifiers and integer-valued fields as text before numeric validation, avoiding loss of leading zeros in IDs or precision in large coordinates. The paired headers select supplied-ID or coordinate assignment. Mutation identity uses `Mutation_ID` whenever that column exists, otherwise `Position`.
+2. **Resolve sex and chromosomes.** Infer or validate the karyotype, remove the optional `chr` prefix, then validate chromosome labels in both tables. With `--drop-unmatched-chromosomes`, unsupported rows are dropped with warnings. Empty inputs after chromosome filtering are errors.
+3. **Normalize mutation phasing.** Strip surrounding whitespace and lowercase labels. Missing values remain unphased. Unrecognized non-missing labels cause an error unless `--drop-unrecognized-phasing` is enabled. A literal whitespace-only value is not a recognized label; an empty TSV field normally reads as missing.
+4. **Validate CN intervals and values.** Coordinates must be finite nonnegative signed-64-bit integers with `Segment_End > Segment_Start`. Sort intervals in genomic order and reject overlaps, including overlapping equal-CN intervals. Touching intervals are allowed. Copy numbers must be finite integers with `0 <= Minor_CN <= Major_CN`; GRITIC does not round fractional estimates or swap inverted major/minor values.
+5. **Validate mutation values and identity.** Read counts must be finite nonnegative signed-64-bit integers; their sum must be positive and fit signed 64-bit. If `Position` is present, every value must be a finite nonnegative signed-64-bit integer, including in supplied-ID mode. The selected mutation identity must be nonblank.
+6. **Validate supplied segment IDs, when used.** Check nonblank IDs, unique CN IDs, and chromosome agreement. Check mutation-identity uniqueness within each input segment before dropping unknown-ID or zero-copy mutations. Unknown IDs cause an error or are dropped with `--drop-unmatched-snvs`; missing IDs and chromosome mismatches remain errors.
+7. **Remove zero-copy regions from analysis.** Resolve mutation ownership against the original profile, using IDs in supplied-ID mode or original half-open intervals in coordinate mode. Drop these mutations with a warning, independently of `--drop-unmatched-snvs`, and remove `0+0` rows from the analysis CN profile.
+8. **Apply the selected segment-merging behavior.** Merge consecutive equal-CN intervals unless disabled, respecting `--max-merge-gap` when supplied. Generate final `Chromosome-Start-End` segment IDs even when merging is disabled; retain an input-to-final ID map in supplied-ID mode. See [segment merging](#segment-merging).
+9. **Assign mutations and generate GRITIC IDs.** Map supplied IDs or match coordinates to final analysis spans, then attach CN annotations. Unmatched coordinates cause an error or are dropped with `--drop-unmatched-snvs`. In coordinate mode, check mutation-identity uniqueness within each final assigned segment. Form `GRITIC_Mutation_ID` from URL-escaped `Source_Segment_ID`, a colon, and the URL-escaped selected mutation identity.
+10. **Validate phasing against assigned CN.** A mutation marked `minor` in a segment with `Minor_CN=0` is an error. This check occurs before read filtering.
+11. **Filter reads and format the retained rows.** Keep mutations satisfying both `Tumor_Alt_Count >= 3` and `Tumor_Ref_Count + Tumor_Alt_Count >= 10` by default; both thresholds are configurable and inclusive. Empty retained mutation sets are errors. Fill absent optional canonical columns with missing values and assign dense zero-based `Segment_Mutation_Index` values by sorting `GRITIC_Mutation_ID` lexically within each final segment. These indices are not genomic-position ranks.
+
+The read filter also warns when the minimum alternate-read count before filtering is greater than 10, because the upstream mutation caller's threshold may differ from GRITIC's detection assumption. The temporary total-read-count column is not retained in the canonical mutation table.
+
+After paired-input preparation, `Sample` validates and filters the optional [subclone table](#subclone-table), reduces excess subclones, and derives `N_SNVs` from the retained mutation count. It then constructs the grouping tables and segment likelihoods. The implementation is in [`dataloader.py`](gritic/dataloader.py) and [`sampletools.py`](gritic/sampletools.py).
+
+### Grouping retained mutations
+
+GRITIC retains each mutation's identity while sharing repeated likelihood calculations through sample-wide dictionaries:
+
+| Table | One row represents |
+| --- | --- |
+| [Count group](#_count_group_tabletsv) | A distinct `(Tumor_Ref_Count, Tumor_Alt_Count)` pair. |
+| [Phase group](#_phase_group_tabletsv) | A distinct `(Count_Group_ID, Phasing)` pair; missing phasing becomes `non_phased` here. |
+| [Segment group](#_segment_group_tabletsv) | A `(Segment_ID, Phase_Group_ID)` pair and its `N_Mutations` weight. |
+| [Likelihood context](#_likelihood_context_tabletsv) | A distinct `(Major_CN, Minor_CN, Normal_Total_CN)` triple. |
+| [Segment context](#_segment_context_tabletsv) | A final segment's likelihood-context ID. |
+| [Count-group likelihood](#_count_group_likelihood_tabletsv) | A state-likelihood vector for each context/count-group pair actually observed. |
+
+Dictionary IDs are zero-based, consecutive, and deterministic. Count groups sort by reference then alternate count; phase groups sort by count group, then `non_phased`, `major`, `minor`; contexts sort by the three CN fields. Equal VAF alone does not define a count group: 3 alternate reads out of 10 and 30 out of 100 provide different read evidence. Group counts retain every mutation's statistical weight.
+
+`Normal_Total_CN` is 2 on autosomes and follows the [karyotype-specific rules](#chromosome-handling) on sex chromosomes. An autosome and a sex chromosome with one normal copy require different likelihood contexts even if their tumour CN states agree. Coordinates and mutation identifiers determine assignment and provenance; [multiplicity likelihoods](#multiplicity-likelihoods) use read counts, purity, CN, and any retained subclone CCFs.
 
 ## Run options
 
@@ -228,7 +306,7 @@ Intervals default to highest posterior density (HPD, `hpd`); `equal-tailed` is a
 
 ## Outputs
 
-Append each suffix below to `SAMPLE_ID`. We recommend only considering gained segments with 10 or more SNVs.
+Append each suffix below to `SAMPLE_ID`. We recommend only considering gained segments with 10 or more SNVs. `process_sample` writes the processed mutation, grouping, context, likelihood, and subclone tables before timing inference. Presence in a processed-input table does not imply that a segment received a timing fit; see [timing eligibility](#timing-eligibility).
 
 | File or directory suffix | Contents |
 | --- | --- |
@@ -308,13 +386,26 @@ Every output row contains these mutation identity, mapping, and provenance colum
 - `Source_Segment_ID` is the input segment ID when both input tables supplied matching `Segment_ID` columns. For position-based copy-number assignment it is the final assigned segment ID.
 - `Mutation_ID` contains the literal input `Mutation_ID` when supplied and is blank otherwise.
 - `Position` contains the canonical input position when supplied and is blank otherwise.
-- `GRITIC_Mutation_ID` is the canonical sample-unique identifier derived from the source segment plus `Mutation_ID` when supplied, otherwise from the source segment plus `Position`.
-- `Segment_Mutation_Index` is a zero-based, consecutive index within the final `Segment_ID`.
+- `GRITIC_Mutation_ID` is the canonical sample-unique identifier formed by joining the URL-escaped source segment and selected mutation identity with a colon. The identity is `Mutation_ID` when supplied, otherwise canonical `Position`.
+- `Segment_Mutation_Index` is a zero-based, consecutive index within the final `Segment_ID`, assigned by lexical `GRITIC_Mutation_ID` order.
 - `Phase_Group_ID` links the mutation to one row of [`_phase_group_table.tsv`](#_phase_group_tabletsv). Together with `Segment_ID`, it also links to the mutation count in [`_segment_group_table.tsv`](#_segment_group_tabletsv).
 
 Use `GRITIC_Mutation_ID` for downstream mutation joins.
 
 Follow `Phase_Group_ID` through the [phase](#_phase_group_tabletsv) and [count](#_count_group_tabletsv) dictionaries to recover phasing and read counts. Follow `Segment_ID` through [`_segment_context_table.tsv`](#_segment_context_tabletsv) and [`_likelihood_context_table.tsv`](#_likelihood_context_tabletsv) to recover `Major_CN`, `Minor_CN`, and total copy number.
+
+```mermaid
+flowchart LR
+    M[Mutation row] -->|Phase_Group_ID| P[Phase group: phasing and Count_Group_ID]
+    P --> C[Count group: reference and alternate counts]
+    M -->|Segment_ID| S[Segment-to-context mapping]
+    S --> X[Likelihood context: major, minor and normal CN]
+    C --> L[Context/count-group likelihood vector]
+    X --> L
+    M -->|Segment_ID and Phase_Group_ID| G[Segment group: N_Mutations]
+```
+
+The exported mutation TSV retains coordinates and `Context`, but omits repeated read counts, phasing, CN values, and likelihood vectors. Those values reside in the linked tables above.
 
 #### _subclone_table.tsv
 
@@ -346,13 +437,55 @@ GRITIC calculates the modal `Major_CN`, weighted by segment width, across the co
 
 Overlapping segments are pooled and refit by minor-copy-number class, and their timing densities are combined into 500 sample-level draws. For a WGD call, `WGD_Timing` and its interval fields summarize those draws using the configured sample-WGD interval.
 
+### Multiplicity likelihoods
+
+For a mutation read-count group, let $a$ be the alternate count and $n$ the total depth. Let $\rho$ be cellular purity, $M$ and $m$ the tumour major and minor copy numbers, and $C_N$ the normal total copy number. The expected variant allele fraction (VAF) for state $s$ is:
+
+$$
+p_s = \min\left(1,\frac{\rho s}{\rho(M+m)+(1-\rho)C_N}\right).
+$$
+
+Clonal states have $s=1,\ldots,M$. Each retained subclone adds a state with $s$ equal to its CCF, representing a single mutant copy in that fraction of cancer cells. GRITIC evaluates a binomial read likelihood and normalizes it across the candidate states:
+
+$$
+b_{gs}=\Pr(a_g\mid n_g,p_s),\qquad
+L_{gs}=\frac{b_{gs}}{\sum_j b_{gj}}.
+$$
+
+The implementation evaluates log probabilities and subtracts their maximum before exponentiation for numerical stability. The exported `Prob_Mult_*` and `Prob_Subclone_*` columns contain these normalized read likelihoods; route histories and mixture weights enter later during timing inference.
+
+![Normalized read likelihoods for multiplicity one and two in a 2+1 segment](docs/figures/multiplicity_likelihood.png)
+
+For the illustrated autosomal `2+1` segment at purity 0.6, expected VAF is approximately 0.231 for multiplicity one and 0.462 for multiplicity two. At depth 30, 7 alternate reads give normalized likelihoods of approximately 0.966 and 0.034; 14 alternate reads give 0.018 and 0.982. No subclones are included in this example.
+
+Unphased and major-phased observations use clonal multiplicities `1..Major_CN`. Minor-phased observations select only `1..Minor_CN` and renormalize the retained likelihood columns. Subclone columns are included in each applicable phase category. The route model supplies mixture weights for each category, and their log-likelihood contributions are added. Shared count-group likelihoods therefore preserve both phasing information and mutation frequencies.
+
+The calculation and phase-specific state selection are implemented in [`sampletools.py`](gritic/sampletools.py). The two README figures can be regenerated with [`docs/generate_input_processing_figures.py`](docs/generate_input_processing_figures.py) using the environment in which GRITIC is installed.
+
 ### Detection correction and mutation-share priors
 
-GRITIC uses each segment's read counts to fit clonal and subclonal mutation shares, with the supplied subclone CCFs determining the expected VAFs of the subclonal states. The clonal input fraction is one minus the sum of the retained subclonal fractions. GRITIC constructs a weak Dirichlet prior with parameters equal to one plus the supplied or adjusted fractions.
+Detection correction is enabled by default. Within each segment, GRITIC calculates the `--coverage-vaf-quantile` quantile of retained observed-SNV VAFs (default 0.9), then averages coverage over SNVs with VAF strictly greater than that quantile minus 0.01. Both operations account for the number of mutations represented by each count group.
 
-With `--subclone-fraction-prior adjusted`, GRITIC divides the clonal and subclonal input fractions by their estimated detection probabilities separately for each segment, then renormalizes them. With `supplied`, it uses the fractions directly. Both modes apply the segment-specific detection correction in the likelihood.
+Let $\overline{D}$ be that mean depth and $A_{\min}$ the configured minimum alternate-read count. Poisson thinning gives the detection probability for state $s$:
 
-The correction uses Poisson thinning to calculate the probability of meeting `--min-mutation-alt-count`, given each state's expected VAF and the segment's estimated mean coverage. Coverage is averaged over SNVs with observed VAF greater than the `--coverage-vaf-quantile` quantile minus 0.01. This quantile affects the likelihood correction in both prior modes and the prior adjustment only in `adjusted` mode.
+$$
+d_s=\Pr\!\left[\operatorname{Poisson}(\overline{D}p_s)\geq A_{\min}\right].
+$$
+
+This corrects for the alternate-read threshold. The minimum-total-coverage threshold controls which observations are retained, but it is not an additional condition in this detection probability; the code does not explicitly model the joint selection event.
+
+For underlying mixture weights $w_s$ proposed by a route/timing model, GRITIC uses detection-adjusted observation weights $w'_s$. Within each applicable phasing category, the grouped log likelihood is:
+
+$$
+w'_s=\frac{w_s d_s}{\sum_j w_j d_j},\qquad
+\log\mathcal{L}=\sum_g N_g\log\left(\sum_s w'_s L_{gs}\right),
+$$
+
+where $N_g$ is the number of mutations represented by group $g$. This retains the likelihood contribution of every mutation while calculating repeated read evidence once. The Python API can disable reads correction with `apply_reads_correction=False`, which uses correction factors of one; the CLI uses the default enabled correction.
+
+GRITIC fits clonal and subclonal mutation shares using these read likelihoods. The clonal input fraction is one minus the sum of the retained subclonal fractions. The supplied subclone CCFs determine expected VAFs; mutation fractions inform a weak Dirichlet prior rather than assigning individual mutations to clusters in advance.
+
+With `--subclone-fraction-prior adjusted`, GRITIC divides the clonal and subclonal input fractions by their estimated detection probabilities separately for each segment, then renormalizes them. The clonal fraction uses the multiplicity-one detection probability. With `supplied`, it uses the fractions directly. Dirichlet parameters are one plus the resulting fractions. Both modes apply the segment-specific detection correction in the likelihood. The coverage quantile affects that likelihood correction in both modes and the prior adjustment only in `adjusted` mode.
 
 The `supplied` prior follows [Baker et al. (2024)][publication], Supplementary Methods §8.3.4, equation 22. The publication's detection correction averages detection power over individual SNV depths (§8.3.5, equation 23); the current implementation uses the mean-coverage approach above.
 

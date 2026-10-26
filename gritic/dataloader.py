@@ -695,7 +695,7 @@ def validate_subclone_values(subclone_table, *, clip_subclone_ccf=False):
         boolean_values = subclone_table[column].map(
             lambda value: isinstance(value, (bool, np.bool_))
         )
-        numeric_values = subclone_table[column].map(parse_float)
+        numeric_values = subclone_table[column].map(parse_float).astype(float)
         valid_numeric_values = (
             ~boolean_values
             & numeric_values.notna()
