@@ -1003,7 +1003,7 @@ def filter_mutation_table(
     min_mutation_alt_count=DEFAULT_MIN_MUTATION_ALT_COUNT,
     min_mutation_coverage=DEFAULT_MIN_MUTATION_COVERAGE,
 ):
-    """Apply alternate-read and coverage thresholds after CN assignment."""
+    """Apply alternate-read and coverage thresholds before segment merging."""
     mutation_table = mutation_table.copy()
     if mutation_table['Tumor_Alt_Count'].min() > 10:
         warnings.warn(
@@ -1033,6 +1033,49 @@ def filter_mutation_table(
     return mutation_table
 
 
+def _drop_empty_copy_number_segments(
+    copy_number_table,
+    mutation_table,
+    *,
+    use_supplied_segment_ids,
+):
+    """Keep original positive-CN intervals containing retained mutations.
+
+    Supplied IDs determine ownership when present. Otherwise, support is
+    counted in the original half-open intervals. Mutations in uncovered gaps
+    do not support an interval, but remain available for assignment after
+    supported flanks have been merged.
+    """
+    if use_supplied_segment_ids:
+        supported = copy_number_table['Segment_ID'].astype(str).isin(
+            mutation_table['Segment_ID'].astype(str)
+        )
+    else:
+        supported = pd.Series(False, index=copy_number_table.index)
+        positions_by_chromosome = {
+            chromosome: np.sort(table['Position'].to_numpy(dtype=np.int64))
+            for chromosome, table in mutation_table.groupby('Chromosome')
+        }
+        for chromosome, segments in copy_number_table.groupby('Chromosome'):
+            positions = positions_by_chromosome.get(chromosome)
+            if positions is None:
+                continue
+            starts = np.searchsorted(
+                positions, segments['Segment_Start'].to_numpy(), side='left',
+            )
+            ends = np.searchsorted(
+                positions, segments['Segment_End'].to_numpy(), side='left',
+            )
+            supported.loc[segments.index] = ends > starts
+
+    retained = copy_number_table.loc[supported].copy()
+    if retained.empty:
+        raise ValueError(
+            'No copy-number segments contain retained mutations before merging'
+        )
+    return retained
+
+
 def prepare_sample_inputs(
     copy_number_table,
     mutation_table,
@@ -1049,8 +1092,9 @@ def prepare_sample_inputs(
 ):
     """Prepare paired inputs before building any segment or model groups.
 
-    Zero-copy ownership is resolved against the original profile. Retained
-    copy-number intervals are then merged and mutations assigned to the final
+    Zero-copy ownership is resolved against the original profile. Read-count
+    filters are applied before removing intervals without retained mutations.
+    Supported intervals are then merged and mutations assigned to the final
     spans, preserving interpolation across genuinely uncovered gaps. The
     original normalized profile remains available for genome-wide statistics.
     """
@@ -1130,6 +1174,17 @@ def prepare_sample_inputs(
             '(0+0) segments'
         )
 
+    mutation_table = filter_mutation_table(
+        mutation_table,
+        min_mutation_alt_count=min_mutation_alt_count,
+        min_mutation_coverage=min_mutation_coverage,
+    )
+    copy_number_table = _drop_empty_copy_number_segments(
+        copy_number_table,
+        mutation_table,
+        use_supplied_segment_ids=use_supplied_segment_ids,
+    )
+
     supplied_segment_id_map = None
     if merge_cn:
         if use_supplied_segment_ids:
@@ -1182,11 +1237,6 @@ def prepare_sample_inputs(
         mutation_table.pop('_GRITIC_Mutation_ID_Component'),
     )
     validate_phasing_copy_number_consistency(mutation_table)
-    mutation_table = filter_mutation_table(
-        mutation_table,
-        min_mutation_alt_count=min_mutation_alt_count,
-        min_mutation_coverage=min_mutation_coverage,
-    )
     mutation_table = format_mutation_table(mutation_table)
     return PreparedSampleInputs(
         source_copy_number_table=source_copy_number_table,

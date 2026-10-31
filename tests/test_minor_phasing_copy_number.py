@@ -82,6 +82,12 @@ class MinorPhasingCopyNumberTest(unittest.TestCase):
         })
         mutation_table = self.mutation_table('minor')
         mutation_table['Segment_ID'] = 'right'
+        left_mutation = self.mutation_table('major')
+        left_mutation['Segment_ID'] = 'left'
+        left_mutation['Mutation_ID'] = 'left-mutation'
+        mutation_table = pd.concat(
+            [left_mutation, mutation_table], ignore_index=True,
+        )
 
         with self.assertRaises(ValueError) as error:
             self.make_sample(
@@ -93,15 +99,21 @@ class MinorPhasingCopyNumberTest(unittest.TestCase):
         self.assertIn("'right:mutation-1'", message)
         self.assertIn("'1-0-200'", message)
 
-    def test_validation_precedes_mutation_count_filtering(self):
-        with self.assertRaisesRegex(
-            ValueError,
-            'Minor-phased mutations require Minor_CN > 0',
-        ):
-            self.make_sample(
-                self.mutation_table('minor', alt_count=0),
-                self.copy_number_table(),
-            )
+    def test_read_filtering_precedes_copy_number_phasing_validation(self):
+        filtered_mutation = self.mutation_table('minor', alt_count=0)
+        retained_mutation = self.mutation_table('major')
+        retained_mutation['Mutation_ID'] = 'retained-mutation'
+        mutations = pd.concat(
+            [filtered_mutation, retained_mutation], ignore_index=True,
+        )
+
+        sample = self.make_sample(mutations, self.copy_number_table())
+
+        self.assertEqual(
+            sample.mutation_table['Mutation_ID'].tolist(),
+            ['retained-mutation'],
+        )
+        self.assertEqual(sample.mutation_table['Phasing'].tolist(), ['major'])
 
     def test_absent_unphased_and_major_phasing_are_allowed(self):
         mutation_table = pd.concat(

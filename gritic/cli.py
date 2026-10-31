@@ -236,9 +236,11 @@ def build_parser():
         action='store_false',
         default=True,
         help=(
-            'Preserve neighboring copy-number segments as separate '
-            'intervals. By default, GRITIC merges consecutive segments on '
-            'the same chromosome with identical Major_CN and Minor_CN.'
+            'Keep retained copy-number intervals separate. Zero-copy '
+            'intervals and those without retained mutations are still '
+            'removed. By default, GRITIC merges consecutive retained '
+            'segments on the same chromosome with identical Major_CN '
+            'and Minor_CN.'
         ),
     )
     genome_and_input_arguments.add_argument(
@@ -247,9 +249,10 @@ def build_parser():
         default=sampletools.DEFAULT_MAX_MERGE_GAP,
         metavar='BASES',
         help=(
-            'Maximum gap in bases between consecutive equal-copy-number '
-            'segments that may be merged. By default there is no maximum; '
-            'use 0 to merge only intervals that touch.'
+            'Maximum gap in bases between consecutive retained '
+            'equal-copy-number segments that may be merged, including '
+            'removed intervals. By default there is no maximum; use 0 '
+            'to merge only intervals that touch.'
         ),
     )
     mutation_arguments.add_argument(

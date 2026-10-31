@@ -191,6 +191,45 @@ class InputPreparationTest(unittest.TestCase):
         self.assertEqual(prepared.copy_number_table['Segment_ID'].tolist(), ['1-0-300'])
         self.assertEqual(set(prepared.mutation_table['Position']), {50, 150, 250})
 
+    def test_gap_only_mutations_do_not_seed_empty_source_intervals(self):
+        cn_table = self.copy_number_table().iloc[[0, 2]].copy()
+        mutations = self.mutation_table(supplied_ids=False).iloc[[1]].copy()
+        for drop_unmatched_snvs in (False, True):
+            with self.subTest(drop_unmatched_snvs=drop_unmatched_snvs):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    'No copy-number segments contain retained mutations before merging',
+                ):
+                    self.prepare(
+                        cn_table, mutations,
+                        drop_unmatched_snvs=drop_unmatched_snvs,
+                    )
+
+    def test_gap_mutation_does_not_extend_a_supported_region_to_an_empty_flank(self):
+        cn_table = self.copy_number_table().iloc[[0, 2]].copy()
+        mutations = self.mutation_table(supplied_ids=False).iloc[[0, 1]].copy()
+
+        with self.assertRaisesRegex(ValueError, '1 unmatched SNV'):
+            self.prepare(cn_table, mutations)
+        with self.assertWarnsRegex(UserWarning, '1 unmatched SNV'):
+            prepared = self.prepare(cn_table, mutations, drop_unmatched_snvs=True)
+
+        self.assertEqual(prepared.copy_number_table['Segment_ID'].tolist(), ['1-0-100'])
+        self.assertEqual(prepared.mutation_table['Position'].tolist(), [50])
+
+    def test_all_read_filtered_mutations_raise_before_segment_merging(self):
+        cn_table = self.copy_number_table().iloc[[0, 2]].copy()
+        for supplied_ids in (False, True):
+            mutations = self.mutation_table(
+                supplied_ids=supplied_ids,
+            ).iloc[[0, 2]].copy()
+            mutations['Tumor_Alt_Count'] = 2
+            with self.subTest(supplied_ids=supplied_ids):
+                with self.assertRaisesRegex(
+                    ValueError, 'No mutations remain after applying.*thresholds',
+                ):
+                    self.prepare(cn_table, mutations)
+
     def test_supplied_duplicate_mutation_labels_remain_distinct_after_merge(self):
         mutations = self.mutation_table()
         mutations['Mutation_ID'] = ['repeated', 'zero-snv', 'repeated']
@@ -215,35 +254,181 @@ class InputPreparationTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'unique.*source Segment_ID'):
                 self.prepare(mutation_table=mutations)
 
-    def test_positive_intervening_states_remain_merge_barriers_without_mutations(self):
-        # Timing eligibility and mutation presence must not filter the CN profile.
-        for major_cn, minor_cn in ((1, 0), (9, 1), (2, 0)):
-            cn_table = self.copy_number_table()
-            cn_table['Major_CN'] = [3, major_cn, 3]
-            cn_table['Minor_CN'] = [1, minor_cn, 1]
-            mutations = self.mutation_table().iloc[[0, 2]].copy()
-            with self.subTest(major_cn=major_cn, minor_cn=minor_cn):
-                prepared = self.prepare(cn_table, mutations)
+    def test_empty_positive_intervals_are_removed_before_flanks_merge(self):
+        for supplied_ids in (False, True):
+            for major_cn, minor_cn in ((1, 0), (9, 1), (2, 0)):
+                cn_table = self.copy_number_table()
+                cn_table['Major_CN'] = [3, major_cn, 3]
+                cn_table['Minor_CN'] = [1, minor_cn, 1]
+                mutations = self.mutation_table(
+                    supplied_ids=supplied_ids,
+                ).iloc[[0, 2]].copy()
+                with self.subTest(
+                    supplied_ids=supplied_ids, major_cn=major_cn,
+                    minor_cn=minor_cn,
+                ):
+                    prepared = self.prepare(cn_table, mutations)
+
+                    self.assertEqual(
+                        prepared.copy_number_table['Segment_ID'].tolist(),
+                        ['1-0-300'],
+                    )
+                    self.assertEqual(len(prepared.mutation_table), 2)
+                    self.assertEqual(
+                        prepared.source_copy_number_table['Major_CN'].tolist(),
+                        [3, major_cn, 3],
+                    )
+                    if supplied_ids:
+                        self.assertEqual(
+                            prepared.supplied_segment_id_map,
+                            {'left': '1-0-300', 'right': '1-0-300'},
+                        )
+                        self.assertEqual(
+                            set(prepared.mutation_table['GRITIC_Mutation_ID']),
+                            {'left:left-snv', 'right:right-snv'},
+                        )
+                    else:
+                        self.assertIsNone(prepared.supplied_segment_id_map)
+
+    def test_read_thresholds_determine_whether_an_interval_is_empty_before_merging(self):
+        cn_table = self.copy_number_table()
+        cn_table.loc[1, ['Major_CN', 'Minor_CN']] = [1, 0]
+        for supplied_ids in (False, True):
+            for ref_count, alt_count, min_alt, min_coverage, retained in (
+                (8, 2, 3, 10, False),
+                (6, 3, 3, 10, False),
+                (7, 3, 3, 10, True),
+                (7, 3, 4, 10, False),
+                (7, 3, 3, 11, False),
+            ):
+                mutations = self.mutation_table(supplied_ids=supplied_ids)
+                mutations.loc[1, ['Tumor_Ref_Count', 'Tumor_Alt_Count']] = [
+                    ref_count, alt_count,
+                ]
+                with self.subTest(
+                    supplied_ids=supplied_ids, ref_count=ref_count,
+                    alt_count=alt_count, min_alt=min_alt,
+                    min_coverage=min_coverage,
+                ):
+                    prepared = self.prepare(
+                        cn_table, mutations,
+                        min_mutation_alt_count=min_alt,
+                        min_mutation_coverage=min_coverage,
+                    )
+
+                    self.assertEqual(
+                        prepared.copy_number_table['Segment_ID'].tolist(),
+                        ['1-0-100', '1-100-200', '1-200-300']
+                        if retained else ['1-0-300'],
+                    )
+                    self.assertEqual(
+                        set(prepared.mutation_table['Position']),
+                        {50, 150, 250} if retained else {50, 250},
+                    )
+
+    def test_supported_intervening_states_remain_barriers_regardless_of_timing_eligibility(self):
+        cn_table = self.copy_number_table()
+        cn_table.loc[1, ['Major_CN', 'Minor_CN']] = [9, 1]
+        for supplied_ids in (False, True):
+            with self.subTest(supplied_ids=supplied_ids):
+                prepared = self.prepare(
+                    cn_table, self.mutation_table(supplied_ids=supplied_ids),
+                )
 
                 self.assertEqual(
                     prepared.copy_number_table['Segment_ID'].tolist(),
                     ['1-0-100', '1-100-200', '1-200-300'],
                 )
-                self.assertEqual(len(prepared.mutation_table), 2)
+                self.assertEqual(prepared.copy_number_table['Major_CN'].tolist(), [2, 9, 2])
 
-    def test_read_filtering_does_not_remove_a_positive_cn_merge_barrier(self):
+    def test_empty_intervals_are_dropped_when_merging_is_disabled(self):
         cn_table = self.copy_number_table()
-        cn_table.loc[1, ['Major_CN', 'Minor_CN']] = [1, 0]
-        mutations = self.mutation_table()
-        mutations.loc[1, 'Tumor_Alt_Count'] = 2
+        cn_table.loc[1, ['Major_CN', 'Minor_CN']] = [5, 1]
+        for supplied_ids in (False, True):
+            mutations = self.mutation_table(
+                supplied_ids=supplied_ids,
+            ).iloc[[0, 2]].copy()
+            with self.subTest(supplied_ids=supplied_ids):
+                prepared = self.prepare(cn_table, mutations, merge_cn=False)
+
+                self.assertEqual(
+                    prepared.copy_number_table['Segment_ID'].tolist(),
+                    ['1-0-100', '1-200-300'],
+                )
+                self.assertEqual(len(prepared.source_copy_number_table), 3)
+                if supplied_ids:
+                    self.assertEqual(
+                        prepared.supplied_segment_id_map,
+                        {'left': '1-0-100', 'right': '1-200-300'},
+                    )
+
+    def test_maximum_merge_gap_includes_empty_positive_intervals(self):
+        cn_table = self.copy_number_table()
+        cn_table.loc[1, ['Major_CN', 'Minor_CN']] = [5, 1]
+        for supplied_ids in (False, True):
+            mutations = self.mutation_table(
+                supplied_ids=supplied_ids,
+            ).iloc[[0, 2]].copy()
+            for gap, expected in (
+                (0, ['1-0-100', '1-200-300']),
+                (99, ['1-0-100', '1-200-300']),
+                (100, ['1-0-300']),
+            ):
+                with self.subTest(supplied_ids=supplied_ids, gap=gap):
+                    prepared = self.prepare(cn_table, mutations, max_merge_gap=gap)
+
+                    self.assertEqual(
+                        prepared.copy_number_table['Segment_ID'].tolist(),
+                        expected,
+                    )
+
+    def test_coordinate_mutation_presence_uses_original_half_open_intervals(self):
+        cn_table = self.copy_number_table()
+        cn_table.loc[1, ['Major_CN', 'Minor_CN']] = [5, 1]
+        mutations = self.mutation_table(supplied_ids=False).iloc[[0, 2]].copy()
+        mutations['Position'] = [99, 200]
 
         prepared = self.prepare(cn_table, mutations)
 
         self.assertEqual(
-            prepared.copy_number_table['Segment_ID'].tolist(),
-            ['1-0-100', '1-100-200', '1-200-300'],
+            prepared.copy_number_table['Segment_ID'].tolist(), ['1-0-300'],
         )
-        self.assertEqual(set(prepared.mutation_table['Position']), {50, 250})
+        self.assertEqual(prepared.mutation_table['Major_CN'].tolist(), [2, 2])
+        self.assertEqual(set(prepared.mutation_table['Position']), {99, 200})
+
+    def test_supplied_ids_determine_mutation_presence_even_when_positions_disagree(self):
+        cn_table = self.copy_number_table()
+        cn_table.loc[1, ['Major_CN', 'Minor_CN']] = [5, 1]
+        mutations = self.mutation_table().iloc[[0, 2]].copy()
+        mutations['Position'] = [150, 150]
+
+        prepared = self.prepare(cn_table, mutations)
+
+        self.assertEqual(
+            prepared.copy_number_table['Segment_ID'].tolist(), ['1-0-300'],
+        )
+        self.assertEqual(
+            prepared.supplied_segment_id_map,
+            {'left': '1-0-300', 'right': '1-0-300'},
+        )
+        self.assertEqual(set(prepared.mutation_table['Source_Segment_ID']), {'left', 'right'})
+
+    def test_empty_same_cn_edges_do_not_extend_a_supported_interval(self):
+        cn_table = self.copy_number_table()
+        cn_table['Major_CN'] = 2
+        cn_table['Minor_CN'] = 1
+        for supplied_ids in (False, True):
+            mutations = self.mutation_table(
+                supplied_ids=supplied_ids,
+            ).iloc[[1]].copy()
+            with self.subTest(supplied_ids=supplied_ids):
+                prepared = self.prepare(cn_table, mutations)
+
+                self.assertEqual(
+                    prepared.copy_number_table['Segment_ID'].tolist(),
+                    ['1-100-200'],
+                )
+                self.assertEqual(len(prepared.source_copy_number_table), 3)
 
     def test_true_unmatched_mutations_still_require_the_drop_option(self):
         cn_table = self.copy_number_table().iloc[[0, 2]].copy()
@@ -322,6 +507,23 @@ class InputPreparationTest(unittest.TestCase):
         self.assertEqual(sample.copy_number_table['Segment_ID'].tolist(), ['1-0-1200'])
         self.assertEqual(sample.cn_table['Major_CN'].tolist(), [2, 0, 2])
         self.assertEqual(sampletools.get_major_cn_mode(sample), 0)
+
+    def test_sample_keeps_empty_positive_intervals_for_original_major_cn_mode(self):
+        cn_table = self.copy_number_table()
+        cn_table.loc[1, ['Major_CN', 'Minor_CN']] = [5, 1]
+        cn_table['Segment_Start'] = [0, 100, 1100]
+        cn_table['Segment_End'] = [100, 1100, 1200]
+        mutations = self.mutation_table().iloc[[0, 2]].copy()
+
+        sample = sampletools.Sample(
+            mutations, cn_table, None, 'TEST', 0.8, sex='XX',
+        )
+
+        self.assertEqual(sample.copy_number_table['Segment_ID'].tolist(), ['1-0-1200'])
+        self.assertEqual(sample.cn_table['Major_CN'].tolist(), [2, 5, 2])
+        self.assertEqual(sampletools.get_major_cn_mode(sample), 5)
+        self.assertEqual(len(sample.segments), 1)
+        self.assertEqual(sample.segments[0].n_mutations, 2)
 
 
 if __name__ == '__main__':

@@ -120,6 +120,8 @@ In supplied-ID mode, both tables require nonblank `Segment_ID` values, and those
 
 GRITIC drops zero-copy `0+0` segments and their mutations before merging. GRITIC
 warns when dropping these mutations, independently of `--drop-unmatched-snvs`.
+It then applies the alternate-read and coverage filters and removes positive-CN
+source segments with no retained mutations from the analysis profile before merging.
 
 The selected `Mutation_ID` or canonical integer `Position` value must be nonblank and unique within the scope shown above. An explicit `Mutation_ID` column takes precedence for every row; GRITIC does not fall back to `Position` for blank values in that column. The same selected value may be reused in different source segments. With supplied segment IDs, this also applies to source segments that GRITIC subsequently merges. In coordinate mode, repeated identities in the same final merged segment are rejected.
 
@@ -140,17 +142,19 @@ The supported allele-specific copy-number states are:
 
 The `1+0` and `1+1` states use uniform no-gain timing. In WGD runs, major-copy-number-two segments are excluded from the ordinary per-segment fit. [WGD timing estimation](#wgd-timing-estimation) uses those on configured autosomes with at least 10 retained SNVs. Balanced `2+2` segments use a [WGD-specific allele model](#balanced-wgd-segments).
 
-Input validation and timing eligibility are separate: a valid positive-CN segment can be retained in the analysis profile even when its state is outside these fitting limits. Only segments with retained mutations become model `Segment` objects. Ordinary per-segment fitting has no hard 10-mutation minimum; 10 is the WGD-candidate cutoff and a recommendation for interpreting gained segments.
+Input validation and timing eligibility are separate: a valid positive-CN segment with retained mutations remains in the analysis profile even when its state is outside these fitting limits. Source segments without retained mutations are removed before merging. Ordinary per-segment fitting has no hard 10-mutation minimum; 10 is the WGD-candidate cutoff and a recommendation for interpreting gained segments.
 
 #### Segment merging
 
-By default, GRITIC merges consecutive segments on the same chromosome having identical `Major_CN` and `Minor_CN`. The merged interval runs from the first segment's start through the last segment's end, including any intervening uncovered bases. Use `--max-merge-gap` to limit gaps or `--keep-adjacent-segments` to preserve input segments. Final segment IDs are generated from `Chromosome`, `Segment_Start`, and `Segment_End` after merging.
+Before merging, GRITIC removes zero-copy `0+0` intervals and positive-CN source intervals with no retained mutations from the analysis profile. Mutation support is counted after the configured read filters (by default, at least 3 alternate reads and 10 total reads). Supplied-ID mode counts mutations by original input segment ID; coordinate mode counts mutations within each original half-open interval. A mutation in an uncovered gap does not establish support for either neighboring interval.
 
-Removing zero-copy intervals can make equal-copy-number segments consecutive, so `2+1 → 0+0 → 2+1` becomes one `2+1` segment by default. The gap limit includes the removed interval. Mutations assigned to original zero-copy intervals remain excluded even when a merged interval spans them; in coordinate mode, mutations in other uncovered gaps follow the merged interval's coordinates. Merged lengths include intervening bases. GRITIC preserves the original validated copy-number profile for WGD copy-number-mode calculations.
+By default, GRITIC then merges consecutive retained segments on the same chromosome having identical `Major_CN` and `Minor_CN`. The merged interval runs from the first retained segment's start through the last retained segment's end, including intervening bases. Use `--max-merge-gap` to limit gaps or `--keep-adjacent-segments` to keep the retained input intervals separate. Disabling merging does not disable removal of empty or zero-copy intervals. Final segment IDs are generated from `Chromosome`, `Segment_Start`, and `Segment_End` after merging.
+
+Removing intervals can make equal-copy-number segments consecutive: both `2+1 → 0+0 → 2+1` and `2+1 → 3+1 (no retained mutations) → 2+1` become one `2+1` segment by default when the flanks contain retained mutations. The gap limit includes the removed intervals. Mutations assigned to original zero-copy intervals remain excluded even when a merged interval spans them; in coordinate mode, retained mutations in genuinely uncovered gaps can still be assigned to the final merged span. Removing empty intervals at the edges can shorten an analysis span. GRITIC preserves the original validated copy-number profile for WGD copy-number-mode calculations.
 
 ![Coordinate assignment across an explicit zero-copy interval and an uncovered gap](docs/figures/segment_assignment.png)
 
-In both examples the final span is `1-0-300`, but the middle mutation is removed only when the original profile explicitly assigns it to `0+0`. Setting `--max-merge-gap 0` keeps the flanking intervals separate in both examples. A positive-CN interval with a different state remains a merge barrier even if it has no retained mutations or its state is ineligible for timing.
+In both examples the flanks contain retained mutations and the final span is `1-0-300`, but the middle mutation is removed only when the original profile explicitly assigns it to `0+0`. Setting `--max-merge-gap 0` keeps the flanking intervals separate in both examples. A positive-CN interval with a different state remains a merge barrier only if it contains retained mutations; a supported interval remains a barrier even when its state is ineligible for timing.
 
 #### Chromosome handling
 
@@ -189,11 +193,11 @@ flowchart TD
     B --> C[Preserve original validated CN profile]
     C --> W[Autosomal major-CN mode for WGD assessment]
     C --> D[Remove zero-copy analysis regions and their mutations]
-    D --> E[Optionally merge consecutive equal-CN segments]
-    E --> F[Assign mutations to final segments]
-    F --> G[Generate GRITIC mutation IDs and check minor phasing]
-    G --> H[Filter by alternate reads and total coverage]
-    H --> I[Format rows and assign per-segment mutation indices]
+    D --> E[Filter mutations by alternate reads and total coverage]
+    E --> F[Remove source CN intervals with no retained mutations]
+    F --> G[Optionally merge consecutive equal-CN segments]
+    G --> H[Assign mutations to final segments and generate GRITIC IDs]
+    H --> I[Check minor phasing, format rows and assign mutation indices]
     I --> J[Build count groups, phase groups and CN contexts]
     P[Purity and optional processed subclones] --> K
     J --> K[Multiplicity likelihoods and detection corrections]
@@ -201,7 +205,7 @@ flowchart TD
     W --> L
 ```
 
-The original validated CN profile (`sample.cn_table`) retains original boundaries and zero-copy intervals for the width-weighted autosomal major-CN mode, regardless of whether those intervals have retained mutations. The analysis profile (`sample.copy_number_table`) removes zero-copy intervals and may contain merged spans. Final positive-CN spans without retained mutations remain in the analysis profile but do not become model `Segment` objects or receive likelihood contexts. Positive-CN segments with mutations are grouped before timing eligibility is applied.
+The original validated CN profile (`sample.cn_table`) retains original boundaries, zero-copy intervals, and intervals without retained mutations for the width-weighted autosomal major-CN mode. The analysis profile (`sample.copy_number_table`) removes zero-copy source intervals and those without retained mutations before merging the remaining intervals. Its final spans contain retained mutations and become model `Segment` objects with likelihood contexts. These mutations are grouped before timing eligibility is applied.
 
 ### Preparation order
 
@@ -214,10 +218,12 @@ The order below matters: a malformed mutation can fail validation even if its re
 5. **Validate mutation values and identity.** Read counts must be finite nonnegative signed-64-bit integers; their sum must be positive and fit signed 64-bit. If `Position` is present, every value must be a finite nonnegative signed-64-bit integer, including in supplied-ID mode. The selected mutation identity must be nonblank.
 6. **Validate supplied segment IDs, when used.** Check nonblank IDs, unique CN IDs, and chromosome agreement. Check mutation-identity uniqueness within each input segment before dropping unknown-ID or zero-copy mutations. Unknown IDs cause an error or are dropped with `--drop-unmatched-snvs`; missing IDs and chromosome mismatches remain errors.
 7. **Remove zero-copy regions from analysis.** Resolve mutation ownership against the original profile, using IDs in supplied-ID mode or original half-open intervals in coordinate mode. Drop these mutations with a warning, independently of `--drop-unmatched-snvs`, and remove `0+0` rows from the analysis CN profile.
-8. **Apply the selected segment-merging behavior.** Merge consecutive equal-CN intervals unless disabled, respecting `--max-merge-gap` when supplied. Generate final `Chromosome-Start-End` segment IDs even when merging is disabled; retain an input-to-final ID map in supplied-ID mode. See [segment merging](#segment-merging).
-9. **Assign mutations and generate GRITIC IDs.** Map supplied IDs or match coordinates to final analysis spans, then attach CN annotations. Unmatched coordinates cause an error or are dropped with `--drop-unmatched-snvs`. In coordinate mode, check mutation-identity uniqueness within each final assigned segment. Form `GRITIC_Mutation_ID` from URL-escaped `Source_Segment_ID`, a colon, and the URL-escaped selected mutation identity.
-10. **Validate phasing against assigned CN.** A mutation marked `minor` in a segment with `Minor_CN=0` is an error. This check occurs before read filtering.
-11. **Filter reads and format the retained rows.** Keep mutations satisfying both `Tumor_Alt_Count >= 3` and `Tumor_Ref_Count + Tumor_Alt_Count >= 10` by default; both thresholds are configurable and inclusive. Empty retained mutation sets are errors. Fill absent optional canonical columns with missing values and assign dense zero-based `Segment_Mutation_Index` values by sorting `GRITIC_Mutation_ID` lexically within each final segment. These indices are not genomic-position ranks.
+8. **Filter reads.** Keep mutations satisfying both `Tumor_Alt_Count >= 3` and `Tumor_Ref_Count + Tumor_Alt_Count >= 10` by default; both thresholds are configurable and inclusive. Empty retained mutation sets are errors.
+9. **Remove source intervals with no retained mutations.** Count support by original supplied segment IDs or by original half-open coordinates. Remove positive-CN intervals with zero support from the analysis profile, even when merging is disabled. Mutations in uncovered gaps do not establish source-interval support, but can still match a merged span later. Preserve the original CN profile separately for genome-wide statistics.
+10. **Apply the selected segment-merging behavior.** Merge consecutive equal-CN retained intervals unless disabled, respecting `--max-merge-gap` when supplied. The gap includes any removed intervals. Generate final `Chromosome-Start-End` segment IDs even when merging is disabled; retain an input-to-final ID map in supplied-ID mode. See [segment merging](#segment-merging).
+11. **Assign mutations and generate GRITIC IDs.** Map supplied IDs or match coordinates to final analysis spans, then attach CN annotations. Unmatched coordinates cause an error or are dropped with `--drop-unmatched-snvs`. In coordinate mode, check mutation-identity uniqueness within each final assigned segment. Form `GRITIC_Mutation_ID` from URL-escaped `Source_Segment_ID`, a colon, and the URL-escaped selected mutation identity.
+12. **Validate phasing against assigned CN.** A retained mutation marked `minor` in a segment with `Minor_CN=0` is an error.
+13. **Format the retained rows.** Fill absent optional canonical columns with missing values and assign dense zero-based `Segment_Mutation_Index` values by sorting `GRITIC_Mutation_ID` lexically within each final segment. These indices are not genomic-position ranks.
 
 The read filter also warns when the minimum alternate-read count before filtering is greater than 10, because the upstream mutation caller's threshold may differ from GRITIC's detection assumption. The temporary total-read-count column is not retained in the canonical mutation table.
 
@@ -261,7 +267,7 @@ Dictionary IDs are zero-based, consecutive, and deterministic. Count groups sort
 - `--drop-unmatched-chromosomes` Drop copy-number and mutation rows whose chromosome is not one of the configured autosomes or present sex chromosomes and report the number of rows dropped. By default, any such chromosome is an error.
 - `--drop-unmatched-snvs` Drop mutation rows that cannot be associated with a copy-number segment by either supplied `Segment_ID` or genomic `Position` and report the number dropped. By default, unmatched mutations raise an error.
 - `--drop-unrecognized-phasing` Drop mutation rows whose non-missing `Phasing` value is not `major` or `minor` and report the number dropped. By default, unrecognized phasing labels raise an error.
-- `--keep-adjacent-segments` Preserve input copy-number segments separately. See [segment merging](#segment-merging) for the default behavior.
+- `--keep-adjacent-segments` Keep retained input copy-number intervals separate; zero-copy intervals and those without retained mutations are still removed. See [segment merging](#segment-merging) for the default behavior.
 - `--max-merge-gap N` Merge consecutive equal-copy-number segments only when the gap is at most `N` bases. If omitted, there is no maximum; use `0` to merge only intervals that touch.
 
 ### Mutation filtering and detection correction
@@ -584,7 +590,7 @@ gritictimer.process_sample(
 
 `dataloader.load_input_tables` reads the two input files while preserving identifier text and exact numeric values. `sampletools.Sample` performs the shared validation, filtering, mutation assignment, and segment merging for file and DataFrame inputs. Pass `drop_unmatched_snvs=True` to `sampletools.Sample` to drop unmatched mutations in either assignment mode.
 
-For [segment merging](#segment-merging), `sampletools.Sample` accepts `max_merge_gap` to limit gaps and `merge_cn=False` to preserve input segments.
+For [segment merging](#segment-merging), `sampletools.Sample` accepts `max_merge_gap` to limit gaps and `merge_cn=False` to keep retained input intervals separate. Both settings still remove zero-copy intervals and those without retained mutations from the analysis profile.
 
 `min_subclone_ccf` must be greater than 0.
 
