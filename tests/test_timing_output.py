@@ -14,7 +14,7 @@ class TimingOutputTest(unittest.TestCase):
             2,
             0,
             wgd_status,
-            'WGD' if wgd_status else 'No_WGD',
+            'Default' if wgd_status else 'No_WGD',
         )
         route = next(iter(classifier.routes.values()))
         route.node_timing = np.full(

@@ -96,9 +96,7 @@ class CliModuleIntegrationTest(unittest.TestCase):
             self.assertEqual(set(gain_table['Segment']), {'1-1000-1200'})
 
             topology_path = sample_output / 'CLI_DATA_route_tree_table.tsv'
-            self.assertTrue(topology_path.is_file())
-            topology = pd.read_csv(topology_path, sep='\t')
-            self.assertEqual(set(topology['Segment_ID']), set(route_table['Segment_ID']))
+            self.assertFalse(topology_path.exists())
             self.assertFalse(any(
                 path.suffix.lower() in {'.png', '.pdf', '.svg', '.gif'}
                 for path in sample_output.rglob('*')

@@ -122,6 +122,7 @@ class ProcessSampleIntegrationTest(unittest.TestCase):
                     if path.is_file()
                 )
             )
+            self.assertFalse((output_directory / 'SMOKE_route_tree_table.tsv').exists())
 
             route_table = pd.read_csv(
                 output_directory / 'SMOKE_route_table.tsv',
@@ -482,6 +483,7 @@ class ProcessSampleIntegrationTest(unittest.TestCase):
                 random_seed=20260830,
             )
             output_directory = Path(temporary_directory) / sample.sample_id
+            self.assertFalse((output_directory / 'WGD_route_tree_table.tsv').exists())
 
             with (
                 output_directory / 'WGD_wgd_calling_info.json'

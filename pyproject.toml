@@ -38,5 +38,8 @@ Download = "https://github.com/VanLoo-lab/gritic/archive/refs/tags/v0.1.0.tar.gz
 gritic = "gritic.cli:main"
 
 [tool.setuptools]
-packages = ["gritic"]
+packages = ["gritic", "gritic.route_catalogue"]
 include-package-data = false
+
+[tool.setuptools.package-data]
+"gritic.route_catalogue" = ["data/*.json.gz"]

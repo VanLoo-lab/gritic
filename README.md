@@ -30,7 +30,6 @@ The method is described in [Baker et al. (2024), *The History of Chromosomal Ins
 - [Outputs](#outputs)
   - [Posterior timing summaries](#posterior-timing-summaries)
   - [`_route_table.tsv`](#_route_tabletsv)
-  - [`_route_tree_table.tsv`](#_route_tree_tabletsv)
   - [`_gain_timing_table.tsv`](#_gain_timing_tabletsv)
   - [`_wgd_calling_info.json`](#_wgd_calling_infojson)
   - [`_gain_timing_table_wgd_segments.tsv`](#_gain_timing_table_wgd_segmentstsv)
@@ -81,9 +80,6 @@ gritic \
 ```
 
 Use `gritic --help` for command-line help or see [run options](#run-options). For programmatic use, see [Python API](#python-api).
-
-GRITIC writes inference tables and posterior archives. Use [PLOTIC](../plotic/README.md)
-to visualize these outputs, including evolutionary route trees.
 
 ## Input tables
 
@@ -299,9 +295,9 @@ Intervals default to highest posterior density (HPD, `hpd`); `equal-tailed` is a
 
 | Interval family | Options | Default width | Controls |
 | --- | --- | --- | --- |
-| Route gain | `--route-gain-interval-width`, `--route-gain-interval-method` | 0.95 | Route-conditional gain bounds in both gain timing tables and route-conditioned node/WGD bounds in the topology table. |
+| Route gain | `--route-gain-interval-width`, `--route-gain-interval-method` | 0.95 | Route-conditional gain bounds in both gain timing tables. |
 | WGD overlap | `--wgd-overlap-interval-width`, `--wgd-overlap-interval-method` | 0.9 | Internal candidate-segment bounds that determine WGD overlap and can change WGD inference. |
-| Sample WGD | `--wgd-timing-interval-width`, `--wgd-timing-interval-method` | 0.9 | Final sample-level WGD bounds shared by the calling-info JSON, route table, and no-gain routes in the topology table. |
+| Sample WGD | `--wgd-timing-interval-width`, `--wgd-timing-interval-method` | 0.9 | Final sample-level WGD bounds shared by the calling-info JSON and route table. |
 | Posterior summary | `--posterior-summary-interval-width`, `--posterior-summary-interval-method` | 0.95 | Gain and gain-conditioned WGD bounds in posterior summaries. |
 
 ## Outputs
@@ -312,7 +308,6 @@ Append each suffix below to `SAMPLE_ID`. We recommend only considering gained se
 | --- | --- |
 | [`_posterior_timing_table_summary_penalty_*.tsv`](#posterior-timing-summaries) | Main gain-timing summaries, with ordinary and penalized route weights. |
 | [`_route_table.tsv`](#_route_tabletsv) | Route probabilities and segment metadata. |
-| [`_route_tree_table.tsv`](#_route_tree_tabletsv) | Explicit route topology and route-conditioned event timing for PLOTIC. |
 | [`_gain_timing_table.tsv`](#_gain_timing_tabletsv) | Gain-node timing conditional on each route. |
 | [`_wgd_calling_info.json`](#_wgd_calling_infojson) | Sample WGD call and timing. |
 | [`_gain_timing_table_wgd_segments.tsv`](#_gain_timing_table_wgd_segmentstsv) | Preliminary segment timings used to evaluate WGD. |
@@ -349,34 +344,9 @@ This table contains one row for each possible route of each timed segment, keyed
 
 `Timing_Representation` is `Route_Particles` for ordinary gained routes and `Uniform_No_Gain` when every extant copy spans the `[0,1]` interval. The table stores ordinary `Probability` and post-hoc `Penalized_Probability`, average event and loss counts, a timing-space sampling-density diagnostic (`Density`), runtime (`Time`), and segment and WGD metadata.
 
-`Route` is an order-sensitive identifier of the complete allele route. See [posterior sampling](#posterior-sampling) for the density diagnostic.
+`Route` is the nine-character identifier of the complete allele route in GRITIC's bundled, versioned [route catalogue](tools/README.md). The catalogue preserves ordered Major/Minor allele identity, parent–child edges, WGD labels, and the node identifiers used by gain timing tables and archives. GRITIC loads the precomputed topologies once per copy-number state and shares their structural data between segments. See [posterior sampling](#posterior-sampling) for the density diagnostic.
 
-`Penalized_Probability` is calculated by multiplying each route's ordinary probability by `exp(-2.7 * Average_N_Events)` and renormalizing across routes within the segment. Tree output uses ordinary probabilities. See [Baker et al. (2024)][publication] for details of the penalty.
-
-### _route_tree_table.tsv
-
-This table exports the surviving-copy ancestry for every reported route, keyed
-by (`Sample_ID`, `Segment_ID`, `Route`, `Node`). `Parent_Node` is blank for an
-allele root and otherwise identifies its parent within that route.
-`Node_Phasing` is `Major` or `Minor`, and `WGD_Symbol` identifies a WGD event.
-The topology contains the surviving branches used by inference; it does not
-add hypothetical lost descendants.
-
-`Timing`, `Timing_CI_Low`, and `Timing_CI_High` summarize each node's
-route-conditioned event time. Terminal copies have time 1. The repeated
-`Route_WGD_Timing`, `Route_WGD_Timing_CI_Low`, and
-`Route_WGD_Timing_CI_High` fields summarize that route's WGD particles and are
-blank for non-WGD routes. `Route_WGD_Source` identifies `Route_Posterior`, or
-`Sample_Posterior` for uniform no-gain routes that have no route-specific WGD
-draws. Non-WGD rows leave this source blank. Route-posterior summaries use the
-configured route-gain interval and preserve the route's chronological
-ordering; WGD values can differ from sample-level WGD summaries. No-gain
-routes instead retain the sample WGD summary and its configured interval.
-
-The table is always written during timing inference. PLOTIC's
-`plotic route-tree SAMPLE_DIR --segment-id SEGMENT_ID -o route.svg` command
-uses it with the route table. Earlier output directories without this table
-must be regenerated with GRITIC to use the new renderer.
+`Penalized_Probability` is calculated by multiplying each route's ordinary probability by `exp(-2.7 * Average_N_Events)` and renormalizing across routes within the segment. See [Baker et al. (2024)][publication] for details of the penalty.
 
 ### _gain_timing_table.tsv
 
@@ -513,15 +483,6 @@ The `supplied` prior follows [Baker et al. (2024)][publication], Supplementary M
 ### Posterior sampling
 
 GRITIC retains 1,000 likelihood-resampled particles for each sampled route. The `Density` diagnostic reports the fraction of tested timing points with another sampled point within the sampling neighborhood. It covers hit-and-run timing coordinates. Analytic uniform routes require no chain and report density 1.
-
-Current outputs do not support calculating R-hat. The saved particles have
-been resampled with replacement according to likelihood, and do not retain
-chronological chain identities or iterations. Neither arbitrary particle
-blocks nor different evolutionary routes can serve as comparable chains.
-`Density` is a coverage diagnostic, not R-hat. Supporting R-hat would require
-new inference diagnostics or ordered independent chains for a common target
-retained before pooling and resampling; the current hit-and-run sampler
-explores proposal geometry rather than directly sampling the posterior.
 
 Each posterior-summary draw samples a route and its gain and WGD timings jointly, preserving dependence between events. The [gain timing table](#_gain_timing_tabletsv) supplies node identity and phasing metadata; the [timing archives](#timing-archives) contain the joint timing draws and route weights used for downstream inference.
 

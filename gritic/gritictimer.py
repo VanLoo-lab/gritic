@@ -10,6 +10,7 @@ import warnings
 import pandas as pd
 import numpy as np
 import networkx as nx
+from gritic.route_catalogue import get_routes
 
 
 from scipy.special import logsumexp
@@ -36,7 +37,6 @@ from gritic.tableschemas import (
     PHASE_GROUP_TABLE_COLUMNS,
     ROUTE_PARTICLES_REPRESENTATION,
     ROUTE_TABLE_COLUMNS,
-    ROUTE_TREE_TABLE_COLUMNS,
     SEGMENT_CONTEXT_TABLE_COLUMNS,
     SEGMENT_GROUP_TABLE_COLUMNS,
     TIMING_REPRESENTATION_COLUMN,
@@ -956,27 +956,33 @@ class RouteClassifier:
         return np.array(best_timing)
     
     def generate_route_trees(self, wgd_trees_status):
-        possible_trees = treetools.get_nx_trees(
+        catalogue_routes = get_routes(
             self.major_cn,
             self.minor_cn,
             self.wgd_status,
             wgd_trees_status,
         )
-        route_trees = {
-            tree_id: RouteTree(
+        route_trees = {}
+        for catalogue_route in catalogue_routes:
+            tree = nx.DiGraph()
+            for node in catalogue_route.nodes:
+                tree.add_node(
+                    node.node_id,
+                    Allele=node.allele,
+                    WGD_Symbol=node.wgd,
+                    Terminal_Node=node.terminal,
+                )
+            for node in catalogue_route.nodes:
+                if node.parent_id is not None:
+                    tree.add_edge(node.parent_id, node.node_id)
+            route_tree = RouteTree(
                 tree,
                 self.major_cn,
                 self.minor_cn,
                 self.wgd_status,
             )
-            for tree_id, tree in possible_trees.items()
-        }
-        for route_tree in route_trees.values():
-            route_tree.mirror_route_id = None
-            if self.major_cn == self.minor_cn and self.minor_cn > 0:
-                route_tree.mirror_route_id = treetools.get_mirror_tree_hash(
-                    route_tree.main_tree
-                )
+            route_tree.mirror_route_id = catalogue_route.mirror_route_id
+            route_trees[catalogue_route.route_id] = route_tree
         return route_trees
 
     def get_route_prior_weight(self, route):
@@ -1072,65 +1078,6 @@ class RouteClassifier:
             route_table_data['Density'].append(route.density)
 
         return pd.DataFrame(route_table_data)
-
-    def get_route_tree_table(
-        self,
-        interval=DEFAULT_TIMING_INTERVALS.route_gain,
-        rounding_digits=3,
-        *,
-        wgd_info=None,
-    ):
-        """Export exact edges and aligned route-conditioned timing summaries.
-
-        In particular, WGD times come from this route's posterior particles,
-        so parent/child medians preserve the ordering in those particles.
-        """
-        def summarize(values):
-            values = np.asarray(values)
-            low, high = get_interval_bounds(values, interval)
-            return tuple(np.round([np.median(values), low, high], rounding_digits))
-
-        rows = []
-        for route, _ in self._get_output_routes():
-            tree = route.route_tree.main_tree
-            wgd_source = ''
-            wgd_times = (np.nan, np.nan, np.nan)
-            if route.route_tree.wgd_status:
-                if route.is_uniform_no_gain:
-                    if wgd_info is None:
-                        raise ValueError('No-gain WGD topology requires sample WGD summaries')
-                    wgd_source = 'Sample_Posterior'
-                    wgd_times = tuple(wgd_info[column] for column in (
-                        'WGD_Timing', 'WGD_Timing_CI_Low', 'WGD_Timing_CI_High',
-                    ))
-                else:
-                    wgd_source = 'Route_Posterior'
-                    wgd_times = summarize(route.wgd_timing_store)
-            for node in route.route_tree.non_phased_node_order:
-                parents = list(tree.predecessors(node))
-                if len(parents) > 1:
-                    raise ValueError('Route-tree nodes must have at most one parent')
-                if tree.out_degree(node) == 0:
-                    times = (1.0, 1.0, 1.0)
-                elif tree.nodes[node]['WGD_Symbol']:
-                    times = wgd_times
-                else:
-                    times = summarize(route.get_node_timing(node))
-                rows.append({
-                    'Route': route.short_id,
-                    'Node': node,
-                    'Parent_Node': parents[0] if parents else pd.NA,
-                    'Node_Phasing': route.route_tree.node_attributes[node]['Phasing'],
-                    'WGD_Symbol': bool(tree.nodes[node]['WGD_Symbol']),
-                    'Timing': times[0],
-                    'Timing_CI_Low': times[1],
-                    'Timing_CI_High': times[2],
-                    'Route_WGD_Source': wgd_source,
-                    'Route_WGD_Timing': wgd_times[0],
-                    'Route_WGD_Timing_CI_Low': wgd_times[1],
-                    'Route_WGD_Timing_CI_High': wgd_times[2],
-                })
-        return pd.DataFrame(rows, columns=ROUTE_TREE_TABLE_COLUMNS[2:])
 
     def get_timing_table(
         self,
@@ -2652,15 +2599,6 @@ def write_gain_timing_table(timing_table, timing_table_path):
     )
 
 
-def write_route_tree_table(tree_table, tree_table_path):
-    _append_table(
-        tree_table,
-        tree_table_path,
-        ROUTE_TREE_TABLE_COLUMNS,
-        column_dtypes={'Node': 'Int64', 'Parent_Node': 'Int64'},
-    )
-
-
 def _initialize_table(table_path, columns):
     """Start an aggregate table for this run, replacing any previous rows."""
     _write_tsv(
@@ -3247,17 +3185,6 @@ def _write_segment_results(
 
     write_route_table(segment_route_table, route_table_path)
     write_gain_timing_table(segment_timing_table, timing_table_path)
-    segment_tree_table = classifier.get_route_tree_table(
-        interval=interval_config.route_gain,
-        wgd_info=wgd_info,
-    )
-    segment_tree_table['Sample_ID'] = sample_id
-    segment_tree_table['Segment_ID'] = segment.segment_id
-    write_route_tree_table(
-        segment_tree_table,
-        output_dir / f'{sample_id}_route_tree_table.tsv',
-    )
-
 
 
 def process_segments(
@@ -3288,9 +3215,6 @@ def process_segments(
 
     _initialize_table(route_table_path, ROUTE_TABLE_COLUMNS)
     _initialize_table(timing_table_path, GAIN_TIMING_TABLE_COLUMNS)
-    _initialize_table(
-        output_dir / f'{sample_id}_route_tree_table.tsv', ROUTE_TREE_TABLE_COLUMNS,
-    )
 
     for cn_state, state_segments in segments.items():
         state_segments = list(state_segments)
