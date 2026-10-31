@@ -101,7 +101,7 @@ class OrderedRouteIdentityTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'balanced two-allele'):
             treetools.get_mirror_tree_hash(tree)
 
-    def test_plot_layout_uses_explicit_roles_not_component_size(self):
+    def test_split_tree_uses_explicit_roles_not_component_size(self):
         major_tree = nx.DiGraph()
         major_tree.add_node(
             0,
@@ -116,31 +116,33 @@ class OrderedRouteIdentityTest(unittest.TestCase):
         tree = nx.disjoint_union(major_tree, minor_tree)
 
         major_component, minor_component = treetools.split_tree(tree)
-        positions = treetools.get_combined_hierarchy_pos(tree)
-        major_root = next(iter(major_component))
-        minor_root = next(
-            node for node, degree in minor_component.in_degree() if degree == 0
-        )
 
         self.assertEqual(major_component.number_of_nodes(), 1)
         self.assertEqual(minor_component.number_of_nodes(), 3)
-        self.assertLess(positions[major_root][0], positions[minor_root][0])
+        self.assertEqual(
+            {attributes['Allele'] for _, attributes in major_component.nodes(data=True)},
+            {'Major'},
+        )
+        self.assertEqual(
+            {attributes['Allele'] for _, attributes in minor_component.nodes(data=True)},
+            {'Minor'},
+        )
 
-    def test_plotting_nodes_inherit_allele_provenance(self):
+    def test_expanded_loss_nodes_inherit_allele_provenance(self):
         tree = next(iter(
             treetools.get_nx_trees(2, 0, False, 'No_WGD').values()
         ))
         node_order = list(nx.dfs_preorder_nodes(tree))
-        plotting_tree = treetools.convert_to_plotting_tree(
+        expanded_tree = treetools.expand_loss_events(
             tree,
             wgd_timing=0.5,
             route_timing_summary=[0.75] * len(node_order),
             node_order=node_order,
         )
 
-        self.assertGreater(plotting_tree.number_of_nodes(), tree.number_of_nodes())
+        self.assertGreater(expanded_tree.number_of_nodes(), tree.number_of_nodes())
         self.assertEqual(
-            {attributes['Allele'] for _, attributes in plotting_tree.nodes(data=True)},
+            {attributes['Allele'] for _, attributes in expanded_tree.nodes(data=True)},
             {'Major'},
         )
 

@@ -53,7 +53,6 @@ class UnorderedBalancedRoutePriorCliTest(unittest.TestCase):
             ),
             get_timing_dict=mock.Mock(return_value={}),
             get_best_timing=mock.Mock(return_value=np.array([[0.5]])),
-            plot_trees=mock.Mock(),
         )
 
     def test_parser_defaults_off_and_enables_semantic_flag(self):
@@ -222,7 +221,6 @@ class UnorderedBalancedRoutePriorCliTest(unittest.TestCase):
                 timing_dict_dir=pathlib.Path('timing'),
                 sample_id='sample',
                 wgd_status=False,
-                plot_trees=False,
                 wgd_info={},
                 interval_config=gritictimer.DEFAULT_TIMING_INTERVALS,
                 subclone_fraction_prior=(

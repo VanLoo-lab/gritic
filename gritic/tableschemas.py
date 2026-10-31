@@ -95,6 +95,22 @@ ROUTE_TABLE_COLUMNS = [
     'WGD_Timing_CI_High',
 ]
 
+# Exact surviving-copy topology. A blank Parent_Node identifies an allele root;
+# node IDs are the same IDs used in the gain timing table and timing archives.
+ROUTE_TREE_TABLE_COLUMNS = ROUTE_KEY_COLUMNS + [
+    'Node',
+    'Parent_Node',
+    'Node_Phasing',
+    'WGD_Symbol',
+    'Timing',
+    'Timing_CI_Low',
+    'Timing_CI_High',
+    'Route_WGD_Source',
+    'Route_WGD_Timing',
+    'Route_WGD_Timing_CI_Low',
+    'Route_WGD_Timing_CI_High',
+]
+
 GAIN_TIMING_TABLE_COLUMNS = GAIN_TIMING_KEY_COLUMNS + [
     'Node_Phasing',
     'Timing',

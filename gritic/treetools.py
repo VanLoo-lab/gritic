@@ -51,9 +51,14 @@ def allPossibleFBT(n):
         return res
     return backtrack(n)
 
-def convert_to_plotting_tree(route_tree,wgd_timing,route_timing_summary,node_order,tol=1e-7):
-    plotting_tree = route_tree.copy()
-    nx.set_node_attributes(plotting_tree,False,'Loss_Symbol')
+def expand_loss_events(route_tree,wgd_timing,route_timing_summary,node_order,tol=1e-7):
+    """Insert WGD/loss events implied by surviving lineages crossing WGD.
+
+    The expanded graph is used to count post-WGD losses. The input topology
+    and its allele identities remain unchanged.
+    """
+    expanded_tree = route_tree.copy()
+    nx.set_node_attributes(expanded_tree,False,'Loss_Symbol')
     for node in route_tree.nodes:
         wgd_in_path = False
         if route_tree.nodes[node]['WGD_Symbol']:
@@ -76,28 +81,28 @@ def convert_to_plotting_tree(route_tree,wgd_timing,route_timing_summary,node_ord
                 prev_timing = route_timing_summary[node_order.index(predecessor)]
                 
             if (current_timing > wgd_timing-tol) and prev_timing <= (wgd_timing+tol):
-                new_predecessor = max(list(plotting_tree.nodes))+1
-                new_loss =  max(list(plotting_tree.nodes))+2
-                plotting_tree.add_edge(new_predecessor,node)
-                plotting_tree.add_edge(new_predecessor,new_loss)
+                new_predecessor = max(list(expanded_tree.nodes))+1
+                new_loss =  max(list(expanded_tree.nodes))+2
+                expanded_tree.add_edge(new_predecessor,node)
+                expanded_tree.add_edge(new_predecessor,new_loss)
 
-                plotting_tree.nodes[new_predecessor]['Loss_Symbol']=False
-                plotting_tree.nodes[new_predecessor]['WGD_Symbol']=True
-                plotting_tree.nodes[new_predecessor][ALLELE_ATTRIBUTE] = (
+                expanded_tree.nodes[new_predecessor]['Loss_Symbol']=False
+                expanded_tree.nodes[new_predecessor]['WGD_Symbol']=True
+                expanded_tree.nodes[new_predecessor][ALLELE_ATTRIBUTE] = (
                     route_tree.nodes[node][ALLELE_ATTRIBUTE]
                 )
                 
-                plotting_tree.nodes[new_loss]['WGD_Symbol']=False
-                plotting_tree.nodes[new_loss]['Loss_Symbol']=True
-                plotting_tree.nodes[new_loss][ALLELE_ATTRIBUTE] = (
+                expanded_tree.nodes[new_loss]['WGD_Symbol']=False
+                expanded_tree.nodes[new_loss]['Loss_Symbol']=True
+                expanded_tree.nodes[new_loss][ALLELE_ATTRIBUTE] = (
                     route_tree.nodes[node][ALLELE_ATTRIBUTE]
                 )
                 if predecessor is not None:
                     
-                    plotting_tree.remove_edge(predecessor,node)
-                    plotting_tree.add_edge(predecessor,new_predecessor)
+                    expanded_tree.remove_edge(predecessor,node)
+                    expanded_tree.add_edge(predecessor,new_predecessor)
 
-    return plotting_tree
+    return expanded_tree
 
 def _get_allele_node_sets(tree):
     allele_nodes = {allele: set() for allele in NODE_PHASING_LABELS}
@@ -493,127 +498,3 @@ def split_tree(tree):
     if minor_nodes:
         minor_tree = tree.subgraph(minor_nodes)
     return major_tree, minor_tree
-
-
-def write_tree(route_tree,output_path=None):
-    nodes_to_delete = []
-    for node in route_tree.nodes():
-        del route_tree.nodes[node]['Full_Timing']
-        del route_tree.nodes[node]['Terminal_Node']
-        if len(list(route_tree.successors(node)))==0:
-            nodes_to_delete.append(node)
-    
-    route_tree.remove_nodes_from(nodes_to_delete)
-    
-    nx.write_graphml(route_tree,output_path)
-def plot_tree(route_tree,title,output_path=None):
-    import matplotlib.pyplot as plt
-
-    node_colors = []
-    for node in route_tree.nodes:
-        if 'Loss_Symbol' in route_tree.nodes[node] and route_tree.nodes[node]['Loss_Symbol']:
-            node_colors.append('#4d4d4d')
-        elif len(list(route_tree.successors(node)))==0:
-            node_colors.append('#F7483B')
-        elif route_tree.nodes[node]['WGD_Symbol']:
-            node_colors.append('#E8BF5E')
-        else:
-            node_colors.append('#509BCE')
-    
-    pos = get_combined_hierarchy_pos(route_tree)
-    fig = plt.figure(figsize=(11, 6))
-    ax1 = fig.add_subplot(111)
-    ax1.margins(0.1)
-    plt.title(title)
-    labels = nx.get_node_attributes(route_tree,'Label')
-    
- 
-    
-    
-    nx.draw(route_tree,pos=pos,with_labels=True,labels=labels,node_color=node_colors,font_weight='bold',ax=ax1)
-
-    if output_path is not None:
-        plt.savefig(output_path)
-    else:
-        plt.show()
-    plt.close(fig)
-def get_combined_hierarchy_pos(route_tree):
-    major_component, minor_component = split_tree(route_tree)
-    major_pos = hierarchy_pos(major_component)
-    if minor_component.number_of_nodes():
-        minor_pos = hierarchy_pos(minor_component,x_offset=1)
-    else:
-        minor_pos = {}
-    
-    return {**major_pos,**minor_pos}
-#https://stackoverflow.com/questions/29586520/can-one-get-hierarchical-graphs-from-networkx-with-python-3
-def hierarchy_pos(
-    G, root=None, width=1., vert_gap=0.2, vert_loc=0, xcenter=0.5,
-    x_offset=0, *, rng=None,
-):
-
-    '''
-    From Joel's answer at https://stackoverflow.com/a/29597209/2966723.  
-    Licensed under Creative Commons Attribution-Share Alike 
-    
-    If the graph is a tree this will return the positions to plot this in a 
-    hierarchical layout.
-    
-    G: the graph (must be a tree)
-    
-    root: the root node of current branch 
-    - if the tree is directed and this is not given, 
-      the root will be found and used
-    - if the tree is directed and this is given, then 
-      the positions will be just for the descendants of this node.
-    - if the tree is undirected and not given, 
-      then a random choice will be used.
-    
-    width: horizontal space allocated for this branch - avoids overlap with other branches
-    
-    vert_gap: gap between levels of hierarchy
-    
-    vert_loc: vertical location of root
-    
-    xcenter: horizontal location of root
-    '''
-    if not nx.is_tree(G):
-        raise TypeError('cannot use hierarchy_pos on a graph that is not a tree')
-
-    if root is None:
-        if isinstance(G, nx.DiGraph):
-            root = next(iter(nx.topological_sort(G)))
-        else:
-            if rng is None:
-                rng = np.random.default_rng()
-            nodes = list(G.nodes)
-            root = nodes[int(rng.integers(len(nodes)))]
-
-    def _hierarchy_pos(G, root, width=1., vert_gap = 0.2, vert_loc = 0, xcenter = 0.5, pos = None, parent = None,x_offset=0):
-        '''
-        see hierarchy_pos docstring for most arguments
-
-        pos: a dict saying where all nodes go if they have been assigned
-        parent: parent of this branch. - only affects it if non-directed
-
-        '''
-
-        if pos is None:
-            pos = {root:(xcenter+x_offset,vert_loc)}
-        else:
-            pos[root] = (xcenter+x_offset, vert_loc)
-        children = list(G.neighbors(root))
-        if not isinstance(G, nx.DiGraph) and parent is not None:
-            children.remove(parent)  
-        if len(children)!=0:
-            dx = width/len(children) 
-            nextx = xcenter - width/2 - dx/2
-            for child in children:
-                nextx += dx
-                pos = _hierarchy_pos(G,child, width = dx, vert_gap = vert_gap, 
-                                    vert_loc = vert_loc-vert_gap, xcenter=nextx,
-                                    pos=pos, parent = root,x_offset=x_offset)
-        return pos
-
-            
-    return _hierarchy_pos(G, root, width, vert_gap, vert_loc, xcenter,x_offset=x_offset)

@@ -71,14 +71,6 @@ class CliHelpTest(unittest.TestCase):
                 '--posterior-summary-interval-method',
             ),
         ),
-        (
-            'Tree plots',
-            (
-                '--plot-trees',
-                '--tree-gain-interval-width',
-                '--tree-gain-interval-method',
-            ),
-        ),
     )
 
     def test_custom_argument_groups_and_options_have_canonical_order(self):

@@ -70,10 +70,6 @@ def build_interval_config(args):
             args.route_gain_interval_width,
             args.route_gain_interval_method,
         ),
-        tree_gain=distributiontools.IntervalSpec(
-            args.tree_gain_interval_width,
-            args.tree_gain_interval_method,
-        ),
         wgd_overlap=distributiontools.IntervalSpec(
             args.wgd_overlap_interval_width,
             args.wgd_overlap_interval_method,
@@ -122,7 +118,6 @@ def build_parser():
     reported_interval_arguments = parser.add_argument_group(
         'Reported timing intervals'
     )
-    tree_plot_arguments = parser.add_argument_group('Tree plots')
 
     required_arguments.add_argument(
         '--mutation-table',
@@ -484,34 +479,6 @@ def build_parser():
         ),
     )
 
-    tree_plot_arguments.add_argument(
-        '--plot-trees',
-        action='store_true',
-        help='Plot copy number trees. Default is False.',
-    )
-    tree_plot_arguments.add_argument(
-        '--tree-gain-interval-width',
-        dest='tree_gain_interval_width',
-        type=validation.positive_unit_interval_number,
-        default=defaults.tree_gain.width,
-        metavar='PROPORTION',
-        help=(
-            'Blue gain-node tree label'
-            ' interval width as a proportion greater than 0 and at most 1 '
-            f'(default: {defaults.tree_gain.width:g}).'
-        ),
-    )
-    tree_plot_arguments.add_argument(
-        '--tree-gain-interval-method',
-        dest='tree_gain_interval_method',
-        choices=distributiontools.INTERVAL_METHODS,
-        default=defaults.tree_gain.method,
-        help=(
-            'Blue gain-node tree label'
-            ' interval method; HPD is the shortest contiguous credible '
-            f'interval (default: {defaults.tree_gain.method}).'
-        ),
-    )
     return parser
 
 
@@ -560,7 +527,6 @@ def main(argv=None):
         gritictimer.process_sample(
             sample,
             args.sample_dir,
-            plot_trees=args.plot_trees,
             wgd_count=args.wgd_count,
             interval_config=interval_config,
             subclone_fraction_prior=args.subclone_fraction_prior,

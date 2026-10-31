@@ -343,32 +343,6 @@ class RouteClassifierOutputTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'unique Route and Node'):
             classifier.get_timing_table(interval=IntervalSpec(1))
 
-    def test_timing_tree_labels_cover_gain_wgd_and_terminal_nodes(self):
-        classifier = gritictimer.RouteClassifier.__new__(
-            gritictimer.RouteClassifier
-        )
-        route = SimpleNamespace(
-            route_tree=SimpleNamespace(
-                non_phased_node_order=[10, 11, 12],
-                timeable_nodes=[10],
-                wgd_nodes=[11],
-            ),
-            get_node_timing=lambda node: np.array([0.2, 0.4, 0.8]),
-        )
-        labels = classifier.get_timing_tree_labels(
-            route,
-            {
-                'WGD_Timing': 0.5,
-                'WGD_Timing_CI_Low': 0.3,
-                'WGD_Timing_CI_High': 0.7,
-            },
-            gain_interval=IntervalSpec(1),
-            rounding_digits=2,
-        )
-        self.assertEqual(labels[10], '0.4 - [0.2,0.8]')
-        self.assertEqual(labels[11], '0.5 - [0.3,0.7]')
-        self.assertEqual(labels[12], '')
-
     def test_shared_route_trees_must_match_classifier_state(self):
         source = gritictimer.RouteClassifier(2, 1, False, 'No_WGD')
         route_trees = {

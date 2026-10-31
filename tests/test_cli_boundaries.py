@@ -212,7 +212,6 @@ class CliParserBoundaryTest(CliArgumentFixture, unittest.TestCase):
         )
         self.assertIsNone(args.wgd_count)
         self.assertIsNone(args.random_seed)
-        self.assertFalse(args.plot_trees)
         self.assertFalse(args.overwrite)
         self.assertIs(
             args.unordered_balanced_route_prior,
@@ -224,8 +223,6 @@ class CliParserBoundaryTest(CliArgumentFixture, unittest.TestCase):
             *self.required_arguments(),
             '--route-gain-interval-width', '0.81',
             '--route-gain-interval-method', 'equal-tailed',
-            '--tree-gain-interval-width', '0.82',
-            '--tree-gain-interval-method', 'hpd',
             '--wgd-overlap-interval-width', '0.83',
             '--wgd-overlap-interval-method', 'equal-tailed',
             '--wgd-timing-interval-width', '0.84',
@@ -237,13 +234,25 @@ class CliParserBoundaryTest(CliArgumentFixture, unittest.TestCase):
         config = cli.build_interval_config(args)
 
         self.assertEqual(config.route_gain, distributiontools.IntervalSpec(0.81, 'equal-tailed'))
-        self.assertEqual(config.tree_gain, distributiontools.IntervalSpec(0.82, 'hpd'))
         self.assertEqual(config.wgd_overlap, distributiontools.IntervalSpec(0.83, 'equal-tailed'))
         self.assertEqual(config.sample_wgd, distributiontools.IntervalSpec(0.84, 'hpd'))
         self.assertEqual(
             config.posterior_summary,
             distributiontools.IntervalSpec(0.85, 'equal-tailed'),
         )
+
+    def test_removed_plot_options_are_rejected(self):
+        parser = cli.build_parser()
+        for options in (
+            ['--plot-trees'],
+            ['--tree-gain-interval-width', '0.9'],
+            ['--tree-gain-interval-method', 'hpd'],
+        ):
+            with self.subTest(options=options):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    with self.assertRaises(SystemExit) as error:
+                        parser.parse_args([*self.required_arguments(), *options])
+                self.assertEqual(error.exception.code, 2)
 
     def test_subclone_loader_preserves_cluster_text(self):
         table = pd.DataFrame({
@@ -373,12 +382,9 @@ class CliMainTest(CliArgumentFixture, unittest.TestCase):
             '--wgd-count', '1',
             '--random-seed', '18446744073709551615',
             '--unordered-balanced-route-prior',
-            '--plot-trees',
             '--overwrite',
             '--route-gain-interval-width', '0.81',
             '--route-gain-interval-method', 'equal-tailed',
-            '--tree-gain-interval-width', '0.82',
-            '--tree-gain-interval-method', 'hpd',
             '--wgd-overlap-interval-width', '0.83',
             '--wgd-overlap-interval-method', 'equal-tailed',
             '--wgd-timing-interval-width', '0.84',
@@ -416,11 +422,9 @@ class CliMainTest(CliArgumentFixture, unittest.TestCase):
         process_sample.assert_called_once_with(
             sample,
             'output',
-            plot_trees=True,
             wgd_count=1,
             interval_config=distributiontools.TimingIntervalConfig(
                 route_gain=distributiontools.IntervalSpec(0.81, 'equal-tailed'),
-                tree_gain=distributiontools.IntervalSpec(0.82, 'hpd'),
                 wgd_overlap=distributiontools.IntervalSpec(0.83, 'equal-tailed'),
                 sample_wgd=distributiontools.IntervalSpec(0.84, 'hpd'),
                 posterior_summary=distributiontools.IntervalSpec(0.85, 'equal-tailed'),

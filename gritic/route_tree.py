@@ -175,13 +175,13 @@ class RouteTree:
             return n_events, np.nan, np.nan
 
         pre_wgd_losses = 0
-        plotting_tree = treetools.convert_to_plotting_tree(
+        expanded_tree = treetools.expand_loss_events(
             self.main_tree, wgd_timing, node_timing, self.non_phased_node_order
         )
         post_wgd_losses = sum(
             [
-                int(plotting_tree.nodes[node]["Loss_Symbol"])
-                for node in plotting_tree.nodes
+                int(expanded_tree.nodes[node]["Loss_Symbol"])
+                for node in expanded_tree.nodes
             ]
         )
 
@@ -260,7 +260,7 @@ class RouteTree:
             self._post_wgd_loss_predecessor_indices[has_predecessor], :
         ]
 
-        # Keep this tolerance in sync with treetools.convert_to_plotting_tree.
+        # Keep this tolerance in sync with treetools.expand_loss_events.
         tolerance = 1e-7
         post_wgd_losses = np.count_nonzero(
             (current_timing > wgd_timing[np.newaxis, :] - tolerance)

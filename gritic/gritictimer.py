@@ -36,6 +36,7 @@ from gritic.tableschemas import (
     PHASE_GROUP_TABLE_COLUMNS,
     ROUTE_PARTICLES_REPRESENTATION,
     ROUTE_TABLE_COLUMNS,
+    ROUTE_TREE_TABLE_COLUMNS,
     SEGMENT_CONTEXT_TABLE_COLUMNS,
     SEGMENT_GROUP_TABLE_COLUMNS,
     TIMING_REPRESENTATION_COLUMN,
@@ -1072,6 +1073,65 @@ class RouteClassifier:
 
         return pd.DataFrame(route_table_data)
 
+    def get_route_tree_table(
+        self,
+        interval=DEFAULT_TIMING_INTERVALS.route_gain,
+        rounding_digits=3,
+        *,
+        wgd_info=None,
+    ):
+        """Export exact edges and aligned route-conditioned timing summaries.
+
+        In particular, WGD times come from this route's posterior particles,
+        so parent/child medians preserve the ordering in those particles.
+        """
+        def summarize(values):
+            values = np.asarray(values)
+            low, high = get_interval_bounds(values, interval)
+            return tuple(np.round([np.median(values), low, high], rounding_digits))
+
+        rows = []
+        for route, _ in self._get_output_routes():
+            tree = route.route_tree.main_tree
+            wgd_source = ''
+            wgd_times = (np.nan, np.nan, np.nan)
+            if route.route_tree.wgd_status:
+                if route.is_uniform_no_gain:
+                    if wgd_info is None:
+                        raise ValueError('No-gain WGD topology requires sample WGD summaries')
+                    wgd_source = 'Sample_Posterior'
+                    wgd_times = tuple(wgd_info[column] for column in (
+                        'WGD_Timing', 'WGD_Timing_CI_Low', 'WGD_Timing_CI_High',
+                    ))
+                else:
+                    wgd_source = 'Route_Posterior'
+                    wgd_times = summarize(route.wgd_timing_store)
+            for node in route.route_tree.non_phased_node_order:
+                parents = list(tree.predecessors(node))
+                if len(parents) > 1:
+                    raise ValueError('Route-tree nodes must have at most one parent')
+                if tree.out_degree(node) == 0:
+                    times = (1.0, 1.0, 1.0)
+                elif tree.nodes[node]['WGD_Symbol']:
+                    times = wgd_times
+                else:
+                    times = summarize(route.get_node_timing(node))
+                rows.append({
+                    'Route': route.short_id,
+                    'Node': node,
+                    'Parent_Node': parents[0] if parents else pd.NA,
+                    'Node_Phasing': route.route_tree.node_attributes[node]['Phasing'],
+                    'WGD_Symbol': bool(tree.nodes[node]['WGD_Symbol']),
+                    'Timing': times[0],
+                    'Timing_CI_Low': times[1],
+                    'Timing_CI_High': times[2],
+                    'Route_WGD_Source': wgd_source,
+                    'Route_WGD_Timing': wgd_times[0],
+                    'Route_WGD_Timing_CI_Low': wgd_times[1],
+                    'Route_WGD_Timing_CI_High': wgd_times[2],
+                })
+        return pd.DataFrame(rows, columns=ROUTE_TREE_TABLE_COLUMNS[2:])
+
     def get_timing_table(
         self,
         interval=DEFAULT_TIMING_INTERVALS.route_gain,
@@ -1609,66 +1669,6 @@ class RouteClassifier:
             timing_dict[route.short_id] = route_samples
         return timing_dict
 
-    def get_timing_tree_labels(
-        self,
-        route,
-        wgd_info,
-        gain_interval=DEFAULT_TIMING_INTERVALS.tree_gain,
-        rounding_digits=3,
-    ):
-        node_labels = {}
-        for node in route.route_tree.non_phased_node_order:
-            if node in route.route_tree.timeable_nodes:
-                timing_dist = np.asarray(route.get_node_timing(node))
-                timing = np.round(np.median(timing_dist), rounding_digits)
-                timing_ci_low, timing_ci_high = get_interval_bounds(
-                    timing_dist,
-                    gain_interval,
-                )
-                timing_ci_low = np.round(timing_ci_low, rounding_digits)
-                timing_ci_high = np.round(timing_ci_high, rounding_digits)
-                node_labels[node] = f"{timing} - [{timing_ci_low},{timing_ci_high}]"
-            elif node in route.route_tree.wgd_nodes:
-                node_labels[node] = (
-                    f"{wgd_info['WGD_Timing']} - "
-                    f"[{wgd_info['WGD_Timing_CI_Low']},"
-                    f"{wgd_info['WGD_Timing_CI_High']}]"
-                )
-            else:
-                node_labels[node] = ''
-        return node_labels
-    
-    def plot_trees(
-        self,
-        plot_output_dir,
-        seg_title,
-        wgd_info,
-        gain_interval=DEFAULT_TIMING_INTERVALS.tree_gain,
-    ):
-        os.makedirs(plot_output_dir,exist_ok=True)
-
-        if len(self.route_probabilities.keys())==0:
-            raise ValueError("The routes haven't been fit yet")  
-        best_route_id = max(self.route_probabilities, key=self.route_probabilities.get)   
-        for route_id,route in self.routes.items():
-            
-            probability = np.round(self.route_probabilities[route_id],4)
-            
-            route_output_path = f"{plot_output_dir}/route_{route.short_id}.pdf"
-            tree_subtitle = f"Route {route.short_id} (Probability = {probability})"
-            plot_title = f"{seg_title}\n{tree_subtitle}"
-            if route_id==best_route_id:
-                plot_title = f"{plot_title} - (Best Fit)"
-
-            node_labels = self.get_timing_tree_labels(
-                route,
-                wgd_info,
-                gain_interval=gain_interval,
-            )
-            plotting_tree = route.route_tree.main_tree.copy()
-            nx.set_node_attributes(plotting_tree,node_labels,'Label')
-            
-            treetools.plot_tree(plotting_tree,plot_title,output_path=route_output_path)
 
 
 def fit_route_classifiers(classifier_jobs, wgd_timing_distribution):
@@ -2652,6 +2652,15 @@ def write_gain_timing_table(timing_table, timing_table_path):
     )
 
 
+def write_route_tree_table(tree_table, tree_table_path):
+    _append_table(
+        tree_table,
+        tree_table_path,
+        ROUTE_TREE_TABLE_COLUMNS,
+        column_dtypes={'Node': 'Int64', 'Parent_Node': 'Int64'},
+    )
+
+
 def _initialize_table(table_path, columns):
     """Start an aggregate table for this run, replacing any previous rows."""
     _write_tsv(
@@ -3195,7 +3204,6 @@ def _write_segment_results(
     timing_dict_dir,
     sample_id,
     wgd_status,
-    plot_trees,
     wgd_info,
     interval_config,
     route_table_path,
@@ -3239,17 +3247,17 @@ def _write_segment_results(
 
     write_route_table(segment_route_table, route_table_path)
     write_gain_timing_table(segment_timing_table, timing_table_path)
+    segment_tree_table = classifier.get_route_tree_table(
+        interval=interval_config.route_gain,
+        wgd_info=wgd_info,
+    )
+    segment_tree_table['Sample_ID'] = sample_id
+    segment_tree_table['Segment_ID'] = segment.segment_id
+    write_route_tree_table(
+        segment_tree_table,
+        output_dir / f'{sample_id}_route_tree_table.tsv',
+    )
 
-    if plot_trees:
-        plot_output_dir = (
-            f'{output_dir}/{sample_id}_tree_plots/{segment.segment_id}'
-        )
-        classifier.plot_trees(
-            plot_output_dir,
-            str(segment),
-            wgd_info,
-            gain_interval=interval_config.tree_gain,
-        )
 
 
 def process_segments(
@@ -3259,7 +3267,6 @@ def process_segments(
     timing_dict_dir,
     sample_id,
     wgd_status,
-    plot_trees,
     wgd_info,
     interval_config=DEFAULT_TIMING_INTERVALS,
     subclone_fraction_prior=DEFAULT_SUBCLONE_FRACTION_PRIOR,
@@ -3281,6 +3288,9 @@ def process_segments(
 
     _initialize_table(route_table_path, ROUTE_TABLE_COLUMNS)
     _initialize_table(timing_table_path, GAIN_TIMING_TABLE_COLUMNS)
+    _initialize_table(
+        output_dir / f'{sample_id}_route_tree_table.tsv', ROUTE_TREE_TABLE_COLUMNS,
+    )
 
     for cn_state, state_segments in segments.items():
         state_segments = list(state_segments)
@@ -3371,7 +3381,6 @@ def process_segments(
                     timing_dict_dir,
                     sample_id,
                     wgd_status,
-                    plot_trees,
                     wgd_info,
                     interval_config,
                     route_table_path,
@@ -3385,7 +3394,6 @@ def _run_sample(
     sample,
     output_dir,
     timing_dict_dir,
-    plot_trees,
     min_wgd_overlap,
     wgd_count,
     interval_config,
@@ -3492,7 +3500,6 @@ def _run_sample(
         timing_dict_dir,
         sample.sample_id,
         wgd_status,
-        plot_trees=plot_trees,
         wgd_info=wgd_info,
         interval_config=interval_config,
         subclone_fraction_prior=subclone_fraction_prior,
@@ -3534,7 +3541,6 @@ def _run_sample(
 def process_sample(
     sample,
     sample_dir,
-    plot_trees=False,
     min_wgd_overlap=0.6,
     wgd_count=None,
     interval_config=DEFAULT_TIMING_INTERVALS,
@@ -3655,7 +3661,6 @@ def process_sample(
         sample,
         output_dir,
         timing_dict_dir,
-        plot_trees,
         min_wgd_overlap,
         wgd_count,
         interval_config,

@@ -51,7 +51,6 @@ class IntervalConfigurationTest(unittest.TestCase):
         config = distributiontools.TimingIntervalConfig()
 
         self.assertEqual(config.route_gain, distributiontools.IntervalSpec(0.95))
-        self.assertEqual(config.tree_gain, distributiontools.IntervalSpec(0.9))
         self.assertEqual(config.wgd_overlap, distributiontools.IntervalSpec(0.9))
         self.assertEqual(config.sample_wgd, distributiontools.IntervalSpec(0.9))
         self.assertEqual(
@@ -64,7 +63,6 @@ class IntervalConfigurationTest(unittest.TestCase):
         valid = distributiontools.IntervalSpec(0.8)
         field_names = (
             'route_gain',
-            'tree_gain',
             'wgd_overlap',
             'sample_wgd',
             'posterior_summary',

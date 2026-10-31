@@ -5,8 +5,8 @@ import sys
 import unittest
 
 
-class MatplotlibImportTests(unittest.TestCase):
-    def test_gritictimer_import_does_not_import_matplotlib(self):
+class InferenceDependencyTests(unittest.TestCase):
+    def test_import_and_interval_calculation_do_not_import_plotting_libraries(self):
         project_root = Path(__file__).resolve().parents[1]
         environment = os.environ.copy()
         environment['PYTHONPATH'] = os.pathsep.join(
@@ -19,7 +19,10 @@ class MatplotlibImportTests(unittest.TestCase):
                 (
                     'import sys; '
                     'import gritic.gritictimer; '
-                    'assert "matplotlib" not in sys.modules'
+                    'from gritic.distributiontools import get_interval_bounds, IntervalSpec; '
+                    'get_interval_bounds([0.1, 0.2, 0.8], IntervalSpec(0.9)); '
+                    'assert not any(name.split(".")[0] in '
+                    '{"matplotlib", "seaborn", "plotly"} for name in sys.modules)'
                 ),
             ],
             cwd=project_root,

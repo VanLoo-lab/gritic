@@ -39,9 +39,6 @@ class TimingIntervalConfig:
     route_gain: IntervalSpec = field(
         default_factory=lambda: IntervalSpec(0.95)
     )
-    tree_gain: IntervalSpec = field(
-        default_factory=lambda: IntervalSpec(0.9)
-    )
     wgd_overlap: IntervalSpec = field(
         default_factory=lambda: IntervalSpec(0.9)
     )
@@ -55,7 +52,6 @@ class TimingIntervalConfig:
     def __post_init__(self):
         for name in (
             'route_gain',
-            'tree_gain',
             'wgd_overlap',
             'sample_wgd',
             'posterior_summary',

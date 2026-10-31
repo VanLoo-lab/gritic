@@ -7,10 +7,9 @@ from pathlib import Path
 
 import pandas as pd
 
-from tests._plot_cache import MPL_CONFIG_DIRECTORY, XDG_CACHE_DIRECTORY
 
 
-class CliModulePlotIntegrationTest(unittest.TestCase):
+class CliModuleIntegrationTest(unittest.TestCase):
     @staticmethod
     def write_input_tables(directory):
         copy_number_path = directory / 'copy-number.tsv'
@@ -32,7 +31,7 @@ class CliModulePlotIntegrationTest(unittest.TestCase):
         }).to_csv(mutation_path, sep='\t', index=False)
         return copy_number_path, mutation_path
 
-    def test_python_module_guard_runs_real_argv_to_outputs_and_tree_pdfs(self):
+    def test_python_module_guard_runs_real_argv_to_data_only_outputs(self):
         project_root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as temporary_directory:
             temporary_path = Path(temporary_directory)
@@ -42,9 +41,6 @@ class CliModulePlotIntegrationTest(unittest.TestCase):
             sample_dir = temporary_path / 'output' / 'chosen-sample-directory'
             environment = os.environ.copy()
             environment.update({
-                'MPLBACKEND': 'Agg',
-                'MPLCONFIGDIR': str(MPL_CONFIG_DIRECTORY),
-                'XDG_CACHE_HOME': str(XDG_CACHE_DIRECTORY),
                 'PYTHONHASHSEED': '0',
             })
 
@@ -60,7 +56,7 @@ class CliModulePlotIntegrationTest(unittest.TestCase):
                     '--purity',
                     '0.8',
                     '--sample-id',
-                    'CLI_PLOT',
+                    'CLI_DATA',
                     '--sample-dir',
                     str(sample_dir),
                     '--sample-sex',
@@ -70,7 +66,6 @@ class CliModulePlotIntegrationTest(unittest.TestCase):
                     '--random-seed',
                     '20260828',
                     '--keep-adjacent-segments',
-                    '--plot-trees',
                 ],
                 cwd=project_root,
                 env=environment,
@@ -86,9 +81,9 @@ class CliModulePlotIntegrationTest(unittest.TestCase):
                 f'stdout:\n{result.stdout}\nstderr:\n{result.stderr}',
             )
             sample_output = sample_dir
-            self.assertFalse((sample_dir / 'CLI_PLOT').exists())
-            route_path = sample_output / 'CLI_PLOT_route_table.tsv'
-            gain_path = sample_output / 'CLI_PLOT_gain_timing_table.tsv'
+            self.assertFalse((sample_dir / 'CLI_DATA').exists())
+            route_path = sample_output / 'CLI_DATA_route_table.tsv'
+            gain_path = sample_output / 'CLI_DATA_gain_timing_table.tsv'
             self.assertTrue(route_path.is_file())
             self.assertTrue(gain_path.is_file())
 
@@ -100,17 +95,14 @@ class CliModulePlotIntegrationTest(unittest.TestCase):
             )
             self.assertEqual(set(gain_table['Segment']), {'1-1000-1200'})
 
-            plot_directory = (
-                sample_output
-                / 'CLI_PLOT_tree_plots'
-                / '1-1000-1200'
-            )
-            plot_paths = sorted(plot_directory.glob('route_*.pdf'))
-            self.assertTrue(plot_paths)
-            for plot_path in plot_paths:
-                with self.subTest(plot=plot_path.name):
-                    self.assertGreater(plot_path.stat().st_size, 1_000)
-                    self.assertEqual(plot_path.read_bytes()[:4], b'%PDF')
+            topology_path = sample_output / 'CLI_DATA_route_tree_table.tsv'
+            self.assertTrue(topology_path.is_file())
+            topology = pd.read_csv(topology_path, sep='\t')
+            self.assertEqual(set(topology['Segment_ID']), set(route_table['Segment_ID']))
+            self.assertFalse(any(
+                path.suffix.lower() in {'.png', '.pdf', '.svg', '.gif'}
+                for path in sample_output.rglob('*')
+            ))
 
 
 if __name__ == '__main__':

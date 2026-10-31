@@ -241,7 +241,6 @@ class WGDRunDecisionTest(unittest.TestCase):
                 sample,
                 Path('output'),
                 Path('timing'),
-                False,
                 0.6,
                 wgd_count,
                 gritictimer.DEFAULT_TIMING_INTERVALS,
@@ -741,11 +740,10 @@ class ProcessSegmentsBatchingTest(unittest.TestCase):
                 Path('timing'),
                 'sample',
                 True,
-                False,
                 {'WGD_Timing': 0.5},
             )
 
-        self.assertEqual(initialize_table.call_count, 2)
+        self.assertEqual(initialize_table.call_count, 3)
         self.assertEqual(
             initialize_table.call_args_list[0].args,
             (
@@ -758,6 +756,13 @@ class ProcessSegmentsBatchingTest(unittest.TestCase):
             (
                 Path('output/sample_gain_timing_table.tsv'),
                 gritictimer.GAIN_TIMING_TABLE_COLUMNS,
+            ),
+        )
+        self.assertEqual(
+            initialize_table.call_args_list[2].args,
+            (
+                Path('output/sample_route_tree_table.tsv'),
+                gritictimer.ROUTE_TREE_TABLE_COLUMNS,
             ),
         )
         route_classifier.assert_not_called()
@@ -823,7 +828,6 @@ class ProcessSegmentsBatchingTest(unittest.TestCase):
                 Path('timing'),
                 'sample',
                 True,
-                False,
                 {'WGD_Timing': 0.5},
             )
 

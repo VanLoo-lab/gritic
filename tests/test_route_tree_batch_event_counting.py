@@ -71,7 +71,7 @@ class RouteTreeBatchEventCountingTest(unittest.TestCase):
                     wgd_timing,
                 )
 
-    def test_batch_preserves_plotting_tree_tolerance_boundaries(self):
+    def test_batch_preserves_loss_expansion_tolerance_boundaries(self):
         route_tree = self.make_split_wgd_route()
         node_indices = {
             node: index
