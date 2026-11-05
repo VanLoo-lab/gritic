@@ -152,9 +152,9 @@ By default, GRITIC then merges consecutive retained segments on the same chromos
 
 Removing intervals can make equal-copy-number segments consecutive: both `2+1 → 0+0 → 2+1` and `2+1 → 3+1 (no retained mutations) → 2+1` become one `2+1` segment by default when the flanks contain retained mutations. The gap limit includes the removed intervals. Mutations assigned to original zero-copy intervals remain excluded even when a merged interval spans them; in coordinate mode, retained mutations in genuinely uncovered gaps can still be assigned to the final merged span. Removing empty intervals at the edges can shorten an analysis span. GRITIC preserves the original validated copy-number profile for WGD copy-number-mode calculations.
 
-![Coordinate assignment across an explicit zero-copy interval and an uncovered gap](docs/figures/segment_assignment.png)
+![Coordinate assignment across a zero-copy interval, an uncovered gap, and a positive-CN interval with no retained mutations](docs/figures/segment_assignment.png)
 
-In both examples the flanks contain retained mutations and the final span is `1-0-300`, but the middle mutation is removed only when the original profile explicitly assigns it to `0+0`. Setting `--max-merge-gap 0` keeps the flanking intervals separate in both examples. A positive-CN interval with a different state remains a merge barrier only if it contains retained mutations; a supported interval remains a barrier even when its state is ineligible for timing.
+In all three examples the flanks contain retained mutations and the final span is `1-0-300`. In A, the middle mutation is removed because the original profile assigns it to `0+0`; in B, the mutation in the uncovered gap joins the merged interval. In C, the middle mutation fails the alternate-read filter, leaving the `3+1` interval with no retained mutations, so that interval is removed before the `2+1` flanks merge. Setting `--max-merge-gap 0` keeps the flanking intervals separate in all three examples. A positive-CN interval with a different state remains a merge barrier only if it contains retained mutations; a supported interval remains a barrier even when its state is ineligible for timing.
 
 #### Chromosome handling
 
