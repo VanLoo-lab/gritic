@@ -942,6 +942,7 @@ class DataloaderIOAndPloidyTest(DataloaderFixtures, unittest.TestCase):
                 loaded_cn,
                 loaded_mutations,
                 sex='XX',
+                min_mutation_count=1,
             )
 
         self.assertEqual(loaded_cn['Chromosome'].tolist(), ['chr1'])
@@ -995,6 +996,7 @@ class DataloaderIOAndPloidyTest(DataloaderFixtures, unittest.TestCase):
                 loaded_cn,
                 loaded_mutations,
                 sex='XX',
+                min_mutation_count=1,
             )
 
         self.assertEqual(loaded_cn['Segment_ID'].tolist(), ['NA'])
@@ -1019,6 +1021,7 @@ class DataloaderIOAndPloidyTest(DataloaderFixtures, unittest.TestCase):
                 loaded_cn,
                 loaded_mutations,
                 sex='XX',
+                min_mutation_count=1,
             )
         self.assertEqual(
             prepared.source_copy_number_table['Chromosome'].tolist(), ['1', '2']
@@ -1039,6 +1042,7 @@ class DataloaderIOAndPloidyTest(DataloaderFixtures, unittest.TestCase):
                     loaded_cn,
                     loaded_mutations,
                     sex='XX',
+                    min_mutation_count=1,
                     drop_unmatched_snvs=True,
                 )
         self.assertEqual(

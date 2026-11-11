@@ -12,6 +12,7 @@ from gritic.dataloader import (
     DEFAULT_MAX_MERGE_GAP,
     DEFAULT_MIN_MUTATION_ALT_COUNT,
     DEFAULT_MIN_MUTATION_COVERAGE,
+    DEFAULT_MIN_MUTATION_COUNT,
 )
 
 
@@ -671,6 +672,7 @@ class Sample:
         autosome_count=DEFAULT_AUTOSOME_COUNT,
         *,
         max_merge_gap=DEFAULT_MAX_MERGE_GAP,
+        min_mutation_count=DEFAULT_MIN_MUTATION_COUNT,
         clip_subclone_ccf=False,
         drop_unrecognized_phasing=False,
     ):
@@ -699,6 +701,10 @@ class Sample:
         self.min_mutation_coverage = validation.validate_integer(
             min_mutation_coverage,
             'min_mutation_coverage',
+        )
+        self.min_mutation_count = validation.validate_integer(
+            min_mutation_count,
+            'min_mutation_count',
         )
         self.coverage_vaf_quantile = validation.validate_proportion(
             coverage_vaf_quantile, 'coverage_vaf_quantile',
@@ -734,6 +740,7 @@ class Sample:
             drop_unrecognized_phasing=drop_unrecognized_phasing,
             min_mutation_alt_count=self.min_mutation_alt_count,
             min_mutation_coverage=self.min_mutation_coverage,
+            min_mutation_count=self.min_mutation_count,
         )
         self.sex = prepared.sex
         self.chromosome_order = [

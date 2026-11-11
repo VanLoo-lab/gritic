@@ -187,6 +187,11 @@ class CliParserBoundaryTest(CliArgumentFixture, unittest.TestCase):
             sampletools.DEFAULT_MAX_MERGE_GAP,
         )
         self.assertEqual(
+            args.min_mutation_count,
+            sampletools.DEFAULT_MIN_MUTATION_COUNT,
+        )
+        self.assertEqual(args.min_mutation_count, 4)
+        self.assertEqual(
             args.min_mutation_alt_count,
             sampletools.DEFAULT_MIN_MUTATION_ALT_COUNT,
         )
@@ -217,6 +222,18 @@ class CliParserBoundaryTest(CliArgumentFixture, unittest.TestCase):
             args.unordered_balanced_route_prior,
             gritictimer.DEFAULT_UNORDERED_BALANCED_ROUTE_PRIOR,
         )
+
+    def test_min_mutation_count_accepts_zero_and_rejects_invalid_values(self):
+        args = cli.build_parser().parse_args([
+            *self.required_arguments(), '--min-mutation-count', '0',
+        ])
+        self.assertEqual(args.min_mutation_count, 0)
+        for value in ('-1', '1.5', 'nan'):
+            with self.subTest(value=value):
+                self.assert_parse_error(
+                    [*self.required_arguments(), '--min-mutation-count', value],
+                    'must be a non-negative integer',
+                )
 
     def test_interval_configuration_uses_every_custom_width_and_method(self):
         args = cli.build_parser().parse_args([
@@ -370,6 +387,7 @@ class CliMainTest(CliArgumentFixture, unittest.TestCase):
             '--drop-unrecognized-phasing',
             '--keep-adjacent-segments',
             '--max-merge-gap', '50',
+            '--min-mutation-count', '7',
             '--min-mutation-alt-count', '4',
             '--min-mutation-coverage', '11',
             '--coverage-vaf-quantile', '0.8',
@@ -407,6 +425,7 @@ class CliMainTest(CliArgumentFixture, unittest.TestCase):
             sex='ZW',
             merge_cn=False,
             max_merge_gap=50,
+            min_mutation_count=7,
             min_mutation_alt_count=4,
             min_mutation_coverage=11,
             coverage_vaf_quantile=0.8,

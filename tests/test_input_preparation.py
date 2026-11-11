@@ -32,6 +32,7 @@ class InputPreparationTest(unittest.TestCase):
         return table
 
     def prepare(self, cn_table=None, mutation_table=None, **kwargs):
+        kwargs.setdefault('min_mutation_count', 1)
         return dataloader.prepare_sample_inputs(
             self.copy_number_table() if cn_table is None else cn_table,
             self.mutation_table() if mutation_table is None else mutation_table,
@@ -198,7 +199,7 @@ class InputPreparationTest(unittest.TestCase):
             with self.subTest(drop_unmatched_snvs=drop_unmatched_snvs):
                 with self.assertRaisesRegex(
                     ValueError,
-                    'No copy-number segments contain retained mutations before merging',
+                    'No copy-number segments.*before merging',
                 ):
                     self.prepare(
                         cn_table, mutations,
@@ -502,6 +503,7 @@ class InputPreparationTest(unittest.TestCase):
         with self.assertWarnsRegex(UserWarning, 'zero-copy'):
             sample = sampletools.Sample(
                 mutations, cn_table, None, 'TEST', 0.8, sex='XX',
+                min_mutation_count=1,
             )
 
         self.assertEqual(sample.copy_number_table['Segment_ID'].tolist(), ['1-0-1200'])
@@ -517,6 +519,7 @@ class InputPreparationTest(unittest.TestCase):
 
         sample = sampletools.Sample(
             mutations, cn_table, None, 'TEST', 0.8, sex='XX',
+            min_mutation_count=1,
         )
 
         self.assertEqual(sample.copy_number_table['Segment_ID'].tolist(), ['1-0-1200'])
@@ -524,6 +527,221 @@ class InputPreparationTest(unittest.TestCase):
         self.assertEqual(sampletools.get_major_cn_mode(sample), 5)
         self.assertEqual(len(sample.segments), 1)
         self.assertEqual(sample.segments[0].n_mutations, 2)
+
+
+class MinimumMutationCountTest(unittest.TestCase):
+    @staticmethod
+    def tables(counts=(4, 3, 4), *, supplied_ids=True):
+        cn_table = pd.DataFrame({
+            'Chromosome': ['1'] * 3,
+            'Segment_Start': [0, 100, 200],
+            'Segment_End': [100, 200, 300],
+            'Major_CN': [3, 1, 3],
+            'Minor_CN': [1, 1, 1],
+            'Segment_ID': ['left', 'island', 'right'],
+        })
+        mutations = pd.DataFrame([
+            {
+                'Chromosome': '1',
+                'Position': 100 * segment_index + mutation_index,
+                'Tumor_Ref_Count': 10,
+                'Tumor_Alt_Count': 5,
+                'Mutation_ID': f'{segment_id}-{mutation_index}',
+                'Segment_ID': segment_id,
+            }
+            for segment_index, (segment_id, count) in enumerate(
+                zip(cn_table['Segment_ID'], counts)
+            )
+            for mutation_index in range(count)
+        ])
+        if not supplied_ids:
+            mutations = mutations.drop(columns='Segment_ID')
+        return cn_table, mutations
+
+    @staticmethod
+    def prepare(cn_table, mutations, **kwargs):
+        return dataloader.prepare_sample_inputs(
+            cn_table, mutations, sex='XX', **kwargs,
+        )
+
+    def test_default_drops_three_mutation_source_and_its_mutations_before_merging(self):
+        for supplied_ids in (False, True):
+            with self.subTest(supplied_ids=supplied_ids):
+                cn_table, mutations = self.tables(supplied_ids=supplied_ids)
+                prepared = self.prepare(cn_table, mutations)
+
+                self.assertEqual(
+                    prepared.copy_number_table['Segment_ID'].tolist(), ['1-0-300'],
+                )
+                self.assertEqual(len(prepared.mutation_table), 8)
+                self.assertFalse(
+                    prepared.mutation_table['Mutation_ID'].str.startswith('island-').any()
+                )
+                self.assertEqual(len(prepared.source_copy_number_table), 3)
+                if supplied_ids:
+                    self.assertEqual(
+                        prepared.supplied_segment_id_map,
+                        {'left': '1-0-300', 'right': '1-0-300'},
+                    )
+
+    def test_four_mutation_source_meets_default_and_remains_a_cn_barrier(self):
+        for supplied_ids in (False, True):
+            with self.subTest(supplied_ids=supplied_ids):
+                prepared = self.prepare(*self.tables((4, 4, 4), supplied_ids=supplied_ids))
+
+                self.assertEqual(
+                    prepared.copy_number_table['Segment_ID'].tolist(),
+                    ['1-0-100', '1-100-200', '1-200-300'],
+                )
+                self.assertEqual(len(prepared.mutation_table), 12)
+
+    def test_custom_threshold_is_inclusive(self):
+        for threshold in (1, 3, 5):
+            for supplied_ids in (False, True):
+                with self.subTest(threshold=threshold, supplied_ids=supplied_ids):
+                    counts = (threshold, threshold - 1, threshold)
+                    prepared = self.prepare(
+                        *self.tables(counts, supplied_ids=supplied_ids),
+                        min_mutation_count=threshold,
+                    )
+                    self.assertEqual(
+                        prepared.copy_number_table['Segment_ID'].tolist(), ['1-0-300'],
+                    )
+                    self.assertEqual(len(prepared.mutation_table), 2 * threshold)
+
+        prepared = self.prepare(*self.tables(), min_mutation_count=3)
+        self.assertEqual(len(prepared.copy_number_table), 3)
+        self.assertEqual(len(prepared.mutation_table), 11)
+
+    def test_zero_threshold_disables_source_count_filter(self):
+        for supplied_ids in (False, True):
+            with self.subTest(supplied_ids=supplied_ids):
+                cn_table, mutations = self.tables((4, 0, 4), supplied_ids=supplied_ids)
+                prepared = self.prepare(cn_table, mutations, min_mutation_count=0)
+
+                self.assertEqual(
+                    prepared.copy_number_table['Segment_ID'].tolist(),
+                    ['1-0-100', '1-100-200', '1-200-300'],
+                )
+                self.assertEqual(len(prepared.mutation_table), 8)
+
+    def test_read_filters_are_applied_before_counting_source_support(self):
+        for supplied_ids in (False, True):
+            for ref_count, alt_count in ((10, 2), (6, 3), (7, 3)):
+                with self.subTest(
+                    supplied_ids=supplied_ids, ref_count=ref_count, alt_count=alt_count,
+                ):
+                    cn_table, mutations = self.tables((4, 4, 4), supplied_ids=supplied_ids)
+                    mutations.loc[
+                        mutations['Mutation_ID'].eq('island-3'),
+                        ['Tumor_Ref_Count', 'Tumor_Alt_Count'],
+                    ] = [ref_count, alt_count]
+                    prepared = self.prepare(cn_table, mutations)
+                    island_retained = ref_count + alt_count >= 10 and alt_count >= 3
+                    self.assertEqual(len(prepared.copy_number_table), 3 if island_retained else 1)
+                    self.assertEqual(len(prepared.mutation_table), 12 if island_retained else 8)
+
+    def test_adjacent_equal_cn_sources_cannot_pool_support_to_pass_threshold(self):
+        for supplied_ids in (False, True):
+            with self.subTest(supplied_ids=supplied_ids):
+                cn_table, mutations = self.tables((3, 3, 4), supplied_ids=supplied_ids)
+                cn_table['Major_CN'] = 3
+                prepared = self.prepare(cn_table, mutations)
+                self.assertEqual(
+                    prepared.copy_number_table['Segment_ID'].tolist(), ['1-200-300'],
+                )
+                self.assertEqual(len(prepared.mutation_table), 4)
+
+    def test_count_filter_still_applies_when_adjacent_segments_are_kept(self):
+        for supplied_ids in (False, True):
+            with self.subTest(supplied_ids=supplied_ids):
+                prepared = self.prepare(
+                    *self.tables(supplied_ids=supplied_ids), merge_cn=False,
+                )
+                self.assertEqual(
+                    prepared.copy_number_table['Segment_ID'].tolist(),
+                    ['1-0-100', '1-200-300'],
+                )
+                self.assertEqual(len(prepared.mutation_table), 8)
+
+    def test_removed_source_width_counts_toward_maximum_merge_gap(self):
+        for supplied_ids in (False, True):
+            for gap in (0, 99, 100):
+                with self.subTest(supplied_ids=supplied_ids, gap=gap):
+                    prepared = self.prepare(
+                        *self.tables(supplied_ids=supplied_ids), max_merge_gap=gap,
+                    )
+                    self.assertEqual(
+                        prepared.copy_number_table['Segment_ID'].tolist(),
+                        ['1-0-300'] if gap == 100 else ['1-0-100', '1-200-300'],
+                    )
+                    self.assertEqual(len(prepared.mutation_table), 8)
+
+    def test_truly_uncovered_gap_mutations_are_retained_after_flanks_merge(self):
+        cn_table, mutations = self.tables(supplied_ids=False)
+        cn_table = cn_table.iloc[[0, 2]].copy()
+        prepared = self.prepare(cn_table, mutations)
+
+        self.assertEqual(prepared.copy_number_table['Segment_ID'].tolist(), ['1-0-300'])
+        self.assertEqual(len(prepared.mutation_table), 11)
+
+    def test_gap_mutations_do_not_count_as_source_support(self):
+        cn_table, mutations = self.tables((3, 20, 4), supplied_ids=False)
+        cn_table = cn_table.iloc[[0, 2]].copy()
+        with self.assertWarnsRegex(UserWarning, '20 unmatched SNVs'):
+            prepared = self.prepare(cn_table, mutations, drop_unmatched_snvs=True)
+
+        self.assertEqual(prepared.copy_number_table['Segment_ID'].tolist(), ['1-200-300'])
+        self.assertEqual(len(prepared.mutation_table), 4)
+
+    def test_supplied_ids_control_counting_and_drops_when_positions_disagree(self):
+        cn_table, mutations = self.tables()
+        mutations['Position'] = 150
+        prepared = self.prepare(cn_table, mutations)
+
+        self.assertEqual(len(prepared.mutation_table), 8)
+        self.assertEqual(set(prepared.mutation_table['Source_Segment_ID']), {'left', 'right'})
+
+    def test_half_open_boundary_belongs_to_following_source(self):
+        cn_table, mutations = self.tables((4, 3, 4), supplied_ids=False)
+        mutations.loc[mutations['Mutation_ID'].eq('left-3'), 'Position'] = 100
+        prepared = self.prepare(cn_table, mutations)
+
+        self.assertEqual(
+            prepared.copy_number_table['Segment_ID'].tolist(),
+            ['1-100-200', '1-200-300'],
+        )
+        self.assertEqual(len(prepared.mutation_table), 8)
+        self.assertIn('left-3', set(prepared.mutation_table['Mutation_ID']))
+
+    def test_no_source_meeting_threshold_fails_before_merging(self):
+        for supplied_ids in (False, True):
+            with self.subTest(supplied_ids=supplied_ids):
+                with self.assertRaisesRegex(ValueError, 'No copy-number segments.*before merging'):
+                    self.prepare(*self.tables((3, 3, 3), supplied_ids=supplied_ids))
+
+    def test_sample_uses_default_threshold_and_passes_custom_threshold(self):
+        cn_table, mutations = self.tables()
+        for kwargs, expected in (({}, [8]), ({'min_mutation_count': 3}, [4, 3, 4])):
+            with self.subTest(kwargs=kwargs):
+                sample = sampletools.Sample(
+                    mutations, cn_table, None, 'TEST', 0.8, sex='XX', **kwargs,
+                )
+                self.assertEqual([segment.n_mutations for segment in sample.segments], expected)
+
+    def test_threshold_rejects_invalid_programmatic_values(self):
+        cn_table, mutations = self.tables()
+        for threshold in (-1, 1.0, True, '4', None):
+            for prepare in (
+                lambda: self.prepare(cn_table, mutations, min_mutation_count=threshold),
+                lambda: sampletools.Sample(
+                    mutations, cn_table, None, 'TEST', 0.8, sex='XX',
+                    min_mutation_count=threshold,
+                ),
+            ):
+                with self.subTest(threshold=threshold):
+                    with self.assertRaisesRegex(ValueError, 'min_mutation_count'):
+                        prepare()
 
 
 if __name__ == '__main__':

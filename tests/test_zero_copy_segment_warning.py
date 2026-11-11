@@ -54,6 +54,7 @@ class ZeroCopySegmentWarningTest(unittest.TestCase):
             'TEST',
             0.8,
             sex='XX',
+            min_mutation_count=1,
         )
 
     @staticmethod

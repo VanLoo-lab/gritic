@@ -81,6 +81,7 @@ class PhasingLabelTest(unittest.TestCase):
             'TEST',
             0.8,
             sex='XX',
+            min_mutation_count=1,
         )
 
         self.assertNotIn('Phasing', validated.columns)
@@ -153,6 +154,7 @@ class PhasingLabelTest(unittest.TestCase):
                 loaded_cn,
                 loaded_mutations,
                 sex='XX',
+                min_mutation_count=1,
             )
 
         self.assertEqual(
@@ -169,6 +171,7 @@ class PhasingLabelTest(unittest.TestCase):
             'TEST',
             0.8,
             sex='XX',
+            min_mutation_count=1,
         )
 
         self.assertEqual(
@@ -194,6 +197,7 @@ class PhasingLabelTest(unittest.TestCase):
                 'TEST',
                 0.8,
                 sex='XX',
+                min_mutation_count=1,
                 drop_unrecognized_phasing=True,
             )
 

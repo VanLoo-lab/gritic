@@ -34,6 +34,7 @@ class CliHelpTest(unittest.TestCase):
         (
             'Mutation filtering and detection correction',
             (
+                '--min-mutation-count',
                 '--min-mutation-alt-count',
                 '--min-mutation-coverage',
                 '--coverage-vaf-quantile',

@@ -237,7 +237,7 @@ def build_parser():
         default=True,
         help=(
             'Keep retained copy-number intervals separate. Zero-copy '
-            'intervals and those without retained mutations are still '
+            'intervals and those below --min-mutation-count are still '
             'removed. By default, GRITIC merges consecutive retained '
             'segments on the same chromosome with identical Major_CN '
             'and Minor_CN.'
@@ -253,6 +253,17 @@ def build_parser():
             'equal-copy-number segments that may be merged, including '
             'removed intervals. By default there is no maximum; use 0 '
             'to merge only intervals that touch.'
+        ),
+    )
+    mutation_arguments.add_argument(
+        '--min-mutation-count',
+        type=nonnegative_integer,
+        default=sampletools.DEFAULT_MIN_MUTATION_COUNT,
+        help=(
+            'Minimum retained mutations required to keep a source '
+            'copy-number segment, counted after per-mutation read filters '
+            'and before merging (default: 4). Mutations assigned to dropped '
+            'segments are removed with them.'
         ),
     )
     mutation_arguments.add_argument(
@@ -514,6 +525,7 @@ def main(argv=None):
         sex=args.sample_sex,
         merge_cn=args.merge_adjacent_segments,
         max_merge_gap=args.max_merge_gap,
+        min_mutation_count=args.min_mutation_count,
         min_mutation_alt_count=args.min_mutation_alt_count,
         min_mutation_coverage=args.min_mutation_coverage,
         coverage_vaf_quantile=args.coverage_vaf_quantile,
