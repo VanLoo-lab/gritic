@@ -980,12 +980,16 @@ def get_segment_posterior_table_summary(
         wgd_timings = gain_index_table['WGD_Timing'].to_numpy(dtype=float)
         if np.isnan(wgd_timings).any():
             wgd_timing_median = np.nan
+            wgd_timing_mean = np.nan
+            wgd_timing_std = np.nan
             wgd_timing_low_ci = np.nan
             wgd_timing_high_ci = np.nan
             pre_wgd_probability = np.nan
             post_wgd_probability = np.nan
         else:
             wgd_timing_median = np.median(wgd_timings)
+            wgd_timing_mean = np.mean(wgd_timings)
+            wgd_timing_std = np.std(wgd_timings, ddof=0)
             wgd_timing_low_ci, wgd_timing_high_ci = get_interval_bounds(
                 wgd_timings,
                 interval,
@@ -997,11 +1001,15 @@ def get_segment_posterior_table_summary(
             'Gain_Index': gain_index,
             'Proportion': proportion,
             'Timing_Median': np.median(gain_timings),
+            'Timing_Mean': np.mean(gain_timings),
+            'Timing_Std': np.std(gain_timings, ddof=0),
             'Timing_Low_CI': timing_low_ci,
             'Timing_High_CI': timing_high_ci,
             'Pre_WGD_Probability': pre_wgd_probability,
             'Post_WGD_Probability': post_wgd_probability,
             'WGD_Timing_Median': wgd_timing_median,
+            'WGD_Timing_Mean': wgd_timing_mean,
+            'WGD_Timing_Std': wgd_timing_std,
             'WGD_Timing_Low_CI': wgd_timing_low_ci,
             'WGD_Timing_High_CI': wgd_timing_high_ci,
         })

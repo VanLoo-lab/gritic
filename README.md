@@ -334,13 +334,17 @@ Append each suffix below to `SAMPLE_ID`. We recommend only considering gained se
 | Result columns | Interpretation |
 | --- | --- |
 | `Timing_Median`, `Timing_Low_CI`, `Timing_High_CI` | Gain-timing median and configured posterior-summary interval. |
+| `Timing_Mean`, `Timing_Std` | Gain-timing mean and posterior standard deviation. |
 | `Proportion` | Fraction of posterior route draws in which this independent gain exists. |
 | `WGD_Timing_Median`, `WGD_Timing_Low_CI`, `WGD_Timing_High_CI` | WGD-timing median and interval. |
+| `WGD_Timing_Mean`, `WGD_Timing_Std` | WGD-timing mean and posterior standard deviation. |
 | `Pre_WGD_Probability`, `Post_WGD_Probability` | Probabilities of the gain preceding or following WGD. |
 
 Only gains with `Proportion >= 0.8` are reported. Its denominator includes all route draws for the segment, including routes with no independent gains.
 
 Gain and WGD statistics on a row use the same subset of draws in which that gain exists. WGD-related fields are blank in non-WGD runs. Segment coordinates, copy numbers, mutation count, mutation rate, and WGD status accompany these results.
+
+Standard deviations describe the spread of the posterior draws, using the population definition (`ddof=0`, dividing by the number of draws). They are not standard errors of the mean. Means and standard deviations use all draws in the subset, regardless of the configured interval width or method.
 
 `_penalty_False.tsv` uses `Probability`; `_penalty_True.tsv` uses a separate set of draws with `Penalized_Probability`. See [posterior sampling](#posterior-sampling) for how these draws are constructed.
 
@@ -358,7 +362,7 @@ This table contains one row for each possible route of each timed segment, keyed
 
 This table contains one row per independently timeable gain node per route and is keyed by four identifier columns: (`Sample`, `Segment`, `Route`, `Node`).
 
-The remaining columns are `Node_Phasing`, `Timing` (the median), and `Timing_CI_Low` and `Timing_CI_High` (the configured route-gain interval). Timing statistics are conditional on the route.
+The remaining columns are `Node_Phasing`, `Timing` (the median), `Timing_Mean`, `Timing_Std` (the posterior standard deviation, `ddof=0`), and `Timing_CI_Low` and `Timing_CI_High` (the configured route-gain interval). Timing statistics are conditional on the route and rounded to three decimal places.
 
 `Node_Phasing` is `Major` or `Minor`; a route with one extant allele component labels every node `Major`.
 
@@ -370,7 +374,7 @@ See [WGD timing estimation](#wgd-timing-estimation) for eligibility, the overlap
 
 ### _gain_timing_table_wgd_segments.tsv
 
-This table is produced while evaluating WGD timing. It gives the preliminary non-WGD node posterior for every eligible major-copy-number-two segment. Displayed `Timing_CI_Low` and `Timing_CI_High` use the route-gain interval. `Intersecting`, `Best_Overlap_Timing`, and `Overlap_Proportion` use the separate, unrounded internal WGD-overlap intervals. Displayed bounds therefore need not determine `Intersecting`; see [timing intervals](#timing-intervals) for the settings.
+This table is produced while evaluating WGD timing. It gives the preliminary non-WGD node posterior for every eligible major-copy-number-two segment, including `Timing_Mean` and `Timing_Std` with the same definitions as the gain timing table. Displayed `Timing_CI_Low` and `Timing_CI_High` use the route-gain interval. `Intersecting`, `Best_Overlap_Timing`, and `Overlap_Proportion` use the separate, unrounded internal WGD-overlap intervals. Displayed bounds therefore need not determine `Intersecting`; see [timing intervals](#timing-intervals) for the settings.
 
 ### Processed inputs and downstream tables
 

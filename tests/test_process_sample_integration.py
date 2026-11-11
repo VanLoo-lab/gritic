@@ -410,6 +410,10 @@ class ProcessSampleIntegrationTest(unittest.TestCase):
                 sep='\t',
             )
             self.assertEqual(len(gain_table), 1)
+            self.assertEqual(
+                gain_table.columns.tolist(),
+                tableschemas.GAIN_TIMING_TABLE_COLUMNS,
+            )
             self.assertEqual(gain_table.loc[0, 'Sample'], 'GAIN')
             self.assertEqual(gain_table.loc[0, 'Segment'], '1-1000-1200')
             self.assertEqual(gain_table.loc[0, 'Route'], route_id)
@@ -417,6 +421,8 @@ class ProcessSampleIntegrationTest(unittest.TestCase):
             self.assertTrue(
                 gain_table.loc[0, [
                     'Timing',
+                    'Timing_Mean',
+                    'Timing_Std',
                     'Timing_CI_Low',
                     'Timing_CI_High',
                 ]].between(0, 1).all()
@@ -436,15 +442,25 @@ class ProcessSampleIntegrationTest(unittest.TestCase):
                     sep='\t',
                 )
                 self.assertEqual(len(summary), 1)
+                self.assertEqual(
+                    summary.columns.tolist(),
+                    tableschemas.SUMMARY_COLUMNS,
+                )
                 self.assertEqual(summary.loc[0, 'Gain_Index'], 1)
                 self.assertEqual(summary.loc[0, 'Proportion'], 1.0)
                 self.assertTrue(
                     summary.loc[0, [
                         'Timing_Median',
+                        'Timing_Mean',
+                        'Timing_Std',
                         'Timing_Low_CI',
                         'Timing_High_CI',
                     ]].between(0, 1).all()
                 )
+                self.assertTrue(summary.loc[0, [
+                    'WGD_Timing_Mean',
+                    'WGD_Timing_Std',
+                ]].isna().all())
 
             archive_path, manifest_path = timingio.get_timing_archive_paths(
                 output_directory / 'GAIN_timing_dicts',
@@ -461,6 +477,14 @@ class ProcessSampleIntegrationTest(unittest.TestCase):
                 gritictimer.ROUTE_CONDITIONAL_SAMPLE_COUNT,
             )
             self.assertEqual(route_timing['Timing'].shape, (expected_shape[0], 1))
+            self.assertEqual(
+                gain_table.loc[0, 'Timing_Mean'],
+                np.round(np.mean(route_timing['Timing'][:, 0]), 3),
+            )
+            self.assertEqual(
+                gain_table.loc[0, 'Timing_Std'],
+                np.round(np.std(route_timing['Timing'][:, 0], ddof=0), 3),
+            )
             np.testing.assert_array_equal(route_timing['Timing_Node_ID'], [node])
             self.assertEqual(
                 route_timing['WGD_Timing'].shape,

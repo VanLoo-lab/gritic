@@ -159,6 +159,8 @@ def make_gain_timing_row(
         'Node': node,
         'Node_Phasing': node_phasing,
         'Timing': 0.5,
+        'Timing_Mean': 0.5,
+        'Timing_Std': 0.2,
         'Timing_CI_Low': 0.2,
         'Timing_CI_High': 0.8,
     }
@@ -1102,7 +1104,7 @@ class PosteriorDrawValidationAndSummaryTest(unittest.TestCase):
             make_gain_draw(
                 posterior_index=index,
                 route=f'r{index % 2}',
-                gain_timing=[0.1, 0.2, 0.3, 0.4][index],
+                gain_timing=[0.1, 0.2, 0.3, 0.8][index],
                 wgd_timing=[0.2, 0.1, 0.5, 0.3][index],
                 gain_index=1,
             )
@@ -1184,11 +1186,33 @@ class PosteriorDrawValidationAndSummaryTest(unittest.TestCase):
         self.assertEqual(first['Proportion'], 1)
         self.assertEqual(second['Proportion'], 0.5)
         self.assertEqual(first['Timing_Median'], 0.25)
+        self.assertAlmostEqual(first['Timing_Mean'], 0.35)
+        self.assertAlmostEqual(first['Timing_Std'], np.sqrt(0.0725))
         self.assertEqual(first['Timing_Low_CI'], 0.1)
-        self.assertEqual(first['Timing_High_CI'], 0.4)
+        self.assertEqual(first['Timing_High_CI'], 0.8)
         self.assertEqual(first['Pre_WGD_Probability'], 0.5)
         self.assertEqual(first['Post_WGD_Probability'], 0.5)
         self.assertEqual(first['WGD_Timing_Median'], 0.25)
+        self.assertAlmostEqual(first['WGD_Timing_Mean'], 0.275)
+        self.assertAlmostEqual(first['WGD_Timing_Std'], np.sqrt(0.021875))
+        self.assertAlmostEqual(second['Timing_Mean'], 0.65)
+        self.assertAlmostEqual(second['Timing_Std'], 0.05)
+        self.assertAlmostEqual(second['WGD_Timing_Mean'], 0.15)
+        self.assertAlmostEqual(second['WGD_Timing_Std'], 0.05)
+
+    def test_single_gain_draw_has_zero_posterior_standard_deviation(self):
+        gain_draws, route_draws = self.valid_tables()
+        result = posteriortablegen.get_segment_posterior_table_summary(
+            gain_draws.iloc[[0]],
+            route_draws,
+            interval=IntervalSpec(1),
+        )
+        row = result.iloc[0]
+        self.assertEqual(row['Proportion'], 0.25)
+        self.assertEqual(row['Timing_Mean'], 0.1)
+        self.assertEqual(row['Timing_Std'], 0.0)
+        self.assertEqual(row['WGD_Timing_Mean'], 0.2)
+        self.assertEqual(row['WGD_Timing_Std'], 0.0)
 
     def test_nan_wgd_timing_propagates_only_wgd_summary_fields(self):
         gain_draws, route_draws = self.valid_tables()
@@ -1203,10 +1227,14 @@ class PosteriorDrawValidationAndSummaryTest(unittest.TestCase):
         )
         first = result.loc[result['Gain_Index'] == 1].iloc[0]
         self.assertEqual(first['Timing_Median'], 0.25)
+        self.assertAlmostEqual(first['Timing_Mean'], 0.35)
+        self.assertAlmostEqual(first['Timing_Std'], np.sqrt(0.0725))
         for column in (
             'Pre_WGD_Probability',
             'Post_WGD_Probability',
             'WGD_Timing_Median',
+            'WGD_Timing_Mean',
+            'WGD_Timing_Std',
             'WGD_Timing_Low_CI',
             'WGD_Timing_High_CI',
         ):

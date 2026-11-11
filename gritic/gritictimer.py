@@ -1089,6 +1089,8 @@ class RouteClassifier:
             'Node': [],
             'Node_Phasing': [],
             'Timing': [],
+            'Timing_Mean': [],
+            'Timing_Std': [],
             'Timing_CI_Low': [],
             'Timing_CI_High': [],
         }
@@ -1107,6 +1109,12 @@ class RouteClassifier:
                 )
                 timing_table_data['Timing'].append(
                     np.round(np.median(node_timing), rounding_digits)
+                )
+                timing_table_data['Timing_Mean'].append(
+                    np.round(np.mean(node_timing), rounding_digits)
+                )
+                timing_table_data['Timing_Std'].append(
+                    np.round(np.std(node_timing, ddof=0), rounding_digits)
                 )
                 timing_table_data['Timing_CI_Low'].append(
                     np.round(timing_ci_low, rounding_digits)

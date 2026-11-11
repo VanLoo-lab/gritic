@@ -38,6 +38,8 @@ class GainTimingNodeDtypeTest(unittest.TestCase):
                 'Node': [0, 2],
                 'Node_Phasing': ['Major', 'Major'],
                 'Timing': [0.1, 0.9],
+                'Timing_Mean': [0.1, 0.9],
+                'Timing_Std': [0.05, 0.05],
                 'Timing_CI_Low': [0.0, 0.8],
                 'Timing_CI_High': [0.2, 1.0],
             }

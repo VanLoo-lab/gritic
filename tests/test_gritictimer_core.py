@@ -319,7 +319,7 @@ class RouteClassifierOutputTest(unittest.TestCase):
         self.assertEqual(table['Time'].tolist(), [1.235])
         self.assertEqual(table['Density'].tolist(), [0.8])
 
-    def test_timing_table_reports_phasing_median_and_interval(self):
+    def test_timing_table_reports_phasing_moments_median_and_interval(self):
         classifier, route = self.fitted_classifier()
         table = classifier.get_timing_table(
             interval=IntervalSpec(1),
@@ -330,12 +330,23 @@ class RouteClassifierOutputTest(unittest.TestCase):
         self.assertEqual(table.loc[0, 'Node'], 0)
         self.assertEqual(table.loc[0, 'Node_Phasing'], 'Major')
         self.assertEqual(table.loc[0, 'Timing'], 0.4)
+        self.assertEqual(table.loc[0, 'Timing_Mean'], 0.47)
+        self.assertEqual(table.loc[0, 'Timing_Std'], 0.33)
         self.assertEqual(table.loc[0, 'Timing_CI_Low'], 0.1)
         self.assertEqual(table.loc[0, 'Timing_CI_High'], 0.9)
         np.testing.assert_array_equal(
             classifier.get_best_timing(),
             np.array([[0.1, 0.4, 0.9]]),
         )
+
+    def test_single_particle_timing_has_zero_standard_deviation(self):
+        classifier, route = self.fitted_classifier()
+        route.node_timing = route.node_timing[:, :1]
+
+        table = classifier.get_timing_table(interval=IntervalSpec(1))
+
+        self.assertEqual(table.loc[0, 'Timing_Mean'], 0.1)
+        self.assertEqual(table.loc[0, 'Timing_Std'], 0.0)
 
     def test_timing_table_rejects_duplicate_route_node_pairs(self):
         classifier, route = self.fitted_classifier()

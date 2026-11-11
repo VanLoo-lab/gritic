@@ -19,6 +19,8 @@ def _candidate_timing_table(segment):
         'Node': [0],
         'Node_Phasing': ['Major'],
         'Timing': [0.5],
+        'Timing_Mean': [0.5],
+        'Timing_Std': [0.05],
         'Timing_CI_Low': [0.4],
         'Timing_CI_High': [0.6],
         'Probability': [1.0],

@@ -34,6 +34,8 @@ class PosteriorNodePhasingValidationTest(unittest.TestCase):
                 'Node': node,
                 'Node_Phasing': label,
                 'Timing': 0.5,
+                'Timing_Mean': 0.5,
+                'Timing_Std': 0.15,
                 'Timing_CI_Low': 0.25,
                 'Timing_CI_High': 0.75,
             })
