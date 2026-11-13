@@ -24,6 +24,7 @@ from gritic.sampletools import (
     get_major_cn_mode,
 )
 from gritic import dataloader, outputtools, timingio, validation
+from gritic.outcomes import IneligibleSampleError
 from gritic.distributiontools import (
     DEFAULT_TIMING_INTERVALS,
     TimingIntervalConfig,
@@ -2786,7 +2787,8 @@ def time_wgd_major_cn_2(
     wgd_timing_table_path = output_dir/f"{sample.sample_id}_gain_timing_table_wgd_segments.tsv"
     potential_wgd_segments = get_potential_wgd_segments(sample)
     if not potential_wgd_segments:
-        raise ValueError(
+        raise IneligibleSampleError(
+            'no_eligible_wgd_segments',
             "No eligible segments with enough mutations for WGD timing in "
             f"sample {sample.sample_id}: at least one autosomal major-copy-"
             f"number-2 segment with {MIN_WGD_MUTATIONS} or more retained "
@@ -3502,7 +3504,8 @@ def process_sample(
     validation.validate_sample_id(sample.sample_id)
     major_cn_mode = get_major_cn_mode(sample)
     if major_cn_mode not in (1, 2):
-        raise ValueError(
+        raise IneligibleSampleError(
+            'unsupported_major_copy_number_mode',
             f"Major CN mode is {major_cn_mode} for sample {sample.sample_id}; "
             "GRITIC currently supports only modal major copy numbers 1 and 2"
         )

@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from gritic import validation
+from gritic.outcomes import IneligibleSampleError
 
 DEFAULT_MIN_MUTATION_ALT_COUNT = 3
 DEFAULT_MIN_MUTATION_COVERAGE = 10
@@ -939,7 +940,8 @@ def drop_zero_copy_mutations(
     )
     mutation_table = mutation_table.loc[~zero_copy_mutations].copy()
     if mutation_table.empty:
-        raise ValueError(
+        raise IneligibleSampleError(
+            'no_mutations_after_zero_copy_filter',
             'No mutations remain after dropping SNVs assigned to '
             'zero-copy (0+0) segments'
         )
@@ -1026,7 +1028,8 @@ def filter_mutation_table(
         & mutation_table['Total_Count'].ge(min_mutation_coverage)
     ].copy()
     if mutation_table.empty:
-        raise ValueError(
+        raise IneligibleSampleError(
+            'no_mutations_after_read_filters',
             'No mutations remain after applying the configured minimum '
             'alternate-read count and coverage thresholds'
         )
@@ -1077,7 +1080,8 @@ def _filter_copy_number_segments(
     supported = counts >= min_mutation_count
     retained = copy_number_table.loc[supported].copy()
     if retained.empty:
-        raise ValueError(
+        raise IneligibleSampleError(
+            'no_segments_meeting_mutation_count',
             f'No copy-number segments contain at least {min_mutation_count} '
             'retained mutations before merging'
         )
@@ -1184,7 +1188,8 @@ def prepare_sample_inputs(
     )
     copy_number_table = source_copy_number_table.loc[~zero_copy].copy()
     if copy_number_table.empty:
-        raise ValueError(
+        raise IneligibleSampleError(
+            'no_nonzero_copy_segments',
             'No copy-number segments remain after dropping zero-copy '
             '(0+0) segments'
         )

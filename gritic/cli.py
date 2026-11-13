@@ -1,10 +1,13 @@
 import argparse
+import json
 import logging
+import sys
 from contextlib import contextmanager
 
 import pandas as pd
 
 from gritic import dataloader, gritictimer, distributiontools, sampletools, validation
+from gritic.outcomes import EXIT_INELIGIBLE, IneligibleSampleError
 
 
 @contextmanager
@@ -506,6 +509,15 @@ def main(argv=None):
         )
     interval_config = build_interval_config(args)
 
+    try:
+        _run_analysis(args, interval_config)
+    except IneligibleSampleError as error:
+        print(json.dumps(error.as_dict(args.sample_id)), file=sys.stderr)
+        return EXIT_INELIGIBLE
+    return 0
+
+
+def _run_analysis(args, interval_config):
     copy_number_table, mutation_table = dataloader.load_input_tables(
         args.copy_number_table,
         args.mutation_table,

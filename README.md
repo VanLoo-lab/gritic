@@ -57,7 +57,7 @@ The method is described in [Baker et al. (2024), *The History of Chromosomal Ins
 
 ## Installation
 
-Python 3.12 or newer is required. Install the version documented here from this repository checkout:
+Python 3.12 or newer is required. Activate your existing virtual environment and install from this repository checkout:
 
 ```bash
 python -m pip install .
