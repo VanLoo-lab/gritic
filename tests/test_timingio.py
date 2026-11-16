@@ -116,7 +116,7 @@ class TimingArchiveTest(unittest.TestCase):
 
         manifest = self.read_manifest(manifest_path)
         self.assertEqual(manifest['format'], timingio.TIMING_ARCHIVE_FORMAT)
-        self.assertEqual(manifest['version'], timingio.TIMING_ARCHIVE_VERSION)
+        self.assertNotIn('version', manifest)
         self.assertEqual(manifest['archive'], archive_path.name)
         self.assertEqual(manifest['table_count'], 7)
         self.assertEqual(
@@ -215,25 +215,11 @@ class TimingArchiveTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicate JSON key 'format'"):
             timingio.load_timing_archive(archive_path, manifest_path)
 
-    def test_manifest_rejects_format_version_and_archive_name_mismatches(self):
+    def test_manifest_rejects_format_and_archive_name_mismatches(self):
         cases = (
             (
                 lambda manifest: manifest.__setitem__('format', 'other'),
                 'Unsupported GRITIC timing archive format',
-            ),
-            (
-                lambda manifest: manifest.__setitem__(
-                    'version',
-                    timingio.TIMING_ARCHIVE_VERSION - 1,
-                ),
-                'Unsupported GRITIC timing archive version',
-            ),
-            (
-                lambda manifest: manifest.__setitem__(
-                    'version',
-                    timingio.TIMING_ARCHIVE_VERSION + 1,
-                ),
-                'Unsupported GRITIC timing archive version',
             ),
             (
                 lambda manifest: manifest.__setitem__('archive', 'other.npz'),

@@ -112,8 +112,18 @@ class RunDiagnosticsTest(unittest.TestCase):
 
     def test_missing_distribution_version_is_null(self):
         with mock.patch.object(diagnostics.metadata, 'version', side_effect=diagnostics.metadata.PackageNotFoundError):
-            versions = diagnostics.software_versions(package_names=('uninstalled',))
-        self.assertEqual(versions['packages'], {'uninstalled': None})
+            self.assertIsNone(diagnostics.package_version('uninstalled'))
+
+    def test_report_records_only_its_producing_package_version(self):
+        for package in ('gritic', 'mutic', 'sigtic', 'plotic'):
+            with self.subTest(package=package), mock.patch.object(
+                diagnostics.metadata, 'version', return_value='0.1.0',
+            ) as installed_version:
+                report = diagnostics.RunDiagnostics(scope='test').report(package)
+                self.assertEqual(report['package_version'], '0.1.0')
+                self.assertNotIn('version', report)
+                self.assertNotIn('software', report)
+                installed_version.assert_called_once_with(package)
 
 
 if __name__ == '__main__':

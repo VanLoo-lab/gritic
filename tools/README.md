@@ -5,7 +5,7 @@ The module and its compressed data are included in the GRITIC distribution.
 Reading the catalogue loads only standard-library modules; it does not import
 GRITIC's inference, graph, numerical, or plotting libraries.
 
-Catalogue version 1 contains **2,796 routes across 31 copy-number states**.
+The catalogue contains **2,796 routes across 31 copy-number states**.
 It covers GRITIC's permitted timing states, plus the `2+0`, `2+1`, and `2+2`
 WGD states used for route construction and pooled-WGD models. Topologies are
 stored once with all valid WGD annotations. Lookup selects the requested
@@ -49,20 +49,16 @@ route; target copy numbers may differ from the fitted geometry.
 
 ## Identity and reproducibility
 
-The data format is `gritic_route_catalogue`, schema version 1. Identities use
-GRITIC's `ordered-alleles-v1` convention, generated with **NetworkX 3.6.1**:
-the Major and Minor components receive directed Weisfeiler-Lehman hashes,
-which are combined in allele order with MD5. Consumers load these frozen
-identifiers directly, so their installed NetworkX version cannot silently
-change catalogue IDs.
+The data format is `gritic_route_catalogue`, stored in `data/routes.json.gz`.
+The Major and Minor components receive directed Weisfeiler-Lehman hashes,
+which are combined in allele order with MD5 and the fixed `ordered-alleles`
+namespace. Consumers load these frozen identifiers directly. The catalogue
+has no separate schema or identity version fields.
 
-The catalogue records its generation version and coverage; inspect these
-with `catalogue_metadata()`. A future identity or node-numbering change must
-update the catalogue format/identity deliberately. There are no alternate
-hash conventions or compatibility tables in the runtime.
+`catalogue_metadata()` describes coverage, hash construction, and node order.
+There are no alternate hash conventions or compatibility tables in the runtime.
 
-Generate data from the suite root using the existing environment with the
-matching GRITIC reference code and NetworkX version:
+Generate data from the suite root using the existing environment:
 
 ```bash
 .venv/bin/python gritic/tools/build_route_catalogue.py

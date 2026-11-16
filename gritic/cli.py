@@ -174,6 +174,12 @@ def build_parser():
         ),
     )
     output_arguments.add_argument(
+        '--no-diagnostics',
+        dest='write_diagnostics',
+        action='store_false',
+        help='Do not write the run diagnostics JSON (written by default).',
+    )
+    output_arguments.add_argument(
         '--overwrite',
         action='store_true',
         help=(
@@ -562,6 +568,7 @@ def _run_analysis(args, interval_config):
             ),
             random_seed=args.random_seed,
             overwrite=args.overwrite,
+            write_diagnostics=args.write_diagnostics,
             input_paths={
                 'mutation_table': args.mutation_table,
                 'copy_number_table': args.copy_number_table,

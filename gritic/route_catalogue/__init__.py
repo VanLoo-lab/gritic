@@ -1,8 +1,6 @@
 """Immutable, precomputed evolutionary route topology without inference imports."""
 
 from .catalogue import (
-    CATALOGUE_VERSION,
-    IDENTITY_VERSION,
     CatalogueNode,
     CatalogueRoute,
     catalogue_metadata,
@@ -11,6 +9,6 @@ from .catalogue import (
 )
 
 __all__ = [
-    "CATALOGUE_VERSION", "IDENTITY_VERSION", "CatalogueNode", "CatalogueRoute",
+    "CatalogueNode", "CatalogueRoute",
     "catalogue_metadata", "get_route", "get_routes",
 ]

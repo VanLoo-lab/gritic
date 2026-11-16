@@ -358,7 +358,7 @@ This table contains one row for each possible route of each timed segment, keyed
 
 `Timing_Representation` is `Route_Particles` for ordinary gained routes and `Uniform_No_Gain` when every extant copy spans the `[0,1]` interval. The table stores ordinary `Probability` and post-hoc `Penalized_Probability`, average event and loss counts, a timing-space sampling-density diagnostic (`Density`), runtime (`Time`), and segment and WGD metadata.
 
-`Route` is the nine-character identifier of the complete allele route in GRITIC's bundled, versioned [route catalogue](tools/README.md). The catalogue preserves ordered Major/Minor allele identity, parent–child edges, WGD labels, and the node identifiers used by gain timing tables and archives. GRITIC loads the precomputed topologies once per copy-number state and shares their structural data between segments. See [posterior sampling](#posterior-sampling) for the density diagnostic.
+`Route` is the nine-character identifier of the complete allele route in GRITIC's bundled [route catalogue](tools/README.md). The catalogue preserves ordered Major/Minor allele identity, parent–child edges, WGD labels, and the node identifiers used by gain timing tables and archives. GRITIC loads the precomputed topologies once per copy-number state and shares their structural data between segments. See [posterior sampling](#posterior-sampling) for the density diagnostic.
 
 `Penalized_Probability` is calculated by multiplying each route's ordinary probability by `exp(-2.7 * Average_N_Events)` and renormalizing across routes within the segment. See [Baker et al. (2024)][publication] for details of the penalty.
 
@@ -378,8 +378,13 @@ See [WGD timing estimation](#wgd-timing-estimation) for eligibility, the overlap
 
 ### _gritic_diagnostics.json
 
-A completed run writes `SAMPLE_ID_gritic_diagnostics.json` with format
-`gritic_run_diagnostics`, version 1. It records:
+A completed run writes `SAMPLE_ID_gritic_diagnostics.json` by default. Use
+`--no-diagnostics` or `process_sample(..., write_diagnostics=False)` to omit
+the report while retaining the scientific outputs. An overwrite invalidates
+any previous report even when diagnostics are disabled.
+
+The report has format
+`gritic_run_diagnostics`. It records:
 
 - Sample identity, completion status and output paths.
 - The resolved random seed (including an automatically generated seed), WGD
@@ -387,7 +392,7 @@ A completed run writes `SAMPLE_ID_gritic_diagnostics.json` with format
 - CLI input paths; Python API callers can supply these with the optional
   `process_sample(..., input_paths={...})` argument. Input paths are provenance,
   not copies or checksums of the input data.
-- Python, platform and package versions.
+- The producing GRITIC distribution's version in `package_version`.
 - Processed mutation, segment, grouping and subclone counts, timed segments and
   route counts, route-density summaries, and the WGD calling information.
 - An `execution` section with timestamps, elapsed seconds, CPU seconds and

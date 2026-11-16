@@ -15,7 +15,6 @@ import math
 from numbers import Integral, Real
 import os
 from pathlib import Path
-import platform
 import sys
 import tempfile
 import time
@@ -26,25 +25,12 @@ except ImportError:
     resource = None
 
 
-_PACKAGES = (
-    'gritic', 'mutic', 'sigtic', 'plotic', 'hopsy', 'numpy', 'pandas',
-    'scipy', 'numba', 'arviz-stats', 'matplotlib', 'av',
-)
-
-
-def software_versions(package_names=None):
-    """Describe the interpreter and installed distributions without importing them."""
-    packages = {}
-    for name in _PACKAGES if package_names is None else package_names:
-        try:
-            packages[name] = metadata.version(name)
-        except metadata.PackageNotFoundError:
-            packages[name] = None
-    return {
-        'python': platform.python_version(),
-        'platform': platform.platform(),
-        'packages': packages,
-    }
+def package_version(package):
+    """Read the producing distribution's version without importing it."""
+    try:
+        return metadata.version(package)
+    except metadata.PackageNotFoundError:
+        return None
 
 
 def _json_values(value):
@@ -173,13 +159,12 @@ and any later output publication. CPU counters include all threads of the
                     memory[f'{who}_peak_rss_bytes'] = int(current[who].ru_maxrss) * multiplier
         report = {
             'format': f'{package}_run_diagnostics',
-            'version': 1,
+            'package_version': package_version(package),
             'status': 'completed',
             'outputs_written': True,
             'inputs': {} if inputs is None else inputs,
             'settings': {} if settings is None else settings,
             'outputs': [] if outputs is None else outputs,
-            'software': software_versions(),
             'execution': {
                 'scope': self.scope,
                 'started_at': self.started_at,

@@ -15,6 +15,7 @@ class ProcessSampleGuardTest(unittest.TestCase):
         for name, values in (
             ('wgd_count', (-1, 2, 0.0, True, '1')),
             ('min_wgd_overlap', (-0.1, 1.1, float('nan'), True, '0.5')),
+            ('write_diagnostics', (None, 0, 1, 'false')),
         ):
             for value in values:
                 with self.subTest(name=name, value=value):
@@ -145,6 +146,24 @@ class ProcessSampleGuardTest(unittest.TestCase):
             self.assertIn('Mutation_ID\tSegment_ID', previous.read_text())
             self.assertEqual(note.read_text(), 'keep root file')
             self.assertEqual(archive.read_bytes(), b'keep unmatched archive')
+
+    def test_diagnostics_opt_out_keeps_results_and_retires_old_report(self):
+        sample = self.lightweight_sample('OPTIONAL')
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / sample.sample_id
+            report = output / 'OPTIONAL_gritic_diagnostics.json'
+            with (
+                mock.patch.object(gritictimer, 'get_major_cn_mode', return_value=1),
+                mock.patch.object(gritictimer, '_run_sample'),
+                mock.patch.object(gritictimer, 'RunDiagnostics', side_effect=AssertionError('disabled tracker')),
+            ):
+                gritictimer.process_sample(sample, output, write_diagnostics=False)
+                self.assertTrue((output / 'OPTIONAL_mutation_table.tsv').is_file())
+                self.assertFalse(report.exists())
+                report.write_text('old completed report')
+                gritictimer.process_sample(sample, output, overwrite=True, write_diagnostics=False)
+                self.assertFalse(report.exists())
+                self.assertTrue((output / 'OPTIONAL_mutation_table.tsv').is_file())
 
     def test_preexisting_empty_sample_output_directory_requires_overwrite(self):
         sample = self.lightweight_sample('EMPTY')

@@ -24,7 +24,7 @@ from gritic.sampletools import (
     get_major_cn_mode,
 )
 from gritic import dataloader, outputtools, timingio, validation
-from gritic.diagnostics import RunDiagnostics, write_diagnostics
+from gritic.diagnostics import RunDiagnostics, write_diagnostics as publish_diagnostics
 from gritic.outcomes import IneligibleSampleError
 from gritic.distributiontools import (
     DEFAULT_TIMING_INTERVALS,
@@ -3485,9 +3485,11 @@ def process_sample(
     overwrite=False,
     *,
     input_paths=None,
+    write_diagnostics=True,
 ):
-    """Time one sample and write outputs directly into sample_dir."""
-    diagnostics = RunDiagnostics(scope='gritic.process_sample')
+    """Time one sample; the optional run report is written by default."""
+    write_diagnostics = validation.validate_boolean(write_diagnostics, 'write_diagnostics')
+    diagnostics = RunDiagnostics(scope='gritic.process_sample') if write_diagnostics else None
     if not isinstance(interval_config, TimingIntervalConfig):
         raise TypeError('interval_config must be a TimingIntervalConfig')
     subclone_fraction_prior = validate_subclone_fraction_prior(
@@ -3618,6 +3620,8 @@ def process_sample(
         major_cn_mode,
         rng=rng,
     )
+    if not write_diagnostics:
+        return
     route_table_path = output_dir / f'{sample.sample_id}_route_table.tsv'
     route_table = (
         pd.read_csv(route_table_path, sep='\t')
@@ -3703,4 +3707,4 @@ def process_sample(
             'wgd': calling_info,
         },
     )
-    write_diagnostics(diagnostics_path, report)
+    publish_diagnostics(diagnostics_path, report)

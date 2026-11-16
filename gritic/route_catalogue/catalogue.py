@@ -10,11 +10,9 @@ import re
 from types import MappingProxyType
 
 
-CATALOGUE_VERSION = 1
-IDENTITY_VERSION = "ordered-alleles-v1"
 _STATUSES = frozenset({"Default", "No_WGD", "Only_WGD", "Only_WGD_2+2"})
 _HASH = re.compile(r"[0-9a-f]{32}\Z")
-_SOURCE = "data/routes-v1.json.gz"
+_SOURCE = "data/routes.json.gz"
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,10 +91,8 @@ def _validate_route(route):
 
 
 def _read_catalogue(document):
-    if (not isinstance(document, dict) or document.get("format") != "gritic_route_catalogue"
-            or type(document.get("version")) is not int or document["version"] != CATALOGUE_VERSION
-            or document.get("identity_version") != IDENTITY_VERSION):
-        raise ValueError("Unsupported route catalogue format or identity version")
+    if not isinstance(document, dict) or document.get("format") != "gritic_route_catalogue":
+        raise ValueError("Invalid route catalogue format")
     result = {}
     total = 0
     for state in document["states"]:
@@ -157,7 +153,7 @@ def get_routes(major_cn, minor_cn, wgd_status, wgd_trees_status="Default"):
         raise ValueError(f"wgd_trees_status must be one of {sorted(_STATUSES)}")
     catalogue, _ = _catalogue()
     if (major, minor) not in catalogue:
-        raise ValueError(f"Copy-number state {major}+{minor} is not in route catalogue v{CATALOGUE_VERSION}")
+        raise ValueError(f"Copy-number state {major}+{minor} is not in the route catalogue")
     routes = catalogue[(major, minor)]
     if not wgd_status or wgd_trees_status == "No_WGD":
         return tuple(route for route in routes if not any(node.wgd for node in route.nodes))
@@ -176,7 +172,7 @@ def get_route(major_cn, minor_cn, wgd_status, route_id):
                if route_id in (route.route_id, route.short_id)]
     if len(matches) != 1:
         raise ValueError(
-            f"Route {route_id!r} has no unique match in catalogue v{CATALOGUE_VERSION} "
-            f"for {major_cn}+{minor_cn}, WGD={wgd_status}; check the generating identity version"
+            f"Route {route_id!r} has no unique match in the catalogue "
+            f"for {major_cn}+{minor_cn}, WGD={wgd_status}"
         )
     return matches[0]

@@ -13,10 +13,9 @@ import numpy as np
 
 
 TIMING_ARCHIVE_FORMAT = 'gritic_timing_archive'
-# Version 4 makes gained-route particle entries self-describing.  Keep these
-# field and encoding constants in this dependency-light module so downstream
+# Gained-route particle entries are self-describing. Keep these field and
+# encoding constants in this dependency-light module so downstream
 # consumers do not need to import GRITIC's inference or route-tree machinery.
-TIMING_ARCHIVE_VERSION = 4
 TIMING_ARCHIVE_SUFFIX = '_timing_dict.npz'
 TIMING_MANIFEST_SUFFIX = '_timing_dict.manifest.json'
 
@@ -92,7 +91,6 @@ ROUTE_PARTICLE_PHASING_BITS = {
 
 _MANIFEST_KEYS = {
     'format',
-    'version',
     'archive',
     'archive_sha256',
     'table_count',
@@ -214,7 +212,6 @@ def write_timing_archive(timing_hierarchy, directory, segment_id):
 
         manifest = {
             'format': TIMING_ARCHIVE_FORMAT,
-            'version': TIMING_ARCHIVE_VERSION,
             'archive': archive_path.name,
             'archive_sha256': _file_sha256(temporary_archive),
             'table_count': len(tables),
@@ -442,10 +439,6 @@ def load_timing_archive(archive_path, manifest_path=None):
     if manifest['format'] != TIMING_ARCHIVE_FORMAT:
         raise ValueError(
             f'Unsupported GRITIC timing archive format {manifest["format"]!r}'
-        )
-    if manifest['version'] != TIMING_ARCHIVE_VERSION:
-        raise ValueError(
-            f'Unsupported GRITIC timing archive version {manifest["version"]!r}'
         )
     if manifest['archive'] != archive_path.name:
         raise ValueError(

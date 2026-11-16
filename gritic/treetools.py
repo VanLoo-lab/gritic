@@ -9,7 +9,6 @@ from gritic.tableschemas import NODE_PHASING_LABELS
 
 ALLELE_ATTRIBUTE = 'Allele'
 EMPTY_MINOR_COMPONENT_HASH = '<empty-minor>'
-_ORDERED_TREE_HASH_VERSION = 'ordered-alleles-v1'
 _ROUTE_IDENTITY_NODE_ATTRIBUTES = (
     ALLELE_ATTRIBUTE,
     'WGD_Symbol',
@@ -165,7 +164,7 @@ def get_ordered_component_hashes(tree):
 
 def _combine_ordered_component_hashes(major_hash, minor_hash):
     identity = (
-        f'{_ORDERED_TREE_HASH_VERSION}|Major:{major_hash}|Minor:{minor_hash}'
+        f'ordered-alleles|Major:{major_hash}|Minor:{minor_hash}'
     )
     return hashlib.md5(identity.encode('utf-8')).hexdigest()
 

@@ -342,6 +342,15 @@ class CliProgressLoggingTest(unittest.TestCase):
 
 
 class CliMainTest(CliArgumentFixture, unittest.TestCase):
+    def test_diagnostics_can_be_disabled(self):
+        with (
+            mock.patch.object(cli.dataloader, 'load_input_tables', return_value=(object(), object())),
+            mock.patch.object(cli.sampletools, 'Sample'),
+            mock.patch.object(cli.gritictimer, 'process_sample') as process_sample,
+        ):
+            cli.main([*self.required_arguments(), '--no-diagnostics'])
+        self.assertFalse(process_sample.call_args.kwargs['write_diagnostics'])
+
     def test_cross_argument_subclone_bounds_fail_before_input_loading(self):
         stderr = io.StringIO()
         with mock.patch.object(cli.dataloader, 'load_input_tables') as loader:
@@ -452,6 +461,7 @@ class CliMainTest(CliArgumentFixture, unittest.TestCase):
             unordered_balanced_route_prior=True,
             random_seed=2**64 - 1,
             overwrite=True,
+            write_diagnostics=True,
             input_paths={
                 'mutation_table': 'mutations.tsv',
                 'copy_number_table': 'copy-number.tsv',

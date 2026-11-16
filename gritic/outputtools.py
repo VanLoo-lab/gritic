@@ -28,27 +28,27 @@ def check_output_paths(*, directories=(), files=(), overwrite=False):
                 )
 
 
-def replace_files_with_rollback(replacements, backup_directory):
-    """Install staged files, preserving other files and restoring on failure."""
+def replace_files_with_rollback(replacements, backup_directory, *, removals=()):
+    """Install files and retire named outputs together, restoring on failure."""
     replacements = tuple(
         (Path(staged_path), Path(target_path))
         for staged_path, target_path in replacements
     )
-    if not replacements or len({target for _, target in replacements}) != len(
-        replacements
-    ):
-        raise ValueError('Replacement targets must be nonempty and unique')
+    removals = tuple(map(Path, removals))
+    targets = tuple(target for _, target in replacements) + removals
+    if not targets or len(set(targets)) != len(targets):
+        raise ValueError('Replacement and removal targets must be nonempty and unique')
     if any(not staged_path.is_file() for staged_path, _ in replacements):
         raise ValueError('Every staged replacement must be an existing file')
     check_output_paths(
-        files=(target for _, target in replacements), overwrite=True,
+        files=targets, overwrite=True,
     )
     backup_directory = Path(backup_directory)
     backup_directory.mkdir()
     backed_up = []
     installed = []
     try:
-        for index, (_, target_path) in enumerate(replacements):
+        for index, target_path in enumerate(targets):
             if target_path.exists() or target_path.is_symlink():
                 backup_path = backup_directory / f'{index}-{target_path.name}'
                 target_path.replace(backup_path)

@@ -147,7 +147,9 @@ class ProcessSampleIntegrationTest(unittest.TestCase):
             self.assertFalse(diagnostics['analysis']['wgd']['WGD_Status'])
             self.assertEqual(diagnostics['execution']['scope'], 'gritic.process_sample')
             self.assertGreaterEqual(diagnostics['execution']['elapsed_seconds'], 0)
-            self.assertIn('software', diagnostics)
+            self.assertEqual(diagnostics['package_version'], '0.1.0')
+            self.assertNotIn('software', diagnostics)
+            self.assertNotIn('version', diagnostics)
 
             route_table = pd.read_csv(
                 output_directory / 'SMOKE_route_table.tsv',

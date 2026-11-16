@@ -16,6 +16,6 @@ class IneligibleSampleError(ValueError):
 
     def as_dict(self, sample_id: str) -> dict:
         return {
-            'format': 'gritic-outcome', 'version': 1, 'status': 'ineligible',
+            'format': 'gritic-outcome', 'status': 'ineligible',
             'sample_id': sample_id, 'reason': self.reason, 'message': str(self),
         }

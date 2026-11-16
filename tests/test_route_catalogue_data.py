@@ -85,8 +85,9 @@ def test_catalogue_routes_are_immutable_and_metadata_is_detached():
         route.nodes[0].parent_id = 99
     metadata = catalogue_metadata()
     metadata["copy_number_states"][0][0] = 99
-    metadata["version"] = 99
-    assert catalogue_metadata()["version"] == 1
+    metadata["route_count"] = 99
+    assert catalogue_metadata()["route_count"] == 2796
+    assert not {"version", "identity_version", "networkx_version"} & catalogue_metadata().keys()
     assert catalogue_metadata()["copy_number_states"][0] == [1, 0]
 
 
@@ -106,13 +107,12 @@ def test_catalogue_import_does_not_load_inference_graphs_or_arrays():
 
 @pytest.fixture
 def document():
-    source = Path(__file__).resolve().parents[1] / "gritic/route_catalogue/data/routes-v1.json.gz"
+    source = Path(__file__).resolve().parents[1] / "gritic/route_catalogue/data/routes.json.gz"
     return json.loads(gzip.decompress(source.read_bytes()))
 
 
 @pytest.mark.parametrize("mutation,match", [
-    (lambda d: d.update(version=2), "Unsupported"),
-    (lambda d: d.update(identity_version="changed"), "Unsupported"),
+    (lambda d: d.update(format="other"), "Invalid route catalogue format"),
     (lambda d: d.update(route_count=0), "counts"),
     (lambda d: d["states"][0]["routes"].append(copy.deepcopy(d["states"][0]["routes"][0])), "collide"),
     (lambda d: d["states"][0]["routes"][0]["nodes"][0].__setitem__(1, 99), "parent"),

@@ -8,11 +8,8 @@ import sys
 
 
 def build_catalogue():
-    import networkx as nx
     from gritic import treetools
 
-    if nx.__version__ != "3.6.1":
-        raise RuntimeError("Catalogue v1 identity is pinned to NetworkX 3.6.1; use its generation environment")
     # These are GRITIC's supported inference states, plus 2+m WGD models
     # used by route construction and pooled-WGD interpretation.
     states = [(major, minor) for major in range(1, 9) for minor in range(major + 1)
@@ -39,9 +36,7 @@ def build_catalogue():
         records.append({"major_cn": major, "minor_cn": minor, "routes": routes})
         print(f"{major}+{minor}: {len(routes)} routes", flush=True)
     return {
-        "format": "gritic_route_catalogue", "version": 1,
-        "identity_version": treetools._ORDERED_TREE_HASH_VERSION,
-        "networkx_version": nx.__version__,
+        "format": "gritic_route_catalogue",
         "hash_algorithm": "ordered Major/Minor NetworkX Weisfeiler-Lehman hashes, combined with MD5",
         "node_order": "GRITIC reference graph insertion order",
         "state_count": len(records),
@@ -62,7 +57,7 @@ def main():
     _read_catalogue(document)
     payload = json.dumps(document, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
     compressed = gzip.compress(payload, compresslevel=9, mtime=0)
-    destination = root / "gritic" / "route_catalogue" / "data" / "routes-v1.json.gz"
+    destination = root / "gritic" / "route_catalogue" / "data" / "routes.json.gz"
     if args.check:
         if destination.read_bytes() != compressed:
             raise SystemExit("Generated route catalogue differs from committed data")

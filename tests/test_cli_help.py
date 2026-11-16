@@ -17,7 +17,7 @@ class CliHelpTest(unittest.TestCase):
         ),
         (
             'Output handling',
-            ('--overwrite',),
+            ('--no-diagnostics', '--overwrite'),
         ),
         (
             'Genome and input handling',

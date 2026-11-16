@@ -37,7 +37,7 @@ def test_real_cli_returns_reserved_status_for_biological_exclusion(tmp_path):
     assert result.returncode == EXIT_INELIGIBLE == 3
     outcome = json.loads(result.stderr.splitlines()[-1])
     assert outcome == {
-        'format': 'gritic-outcome', 'version': 1, 'status': 'ineligible', 'sample_id': 'SA1',
+        'format': 'gritic-outcome', 'status': 'ineligible', 'sample_id': 'SA1',
         'reason': 'no_mutations_after_read_filters',
         'message': 'No mutations remain after applying the configured minimum alternate-read count and coverage thresholds',
     }
