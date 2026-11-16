@@ -562,6 +562,11 @@ def _run_analysis(args, interval_config):
             ),
             random_seed=args.random_seed,
             overwrite=args.overwrite,
+            input_paths={
+                'mutation_table': args.mutation_table,
+                'copy_number_table': args.copy_number_table,
+                'subclone_table': args.subclone_table,
+            },
         )
 
 

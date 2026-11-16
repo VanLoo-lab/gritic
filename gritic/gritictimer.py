@@ -24,6 +24,7 @@ from gritic.sampletools import (
     get_major_cn_mode,
 )
 from gritic import dataloader, outputtools, timingio, validation
+from gritic.diagnostics import RunDiagnostics, write_diagnostics
 from gritic.outcomes import IneligibleSampleError
 from gritic.distributiontools import (
     DEFAULT_TIMING_INTERVALS,
@@ -3482,8 +3483,11 @@ def process_sample(
     unordered_balanced_route_prior=DEFAULT_UNORDERED_BALANCED_ROUTE_PRIOR,
     random_seed=None,
     overwrite=False,
+    *,
+    input_paths=None,
 ):
     """Time one sample and write outputs directly into sample_dir."""
+    diagnostics = RunDiagnostics(scope='gritic.process_sample')
     if not isinstance(interval_config, TimingIntervalConfig):
         raise TypeError('interval_config must be a TimingIntervalConfig')
     subclone_fraction_prior = validate_subclone_fraction_prior(
@@ -3501,6 +3505,11 @@ def process_sample(
     random_seed = validation.validate_integer(
         random_seed, 'random_seed', maximum=2**64 - 1, allow_none=True,
     )
+    input_paths = {
+        name: str(pathlib.Path(path).resolve())
+        for name, path in (input_paths or {}).items()
+        if path is not None
+    }
     validation.validate_sample_id(sample.sample_id)
     major_cn_mode = get_major_cn_mode(sample)
     if major_cn_mode not in (1, 2):
@@ -3512,8 +3521,10 @@ def process_sample(
 
     output_dir = pathlib.Path(sample_dir)
     timing_dict_dir = output_dir / f'{sample.sample_id}_timing_dicts'
+    diagnostics_path = output_dir / f'{sample.sample_id}_gritic_diagnostics.json'
     outputtools.check_output_paths(
         directories=(output_dir, timing_dict_dir),
+        files=(diagnostics_path,),
         overwrite=overwrite,
     )
     output_dir.mkdir(parents=True, exist_ok=overwrite)
@@ -3524,6 +3535,9 @@ def process_sample(
 
 
     timing_dict_dir.mkdir(exist_ok=overwrite)
+    # This entry point replaces scientific files incrementally. Invalidate an
+    # earlier completion report before any of those files can be replaced.
+    diagnostics_path.unlink(missing_ok=True)
 
     (
         sample_mutation_table,
@@ -3604,3 +3618,89 @@ def process_sample(
         major_cn_mode,
         rng=rng,
     )
+    route_table_path = output_dir / f'{sample.sample_id}_route_table.tsv'
+    route_table = (
+        pd.read_csv(route_table_path, sep='\t')
+        if route_table_path.is_file() else pd.DataFrame()
+    )
+    calling_info_path = output_dir / f'{sample.sample_id}_wgd_calling_info.json'
+    calling_info = (
+        json.loads(calling_info_path.read_text(encoding='utf-8'))
+        if calling_info_path.is_file() else None
+    )
+    density = (
+        pd.to_numeric(route_table['Density'], errors='coerce')
+        if 'Density' in route_table else pd.Series(dtype=float)
+    )
+    preprocessing_names = (
+        'purity', 'sex', 'autosome_count', 'merge_cn', 'max_merge_gap',
+        'apply_reads_correction', 'drop_unmatched_snvs',
+        'drop_unmatched_chromosomes', 'drop_unrecognized_phasing',
+        'min_mutation_count', 'min_mutation_alt_count',
+        'min_mutation_coverage', 'coverage_vaf_quantile',
+        'min_subclone_ccf', 'max_subclone_ccf', 'min_subclone_fraction',
+        'clip_subclone_ccf',
+    )
+    outputs = [
+        sample_mutation_table_path,
+        sample_count_group_table_path,
+        sample_phase_group_table_path,
+        sample_likelihood_context_table_path,
+        sample_segment_context_table_path,
+        sample_count_group_likelihood_table_path,
+        sample_segment_group_table_path,
+        sample_subclone_table_path,
+        route_table_path,
+        output_dir / f'{sample.sample_id}_gain_timing_table.tsv',
+        calling_info_path,
+        *(output_dir / f'{sample.sample_id}_posterior_timing_table_summary_'
+          f'penalty_{penalty}.tsv' for penalty in (False, True)),
+    ]
+    if wgd_count == 1 or (wgd_count is None and major_cn_mode == 2):
+        outputs.append(
+            output_dir / f'{sample.sample_id}_gain_timing_table_wgd_segments.tsv'
+        )
+    report = diagnostics.report(
+        'gritic',
+        sample_id=sample.sample_id,
+        inputs={
+            'representation': 'prepared_sample',
+            'paths': input_paths,
+        },
+        settings={
+            'random_seed': random_seed,
+            'wgd_count': wgd_count,
+            'min_wgd_overlap': min_wgd_overlap,
+            'intervals': interval_config,
+            'subclone_fraction_prior': subclone_fraction_prior,
+            'unordered_balanced_route_prior': unordered_balanced_route_prior,
+            'sample_preprocessing': {
+                name: getattr(sample, name)
+                for name in preprocessing_names if hasattr(sample, name)
+            },
+            'overwrite': overwrite,
+        },
+        outputs=[str(path.resolve()) for path in outputs if path.is_file()]
+        + [str(timing_dict_dir.resolve()), str(diagnostics_path.resolve())],
+        analysis={
+            'processed_mutations': len(sample_mutation_table),
+            'processed_segments': sample_mutation_table['Segment_ID'].nunique(),
+            'count_groups': len(sample_count_group_table),
+            'phase_groups': len(sample_phase_group_table),
+            'likelihood_contexts': len(sample_likelihood_context_table),
+            'subclones': len(sample_subclone_table),
+            'major_cn_mode': major_cn_mode,
+            'timed_segments': (
+                route_table['Segment_ID'].nunique()
+                if 'Segment_ID' in route_table else 0
+            ),
+            'routes': len(route_table),
+            'route_sampling_density': {
+                'minimum': None if density.empty else density.min(),
+                'median': None if density.empty else density.median(),
+                'undefined': int(density.isna().sum()),
+            },
+            'wgd': calling_info,
+        },
+    )
+    write_diagnostics(diagnostics_path, report)

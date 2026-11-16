@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 import pandas as pd
@@ -114,6 +115,7 @@ class ProcessSampleIntegrationTest(unittest.TestCase):
                 'SMOKE_segment_group_table.tsv',
                 'SMOKE_subclone_table.tsv',
                 'SMOKE_wgd_calling_info.json',
+                'SMOKE_gritic_diagnostics.json',
             }
             self.assertTrue(
                 expected_files.issubset(
@@ -123,6 +125,29 @@ class ProcessSampleIntegrationTest(unittest.TestCase):
                 )
             )
             self.assertFalse((output_directory / 'SMOKE_route_tree_table.tsv').exists())
+
+            diagnostics = json.loads(
+                (output_directory / 'SMOKE_gritic_diagnostics.json').read_text()
+            )
+            self.assertEqual(diagnostics['format'], 'gritic_run_diagnostics')
+            self.assertEqual(diagnostics['sample_id'], 'SMOKE')
+            self.assertEqual(diagnostics['status'], 'completed')
+            self.assertTrue(diagnostics['outputs_written'])
+            self.assertEqual(diagnostics['settings']['random_seed'], 20260828)
+            self.assertEqual(
+                diagnostics['settings']['intervals']['posterior_summary'],
+                {'width': 0.95, 'method': 'hpd'},
+            )
+            self.assertEqual(diagnostics['settings']['sample_preprocessing']['purity'], 0.8)
+            self.assertEqual(diagnostics['analysis']['processed_mutations'], 12)
+            self.assertEqual(diagnostics['analysis']['processed_segments'], 1)
+            self.assertEqual(diagnostics['analysis']['timed_segments'], 1)
+            self.assertEqual(diagnostics['analysis']['routes'], 1)
+            self.assertEqual(diagnostics['analysis']['route_sampling_density']['minimum'], 1.0)
+            self.assertFalse(diagnostics['analysis']['wgd']['WGD_Status'])
+            self.assertEqual(diagnostics['execution']['scope'], 'gritic.process_sample')
+            self.assertGreaterEqual(diagnostics['execution']['elapsed_seconds'], 0)
+            self.assertIn('software', diagnostics)
 
             route_table = pd.read_csv(
                 output_directory / 'SMOKE_route_table.tsv',
@@ -341,6 +366,40 @@ class ProcessSampleIntegrationTest(unittest.TestCase):
                     wgd_count=0,
                 )
 
+    def test_failed_overwrite_invalidates_previous_completion_report(self):
+        sample = self.make_sample()
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / sample.sample_id
+            output.mkdir()
+            report = output / 'SMOKE_gritic_diagnostics.json'
+            report.write_text('{"status": "completed"}')
+            with mock.patch.object(
+                gritictimer, '_run_sample', side_effect=RuntimeError('fit failed'),
+            ):
+                with self.assertRaisesRegex(RuntimeError, 'fit failed'):
+                    gritictimer.process_sample(
+                        sample, output, wgd_count=0, overwrite=True,
+                    )
+            self.assertFalse(report.exists())
+            self.assertTrue((output / 'SMOKE_mutation_table.tsv').is_file())
+
+    def test_generated_seed_and_input_paths_are_saved(self):
+        sample = self.make_sample()
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / sample.sample_id
+            input_path = Path(directory) / 'mutation-input.tsv'
+            with mock.patch.object(gritictimer.secrets, 'randbits', return_value=2**64 - 1):
+                gritictimer.process_sample(
+                    sample, output, wgd_count=0,
+                    input_paths={'mutation_table': input_path, 'subclone_table': None},
+                )
+            report = json.loads((output / 'SMOKE_gritic_diagnostics.json').read_text())
+            self.assertEqual(report['settings']['random_seed'], 2**64 - 1)
+            self.assertEqual(
+                report['inputs']['paths'],
+                {'mutation_table': str(input_path.resolve())},
+            )
+
     def test_gained_segment_produces_aligned_route_and_posterior_outputs(self):
         sample = self.make_gained_sample()
 
@@ -508,6 +567,13 @@ class ProcessSampleIntegrationTest(unittest.TestCase):
             )
             output_directory = Path(temporary_directory) / sample.sample_id
             self.assertFalse((output_directory / 'WGD_route_tree_table.tsv').exists())
+            diagnostics = json.loads(
+                (output_directory / 'WGD_gritic_diagnostics.json').read_text()
+            )
+            self.assertIn(
+                str((output_directory / 'WGD_gain_timing_table_wgd_segments.tsv').resolve()),
+                diagnostics['outputs'],
+            )
 
             with (
                 output_directory / 'WGD_wgd_calling_info.json'

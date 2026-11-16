@@ -1,4 +1,5 @@
 import os
+import json
 import subprocess
 import sys
 import tempfile
@@ -86,6 +87,16 @@ class CliModuleIntegrationTest(unittest.TestCase):
             gain_path = sample_output / 'CLI_DATA_gain_timing_table.tsv'
             self.assertTrue(route_path.is_file())
             self.assertTrue(gain_path.is_file())
+            diagnostics = json.loads(
+                (sample_output / 'CLI_DATA_gritic_diagnostics.json').read_text()
+            )
+            self.assertEqual(diagnostics['inputs']['paths'], {
+                'mutation_table': str(mutation_path.resolve()),
+                'copy_number_table': str(copy_number_path.resolve()),
+            })
+            self.assertFalse(
+                diagnostics['settings']['sample_preprocessing']['merge_cn']
+            )
 
             route_table = pd.read_csv(route_path, sep='\t')
             gain_table = pd.read_csv(gain_path, sep='\t')

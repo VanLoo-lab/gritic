@@ -32,6 +32,7 @@ The method is described in [Baker et al. (2024), *The History of Chromosomal Ins
   - [`_route_table.tsv`](#_route_tabletsv)
   - [`_gain_timing_table.tsv`](#_gain_timing_tabletsv)
   - [`_wgd_calling_info.json`](#_wgd_calling_infojson)
+  - [`_gritic_diagnostics.json`](#_gritic_diagnosticsjson)
   - [`_gain_timing_table_wgd_segments.tsv`](#_gain_timing_table_wgd_segmentstsv)
   - [Processed inputs and downstream tables](#processed-inputs-and-downstream-tables)
 - [Model details](#model-details)
@@ -318,6 +319,7 @@ Append each suffix below to `SAMPLE_ID`. We recommend only considering gained se
 | [`_route_table.tsv`](#_route_tabletsv) | Route probabilities and segment metadata. |
 | [`_gain_timing_table.tsv`](#_gain_timing_tabletsv) | Gain-node timing conditional on each route. |
 | [`_wgd_calling_info.json`](#_wgd_calling_infojson) | Sample WGD call and timing. |
+| [`_gritic_diagnostics.json`](#_gritic_diagnosticsjson) | Run settings, software, analysis summaries and execution measurements. |
 | [`_gain_timing_table_wgd_segments.tsv`](#_gain_timing_table_wgd_segmentstsv) | Preliminary segment timings used to evaluate WGD. |
 | [`_mutation_table.tsv`](#_mutation_tabletsv) | Processed mutations and downstream identifiers. |
 | [`_count_group_table.tsv`](#_count_group_tabletsv) | Distinct read-count pairs. |
@@ -373,6 +375,42 @@ The remaining columns are `Node_Phasing`, `Timing` (the median), `Timing_Mean`, 
 Keys are `WGD_Timing`, `WGD_Timing_CI_Low`, `WGD_Timing_CI_High`, `Major_CN_Mode`, `Overlap_Proportion`, `WGD_Status`, and `Best_Overlap_Timing`; missing or nonfinite numeric values are `null`.
 
 See [WGD timing estimation](#wgd-timing-estimation) for eligibility, the overlap decision, and the final timing estimate.
+
+### _gritic_diagnostics.json
+
+A completed run writes `SAMPLE_ID_gritic_diagnostics.json` with format
+`gritic_run_diagnostics`, version 1. It records:
+
+- Sample identity, completion status and output paths.
+- The resolved random seed (including an automatically generated seed), WGD
+  settings, timing intervals, priors and sample-preprocessing settings.
+- CLI input paths; Python API callers can supply these with the optional
+  `process_sample(..., input_paths={...})` argument. Input paths are provenance,
+  not copies or checksums of the input data.
+- Python, platform and package versions.
+- Processed mutation, segment, grouping and subclone counts, timed segments and
+  route counts, route-density summaries, and the WGD calling information.
+- An `execution` section with timestamps, elapsed seconds, CPU seconds and
+  memory peaks.
+
+Execution measurements span entry into `process_sample` through report
+construction, including scientific output writing. They exclude CLI input
+loading and sample preparation, and the final diagnostic-file write. CPU
+seconds are counter differences for the calling process and its terminated,
+waited-for children. Children reaped during the measurement contribute their
+full lifetime CPU, including any work before measurement began. Memory values
+are bytes and explicitly labelled
+**process-lifetime** peaks: the worker's own peak and the largest reaped child's
+peak, not the simultaneous memory of the whole process tree. A reused Python
+process may therefore report memory peaks from earlier calls. Unsupported
+measurements are recorded as unavailable rather than zero.
+
+`status: "completed"` and `outputs_written: true` describe completion, not
+statistical convergence. The report is published atomically after analysis
+finishes. GRITIC writes its scientific outputs incrementally; an overwrite
+invalidates the previous completion report before replacing scientific files,
+and a failed run does not publish a new completed report. Nonfinite diagnostic
+numbers are represented as JSON strings `"NaN"`, `"Infinity"` and `"-Infinity"`.
 
 ### _gain_timing_table_wgd_segments.tsv
 

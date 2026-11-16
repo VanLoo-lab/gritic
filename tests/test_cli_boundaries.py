@@ -452,6 +452,11 @@ class CliMainTest(CliArgumentFixture, unittest.TestCase):
             unordered_balanced_route_prior=True,
             random_seed=2**64 - 1,
             overwrite=True,
+            input_paths={
+                'mutation_table': 'mutations.tsv',
+                'copy_number_table': 'copy-number.tsv',
+                'subclone_table': 'subclones.tsv',
+            },
         )
 
     @mock.patch.object(cli.gritictimer, 'process_sample')
