@@ -58,9 +58,14 @@ has no separate schema or identity version fields.
 `catalogue_metadata()` describes coverage, hash construction, and node order.
 There are no alternate hash conventions or compatibility tables in the runtime.
 
-Generate data from the suite root using the existing environment:
+Generate data from the suite root using the existing environment. Install the
+catalogue build requirement first: route identifiers depend on NetworkX's graph
+hashing implementation, so catalogue generation uses NetworkX 3.6.1. This build
+pin does not change GRITIC's runtime dependency range or add version fields to
+the catalogue.
 
 ```bash
+.venv/bin/python -m pip install -r gritic/tools/requirements-catalogue.txt
 .venv/bin/python gritic/tools/build_route_catalogue.py
 .venv/bin/python gritic/tools/build_route_catalogue.py --check
 .venv/bin/python -m pytest gritic/tests/test_route_catalogue_data.py

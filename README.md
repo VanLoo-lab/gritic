@@ -380,8 +380,10 @@ See [WGD timing estimation](#wgd-timing-estimation) for eligibility, the overlap
 
 A completed run writes `SAMPLE_ID_gritic_diagnostics.json` by default. Use
 `--no-diagnostics` or `process_sample(..., write_diagnostics=False)` to omit
-the report while retaining the scientific outputs. An overwrite invalidates
-any previous report even when diagnostics are disabled.
+the report while retaining the scientific outputs. Disabling diagnostics does
+not permit reuse of an existing sample directory: supply `--overwrite` to reuse
+it. An overwrite invalidates any previous report even when diagnostics are
+disabled.
 
 The report has format
 `gritic_run_diagnostics`. It records:

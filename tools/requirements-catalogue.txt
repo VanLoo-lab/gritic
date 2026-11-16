@@ -1,0 +1,2 @@
+# Build dependency for reproducing the frozen route identifiers.
+networkx==3.6.1
